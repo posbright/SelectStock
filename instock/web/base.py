@@ -9,8 +9,21 @@ __author__ = 'myh '
 __date__ = '2023/3/10 '
 
 
-# 基础handler，主要负责检查mysql的数据库链接。
+# 基础handler，主要负责检查mysql的数据库链接，并支持CORS跨域。
 class BaseHandler(tornado.web.RequestHandler, ABC):
+    
+    def set_default_headers(self):
+        """设置CORS跨域请求头"""
+        self.set_header("Access-Control-Allow-Origin", "*")
+        self.set_header("Access-Control-Allow-Headers", "x-requested-with, content-type")
+        self.set_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS, DELETE, PUT")
+        self.set_header("Access-Control-Max-Age", "3600")
+    
+    def options(self):
+        """处理预检请求"""
+        self.set_status(204)
+        self.finish()
+    
     @property
     def db(self):
         try:
