@@ -16,7 +16,6 @@ const selectedDate = ref(dayjs().format('YYYY-MM-DD'))
 // 分页
 const currentPage = ref(1)
 const pageSize = ref(50)
-const total = computed(() => tableData.value.length)
 
 // 当前页数据（基于过滤后的数据）
 const pagedData = computed(() => {
@@ -119,6 +118,11 @@ const exportExcel = () => {
   ElMessage.info('导出功能开发中...')
 }
 
+// 获取行样式类名
+const getRowClassName = ({ row }: { row: any }) => {
+  return row.cdatetime ? 'attention-row' : ''
+}
+
 // 监听路由变化
 watch(
   () => route.path,
@@ -181,7 +185,7 @@ onMounted(() => {
         stripe
         border
         height="calc(100vh - 280px)"
-        :row-class-name="({ row }) => row.cdatetime ? 'attention-row' : ''"
+        :row-class-name="getRowClassName"
       >
         <el-table-column type="index" label="#" width="50" fixed="left" />
         

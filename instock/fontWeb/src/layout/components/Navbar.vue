@@ -6,7 +6,7 @@ interface Props {
   isCollapse: boolean
 }
 
-const props = defineProps<Props>()
+defineProps<Props>()
 const emit = defineEmits(['toggle'])
 
 const route = useRoute()

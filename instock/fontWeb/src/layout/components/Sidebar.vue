@@ -7,7 +7,7 @@ interface Props {
   isCollapse: boolean
 }
 
-const props = defineProps<Props>()
+defineProps<Props>()
 const route = useRoute()
 const router = useRouter()
 

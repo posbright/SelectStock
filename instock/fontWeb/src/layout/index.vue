@@ -1,11 +1,9 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { ref } from 'vue'
 import Sidebar from './components/Sidebar.vue'
 import Navbar from './components/Navbar.vue'
 
 const isCollapse = ref(false)
-const route = useRoute()
 
 const toggleCollapse = () => {
   isCollapse.value = !isCollapse.value

@@ -16,8 +16,6 @@ const stockName = computed(() => route.query.name as string)
 
 // 图表容器
 const klineChartRef = ref<HTMLDivElement>()
-const volumeChartRef = ref<HTMLDivElement>()
-const indicatorChartRef = ref<HTMLDivElement>()
 
 // 当前选中的指标
 const currentIndicator = ref('MACD')
@@ -62,7 +60,7 @@ const initKlineChart = () => {
   
   const dates = data.map(item => item.date)
   const klineData = data.map(item => [item.open, item.close, item.low, item.high])
-  const volumes = data.map((item, index) => ({
+  const volumes = data.map((item) => ({
     value: item.volume,
     itemStyle: {
       color: item.close >= item.open ? '#ec0000' : '#00da3c'
@@ -220,12 +218,6 @@ const initKlineChart = () => {
 // 窗口 resize 处理函数
 const handleResize = () => {
   chartInstance?.resize()
-}
-
-// 切换指标
-const switchIndicator = (indicator: string) => {
-  currentIndicator.value = indicator
-  // TODO: 重新绘制指标图表
 }
 
 onMounted(() => {
