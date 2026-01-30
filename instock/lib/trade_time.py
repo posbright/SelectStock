@@ -118,10 +118,38 @@ def is_open(now_time):
     return False
 
 
-def get_trade_hist_interval(date):
-    tmp_year, tmp_month, tmp_day = date.split("-")
-    date_end = datetime.datetime(int(tmp_year), int(tmp_month), int(tmp_day))
-    date_start = (date_end + datetime.timedelta(days=-(365 * 3))).strftime("%Y%m%d")
+def get_trade_hist_interval(date, years=3):
+    """
+    获取历史数据的时间区间
+    
+    参数：
+        date: 结束日期，支持以下格式：
+              - datetime对象
+              - 字符串 YYYY-MM-DD
+              - 字符串 YYYYMMDD
+        years: 历史数据年数，默认3年
+    
+    返回：
+        (date_start, is_cache): 起始日期YYYYMMDD格式，是否可以缓存
+    """
+    # 处理不同的日期格式
+    if isinstance(date, datetime.datetime):
+        date_end = date
+    elif isinstance(date, datetime.date):
+        date_end = datetime.datetime.combine(date, datetime.time())
+    elif isinstance(date, str):
+        if "-" in date:
+            tmp_year, tmp_month, tmp_day = date.split("-")
+        else:
+            # YYYYMMDD格式
+            tmp_year = date[:4]
+            tmp_month = date[4:6]
+            tmp_day = date[6:8]
+        date_end = datetime.datetime(int(tmp_year), int(tmp_month), int(tmp_day))
+    else:
+        raise ValueError(f"不支持的日期格式: {type(date)}")
+    
+    date_start = (date_end + datetime.timedelta(days=-(365 * years))).strftime("%Y%m%d")
 
     now_time = datetime.datetime.now()
     now_date = now_time.date()

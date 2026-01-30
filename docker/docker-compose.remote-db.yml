@@ -1,28 +1,9 @@
 version: '3.8'
 
-services:
-  # MySQL数据库服务
-  instockdb:
-    image: library/mariadb:latest
-    container_name: instock-db
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-root}
-      MYSQL_DATABASE: ${DB_DATABASE:-instockdb}
-      MYSQL_CHARSET: utf8mb4
-      MYSQL_COLLATION: utf8mb4_unicode_ci
-    volumes:
-      - instock_db_data:/var/lib/mysql
-    networks:
-      - instock_network
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASSWORD:-root}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+# InStock Docker Compose - 远程数据库版本
+# 使用此配置连接外部MySQL数据库（不启动本地数据库容器）
 
-  # InStock主服务
+services:
   instock:
     build:
       context: .
@@ -34,12 +15,12 @@ services:
       - "${WEB_PORT:-9988}:9988"
       - "${SUPERVISOR_PORT:-9001}:9001"
     environment:
-      # 数据库配置
-      db_host: instockdb
-      db_port: 3306
-      db_user: root
-      db_password: ${DB_PASSWORD:-root}
-      db_database: ${DB_DATABASE:-instockdb}
+      # 远程数据库配置
+      db_host: ${REMOTE_DB_HOST:-115.29.213.22}
+      db_port: ${REMOTE_DB_PORT:-3306}
+      db_user: ${REMOTE_DB_USER:-root}
+      db_password: ${REMOTE_DB_PASSWORD:-Dzm@ming&662}
+      db_database: ${REMOTE_DB_DATABASE:-instockdb}
       # 数据源配置
       DATA_SOURCE_MAX_RETRIES: ${DATA_SOURCE_MAX_RETRIES:-2}
       DATA_SOURCE_RETRY_INTERVAL: ${DATA_SOURCE_RETRY_INTERVAL:-30}
@@ -53,11 +34,6 @@ services:
       - instock_logs:/data/InStock/instock/log
       # 缓存目录
       - instock_cache:/data/InStock/instock/cache
-    depends_on:
-      instockdb:
-        condition: service_healthy
-    networks:
-      - instock_network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9988/"]
       interval: 30s
@@ -65,17 +41,8 @@ services:
       retries: 3
       start_period: 60s
 
-# 数据卷
 volumes:
-  instock_db_data:
-    driver: local
   instock_logs:
     driver: local
   instock_cache:
     driver: local
-
-# 网络
-networks:
-  instock_network:
-    driver: bridge
-

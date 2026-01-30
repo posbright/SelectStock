@@ -43,14 +43,14 @@ class eastmoney_fetcher:
                 return cookie
 
         # 3. 默认Cookie（可能过期，仅作为备选）
-        return 'fullscreengg=1; fullscreengg2=1; qgqp_b_id=76670de7aee4283d73f88b9c543a53f0; st_si=52987000764549; st_sn=1; st_psi=20251231162316664-113200301321-0046286479; st_asi=delete; st_pvi=43436093393372; st_sp=2025-12-31%2016%3A23%3A16; st_inirUrl='
+        return ''
 
     def _create_session(self):
         """创建并配置会话"""
         session = requests.Session()
-        # 设置请求头
+        # 设置请求头（不设置Cookie，避免复杂Cookie导致500错误）
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Referer': 'https://quote.eastmoney.com/',
             'Accept': '*/*',
             'Accept-Language': 'zh-CN,zh;q=0.9',
@@ -58,11 +58,9 @@ class eastmoney_fetcher:
             'Connection': 'keep-alive',
         }
         session.headers.update(headers)
-        # 设置Cookie
-        session.cookies.update({'Cookie': self._get_cookie()})
         return session
 
-    def make_request(self, url, params=None, retry=1, timeout=10):
+    def make_request(self, url, params=None, retry=3, timeout=30):
         """
         发送请求
         :param url: 请求URL
@@ -71,10 +69,17 @@ class eastmoney_fetcher:
         :param timeout: 超时时间
         :return: 响应对象
         """
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://quote.eastmoney.com/',
+            'Accept': '*/*',
+            'Accept-Language': 'zh-CN,zh;q=0.9',
+        }
         for i in range(retry):
             try:
-                response = self.session.get(
+                response = requests.get(
                     url,
+                    headers=headers,
                     proxies=proxys().get_proxies(),
                     params=params,
                     timeout=timeout
@@ -84,8 +89,8 @@ class eastmoney_fetcher:
             except requests.exceptions.RequestException as e:
                 print(f"请求错误: {e}, 第 {i + 1}/{retry} 次重试")
                 if i < retry - 1:
-                    # 随机延迟后重试
-                    time.sleep(random.uniform(1, 3))
+                    # 随机延迟后重试，逐步增加延迟
+                    time.sleep(random.uniform(2, 5) * (i + 1))
                 else:
                     raise
 

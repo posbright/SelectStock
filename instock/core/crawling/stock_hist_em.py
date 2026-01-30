@@ -25,7 +25,7 @@ def stock_zh_a_spot_em() -> pd.DataFrame:
     :return: 实时行情
     :rtype: pandas.DataFrame
     """
-    url = "http://82.push2.eastmoney.com/api/qt/clist/get"
+    url = "http://push2.eastmoney.com/api/qt/clist/get"
     page_size = 50
     page_current = 1
     params = {
@@ -51,7 +51,7 @@ def stock_zh_a_spot_em() -> pd.DataFrame:
     page_count = math.ceil(data_count/page_size)
     while page_count > 1:
         # 添加随机延迟，避免爬取过快
-        time.sleep(random.uniform(1, 1.5))
+        time.sleep(random.uniform(2, 3))
         page_current = page_current + 1
         params["pn"] = page_current
         r =  fetcher.make_request(url, params=params)
@@ -222,7 +222,7 @@ def code_id_map_em() -> dict:
     page_count = math.ceil(data_count/page_size)
     while page_count > 1:
         # 添加随机延迟，避免爬取过快
-        time.sleep(random.uniform(1, 1.5))
+        time.sleep(random.uniform(2, 3))
         page_current = page_current + 1
         params["pn"] = page_current
         r =  fetcher.make_request(url, params=params)
@@ -259,7 +259,7 @@ def code_id_map_em() -> dict:
     page_count = math.ceil(data_count/page_size)
     while page_count > 1:
         # 添加随机延迟，避免爬取过快
-        time.sleep(random.uniform(1, 1.5))
+        time.sleep(random.uniform(2, 3))
         page_current = page_current + 1
         params["pn"] = page_current
         r =  fetcher.make_request(url, params=params)
@@ -295,7 +295,7 @@ def code_id_map_em() -> dict:
     page_count = math.ceil(data_count/page_size)
     while page_count > 1:
         # 添加随机延迟，避免爬取过快
-        time.sleep(random.uniform(1, 1.5))
+        time.sleep(random.uniform(2, 3))
         page_current = page_current + 1
         params["pn"] = page_current
         r =  fetcher.make_request(url, params=params)

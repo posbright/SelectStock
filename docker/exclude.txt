@@ -1,0 +1,16 @@
+.git
+.idea
+.vscode
+.venv
+__pycache__
+*.pyc
+.gitignore
+docker
+img
+*.md
+*.bat
+cache
+log
+node_modules
+dist
+.env

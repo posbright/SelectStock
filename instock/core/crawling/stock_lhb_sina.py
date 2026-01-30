@@ -28,17 +28,23 @@ def stock_lhb_detail_daily_sina(date: str = "20240222") -> pd.DataFrame:
     params = {"tradedate": date}
     r = requests.get(url, proxies = proxys().get_proxies(), params=params)
     soup = BeautifulSoup(r.text, features="lxml")
-    selected_html = soup.find(name="div", attrs={"class": "list"}).find_all(
-        name="table", attrs={"class": "list_table"}
-    )
+    list_div = soup.find(name="div", attrs={"class": "list"})
+    if list_div is None:
+        return pd.DataFrame()
+    selected_html = list_div.find_all(name="table", attrs={"class": "list_table"})
+    if not selected_html:
+        return pd.DataFrame()
     big_df = pd.DataFrame()
     for table in selected_html:
         temp_df = pd.read_html(StringIO(table.prettify()), header=0, skiprows=1)[0]
         temp_symbol = pd.read_html(StringIO(table.prettify()))[0].iat[0, 0]
         temp_df["指标"] = temp_symbol
         big_df = pd.concat(objs=[big_df, temp_df], ignore_index=True)
+    if big_df.empty or "股票代码" not in big_df.columns:
+        return pd.DataFrame()
     big_df["股票代码"] = big_df["股票代码"].astype(str).str.zfill(6)
-    del big_df["查看详情"]
+    if "查看详情" in big_df.columns:
+        del big_df["查看详情"]
     big_df.columns = [
         "序号",
         "股票代码",
