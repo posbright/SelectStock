@@ -246,6 +246,11 @@ def fetch_stock_selection():
                 '昨收': 'pre_close',
             })
         
+        # 添加 date 列（如果不存在）
+        if 'date' not in data.columns:
+            import datetime
+            data['date'] = datetime.date.today()
+        
         if 'code' in data.columns:
             data.drop_duplicates('code', keep='last', inplace=True)
         return data
