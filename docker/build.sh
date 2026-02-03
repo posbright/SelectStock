@@ -24,25 +24,24 @@ echo "[1/5] 清理旧文件..."
 rm -rf stock
 rm -rf cron
 
-# 复制项目文件
+# 复制项目文件（使用cp替代rsync以提高兼容性）
 echo "[2/5] 复制项目文件..."
 mkdir -p stock
-rsync -av --progress ../../ ./stock \
-    --exclude .git \
-    --exclude .idea \
-    --exclude .vscode \
-    --exclude .venv \
-    --exclude __pycache__ \
-    --exclude '*.pyc' \
-    --exclude .gitignore \
-    --exclude docker \
-    --exclude img \
-    --exclude '*.md' \
-    --exclude '*.bat' \
-    --exclude 'instock/cache/*' \
-    --exclude 'instock/log/*' \
-    --exclude 'instock/fontWeb/node_modules' \
-    --exclude 'instock/fontWeb/dist'
+
+# 复制必要的项目文件
+cp -r ../../instock ./stock/
+cp -r ../../supervisor ./stock/
+cp ../../requirements.txt ./stock/
+cp ../../LICENSE ./stock/ 2>/dev/null || true
+
+# 清理不需要的文件
+find ./stock -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+find ./stock -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
+find ./stock -type d -name "node_modules" -exec rm -rf {} + 2>/dev/null || true
+find ./stock -type f -name "*.pyc" -delete 2>/dev/null || true
+rm -rf ./stock/instock/cache/* 2>/dev/null || true
+rm -rf ./stock/instock/log/* 2>/dev/null || true
+rm -rf ./stock/instock/fontWeb/dist 2>/dev/null || true
 
 # 复制cron配置
 echo "[3/5] 复制cron配置..."
