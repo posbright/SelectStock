@@ -14,9 +14,19 @@ set -e
 
 VERSION="2.2"
 
+# 获取脚本所在目录和项目根目录
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# 切换到docker目录执行
+cd "${SCRIPT_DIR}"
+
 echo "=============================================="
 echo "InStock Docker 构建脚本 v${VERSION}"
 echo "=============================================="
+echo ""
+echo "项目根目录: ${PROJECT_ROOT}"
+echo "Docker目录: ${SCRIPT_DIR}"
 echo ""
 
 # 清理旧文件
@@ -29,10 +39,10 @@ echo "[2/5] 复制项目文件..."
 mkdir -p stock
 
 # 复制必要的项目文件
-cp -r ../../instock ./stock/
-cp -r ../../supervisor ./stock/
-cp ../../requirements.txt ./stock/
-cp ../../LICENSE ./stock/ 2>/dev/null || true
+cp -r "${PROJECT_ROOT}/instock" ./stock/
+cp -r "${PROJECT_ROOT}/supervisor" ./stock/
+cp "${PROJECT_ROOT}/requirements.txt" ./stock/
+cp "${PROJECT_ROOT}/LICENSE" ./stock/ 2>/dev/null || true
 
 # 清理不需要的文件
 find ./stock -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
@@ -45,7 +55,7 @@ rm -rf ./stock/instock/fontWeb/dist 2>/dev/null || true
 
 # 复制cron配置
 echo "[3/5] 复制cron配置..."
-cp -r ../../cron .
+cp -r "${PROJECT_ROOT}/cron" .
 
 # 创建config目录（如果不存在）
 mkdir -p config
