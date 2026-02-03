@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# InStock Docker 构建脚本 v2.1
+# InStock Docker 构建脚本 v2.2
 # 使用方法: ./build.sh [push]
 # 参数 push: 可选，构建后推送到Docker Hub
 #
@@ -8,10 +8,11 @@
 # - 多数据源自动切换（新浪/腾讯/东方财富）
 # - 历史数据增量缓存
 # - 环境变量配置
+# - 兼容 Debian 11/12 apt源配置
 
 set -e
 
-VERSION="2.1"
+VERSION="2.2"
 
 echo "=============================================="
 echo "InStock Docker 构建脚本 v${VERSION}"

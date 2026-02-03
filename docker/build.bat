@@ -1,13 +1,14 @@
 @echo off
-REM InStock Docker 构建脚本 (Windows版) v2.1
+REM InStock Docker 构建脚本 (Windows版) v2.2
 REM 使用方法: build.bat
 REM
 REM 新功能支持:
 REM - 多数据源自动切换（新浪/腾讯/东方财富）
 REM - 历史数据增量缓存
 REM - 环境变量配置
+REM - 兼容 Debian 11/12 apt源配置
 
-set VERSION=2.1
+set VERSION=2.2
 
 echo ==============================================
 echo InStock Docker 构建脚本 v%VERSION%

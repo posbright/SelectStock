@@ -1,17 +1,38 @@
-numpy==2.4.0
-pandas==2.3.3
-py_mini_racer==0.6.0
-mini-racer==0.13.2
-TA_Lib==0.6.8
-arrow==1.4.0
-bokeh==3.8.1
-PyMySQL==1.1.2
-requests==2.32.5
-Logbook==1.9.2
-SQLAlchemy==2.0.45
-tornado==6.5.4
-tqdm==4.67.1
-easytrader==0.23.7
-beautifulsoup4==4.14.3
-pycryptodome==3.23.0
-python_dateutil==2.9.0.post0
+# InStock Python 依赖
+# 使用 >= 约束提高兼容性，避免过于严格的版本锁定
+
+# 核心数据处理
+numpy>=1.24.0
+pandas>=2.0.0
+TA_Lib>=0.4.28
+
+# Web框架
+tornado>=6.3.0
+bokeh>=3.0.0
+
+# 数据库
+PyMySQL>=1.1.0
+SQLAlchemy>=2.0.0
+
+# 网络请求
+requests>=2.28.0
+
+# 工具库
+arrow>=1.2.0
+tqdm>=4.65.0
+python_dateutil>=2.8.0
+Logbook>=1.5.0
+
+# 数据解析
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# JavaScript引擎（用于筹码计算）
+py_mini_racer>=0.6.0
+mini-racer>=0.12.0
+
+# 加密
+pycryptodome>=3.18.0
+
+# 交易（可选）
+easytrader>=0.23.0

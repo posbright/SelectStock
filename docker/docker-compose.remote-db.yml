@@ -1,7 +1,6 @@
-version: '3.8'
-
 # InStock Docker Compose - 远程数据库版本
 # 使用此配置连接外部MySQL数据库（不启动本地数据库容器）
+# 用法: docker-compose -f docker-compose.remote-db.yml up -d
 
 services:
   instock:
@@ -15,11 +14,11 @@ services:
       - "${WEB_PORT:-9988}:9988"
       - "${SUPERVISOR_PORT:-9001}:9001"
     environment:
-      # 远程数据库配置
-      db_host: ${REMOTE_DB_HOST:-115.29.213.22}
+      # 远程数据库配置（通过环境变量或.env文件设置）
+      db_host: ${REMOTE_DB_HOST:?请设置REMOTE_DB_HOST}
       db_port: ${REMOTE_DB_PORT:-3306}
       db_user: ${REMOTE_DB_USER:-root}
-      db_password: ${REMOTE_DB_PASSWORD:-Dzm@ming&662}
+      db_password: ${REMOTE_DB_PASSWORD:?请设置REMOTE_DB_PASSWORD}
       db_database: ${REMOTE_DB_DATABASE:-instockdb}
       # 数据源配置
       DATA_SOURCE_MAX_RETRIES: ${DATA_SOURCE_MAX_RETRIES:-2}
@@ -35,7 +34,7 @@ services:
       # 缓存目录
       - instock_cache:/data/InStock/instock/cache
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9988/"]
+      test: ["CMD", "curl", "-sf", "http://localhost:9988/"]
       interval: 30s
       timeout: 10s
       retries: 3
