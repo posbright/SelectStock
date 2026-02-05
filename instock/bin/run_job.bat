@@ -15,7 +15,7 @@ echo 基础数据实时作业 python basic_data_daily_job.py
 echo 基础数据收盘2小时后作业 python backtest_data_daily_job.py
 echo 基础数据非实时作业 python basic_data_other_daily_job.py
 echo 指标数据作业 python indicators_data_daily_job.py
-echo K线形态作业 klinepattern_data_daily_job.py
+echo K线形态作业 python klinepattern_data_daily_job.py
 echo 策略数据作业 python strategy_data_daily_job.py
 echo 回测数据 python backtest_data_daily_job.py
 echo ------正在执行作业中，请等待------
