@@ -21,14 +21,38 @@ const activeMenu = computed(() => {
   return route.path
 })
 
-// 判断是否有子菜单
-const hasChildren = (item: RouteRecordRaw) => {
-  return item.children && item.children.length > 0 && !item.children.every(child => child.meta?.hidden)
+// 判断是否应该显示为子菜单（下拉菜单）
+// 只有当有多个可见子菜单时才显示为下拉菜单
+const shouldShowAsSubMenu = (item: RouteRecordRaw) => {
+  const visibleChildren = getVisibleChildren(item)
+  // 只有一个子菜单时，直接显示为普通菜单项
+  if (visibleChildren.length <= 1) {
+    return false
+  }
+  return true
 }
 
 // 获取可见的子菜单
 const getVisibleChildren = (item: RouteRecordRaw) => {
   return item.children?.filter(child => !child.meta?.hidden) || []
+}
+
+// 获取单个子菜单的路径和标题（用于只有一个子菜单的情况）
+const getSingleChildPath = (item: RouteRecordRaw) => {
+  const visibleChildren = getVisibleChildren(item)
+  if (visibleChildren.length === 1) {
+    const child = visibleChildren[0]
+    return item.path === '/' ? `/${child.path}` : `${item.path}/${child.path}`
+  }
+  return item.redirect as string || item.path
+}
+
+const getSingleChildMeta = (item: RouteRecordRaw) => {
+  const visibleChildren = getVisibleChildren(item)
+  if (visibleChildren.length === 1) {
+    return visibleChildren[0].meta
+  }
+  return item.meta
 }
 </script>
 
@@ -52,8 +76,8 @@ const getVisibleChildren = (item: RouteRecordRaw) => {
         router
       >
         <template v-for="item in menuList" :key="item.path">
-          <!-- 有子菜单 -->
-          <el-sub-menu v-if="hasChildren(item)" :index="item.path">
+          <!-- 有多个子菜单，显示为下拉菜单 -->
+          <el-sub-menu v-if="shouldShowAsSubMenu(item)" :index="item.path">
             <template #title>
               <el-icon v-if="item.meta?.icon">
                 <component :is="item.meta.icon" />
@@ -73,12 +97,12 @@ const getVisibleChildren = (item: RouteRecordRaw) => {
             </el-menu-item>
           </el-sub-menu>
           
-          <!-- 无子菜单 -->
-          <el-menu-item v-else :index="item.redirect as string || item.path">
-            <el-icon v-if="item.meta?.icon">
-              <component :is="item.meta.icon" />
+          <!-- 无子菜单或只有一个子菜单，直接显示 -->
+          <el-menu-item v-else :index="getSingleChildPath(item)">
+            <el-icon v-if="getSingleChildMeta(item)?.icon">
+              <component :is="getSingleChildMeta(item)?.icon" />
             </el-icon>
-            <template #title>{{ item.meta?.title || item.children?.[0]?.meta?.title }}</template>
+            <template #title>{{ getSingleChildMeta(item)?.title }}</template>
           </el-menu-item>
         </template>
       </el-menu>

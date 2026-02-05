@@ -25,6 +25,19 @@ TABLE_CN_STOCK_ATTENTION = {'name': 'cn_stock_attention', 'cn': '我的关注',
                             'columns': {'datetime': {'type': DATETIME, 'cn': '日期', 'size': 0},
                                         'code': {'type': VARCHAR(6, _COLLATE), 'cn': '代码', 'size': 60}}}
 
+# 回测汇总表
+TABLE_CN_STOCK_BACKTEST = {'name': 'cn_stock_backtest', 'cn': '回测验证',
+                           'columns': {'date': {'type': DATE, 'cn': '日期', 'size': 0},
+                                       'strategy_name': {'type': VARCHAR(50, _COLLATE), 'cn': '策略名称', 'size': 100},
+                                       'stock_count': {'type': SmallInteger, 'cn': '选股数量', 'size': 70},
+                                       'success_count': {'type': SmallInteger, 'cn': '成功数量', 'size': 70},
+                                       'success_rate': {'type': FLOAT, 'cn': '成功率', 'size': 70},
+                                       'avg_rate_1': {'type': FLOAT, 'cn': '1日平均收益', 'size': 80},
+                                       'avg_rate_3': {'type': FLOAT, 'cn': '3日平均收益', 'size': 80},
+                                       'avg_rate_5': {'type': FLOAT, 'cn': '5日平均收益', 'size': 80},
+                                       'avg_rate_10': {'type': FLOAT, 'cn': '10日平均收益', 'size': 80},
+                                       'avg_rate_20': {'type': FLOAT, 'cn': '20日平均收益', 'size': 80}}}
+
 TABLE_CN_ETF_SPOT = {'name': 'cn_etf_spot', 'cn': '每日ETF数据',
                      'columns': {'date': {'type': DATE, 'cn': '日期', 'size': 0},
                                  'code': {'type': VARCHAR(6, _COLLATE), 'cn': '代码', 'size': 60},

@@ -230,6 +230,23 @@ class stock_web_module_data(metaclass=singleton_type):
                     order_by=" `cdatetime` DESC"
                 )
             )
+
+        # 添加回测汇总表
+        self.data_list.append(
+            wmd.web_module_data(
+                mode="query",
+                type="选股验证",
+                ico="fa fa-line-chart",
+                name=tbs.TABLE_CN_STOCK_BACKTEST['cn'],
+                table_name=tbs.TABLE_CN_STOCK_BACKTEST['name'],
+                columns=tuple(tbs.TABLE_CN_STOCK_BACKTEST['columns']),
+                column_names=tbs.get_field_cns(tbs.TABLE_CN_STOCK_BACKTEST['columns']),
+                primary_key=[],
+                is_realtime=False,
+                order_by=" `date` DESC, `success_rate` DESC"
+            )
+        )
+
         for tmp in self.data_list:
             _data[tmp.table_name] = tmp
         self.data = _data

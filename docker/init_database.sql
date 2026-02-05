@@ -465,5 +465,43 @@ CREATE TABLE IF NOT EXISTS `cn_stock_trade_date` (
   PRIMARY KEY (`trade_date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
+-- 20-29. 策略选股表（包含回测数据列）
+-- 通用策略表结构：基础信息 + 100日收益率
+CREATE TABLE IF NOT EXISTS `cn_stock_strategy_enter` (
+  `date` date NOT NULL,
+  `code` varchar(6) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `name` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `rate_1` float DEFAULT NULL, `rate_2` float DEFAULT NULL, `rate_3` float DEFAULT NULL, `rate_4` float DEFAULT NULL, `rate_5` float DEFAULT NULL,
+  `rate_6` float DEFAULT NULL, `rate_7` float DEFAULT NULL, `rate_8` float DEFAULT NULL, `rate_9` float DEFAULT NULL, `rate_10` float DEFAULT NULL,
+  `rate_11` float DEFAULT NULL, `rate_12` float DEFAULT NULL, `rate_13` float DEFAULT NULL, `rate_14` float DEFAULT NULL, `rate_15` float DEFAULT NULL,
+  `rate_16` float DEFAULT NULL, `rate_17` float DEFAULT NULL, `rate_18` float DEFAULT NULL, `rate_19` float DEFAULT NULL, `rate_20` float DEFAULT NULL,
+  PRIMARY KEY (`date`, `code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE IF NOT EXISTS `cn_stock_strategy_keep_increasing` LIKE `cn_stock_strategy_enter`;
+CREATE TABLE IF NOT EXISTS `cn_stock_strategy_parking_apron` LIKE `cn_stock_strategy_enter`;
+CREATE TABLE IF NOT EXISTS `cn_stock_strategy_backtrace_ma250` LIKE `cn_stock_strategy_enter`;
+CREATE TABLE IF NOT EXISTS `cn_stock_strategy_breakthrough_platform` LIKE `cn_stock_strategy_enter`;
+CREATE TABLE IF NOT EXISTS `cn_stock_strategy_low_backtrace_increase` LIKE `cn_stock_strategy_enter`;
+CREATE TABLE IF NOT EXISTS `cn_stock_strategy_turtle_trade` LIKE `cn_stock_strategy_enter`;
+CREATE TABLE IF NOT EXISTS `cn_stock_strategy_high_tight_flag` LIKE `cn_stock_strategy_enter`;
+CREATE TABLE IF NOT EXISTS `cn_stock_strategy_climax_limitdown` LIKE `cn_stock_strategy_enter`;
+CREATE TABLE IF NOT EXISTS `cn_stock_strategy_low_atr` LIKE `cn_stock_strategy_enter`;
+
+-- 30. 回测汇总表
+CREATE TABLE IF NOT EXISTS `cn_stock_backtest` (
+  `date` date NOT NULL,
+  `strategy_name` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `stock_count` int DEFAULT NULL,
+  `success_count` int DEFAULT NULL,
+  `success_rate` float DEFAULT NULL,
+  `avg_rate_1` float DEFAULT NULL,
+  `avg_rate_3` float DEFAULT NULL,
+  `avg_rate_5` float DEFAULT NULL,
+  `avg_rate_10` float DEFAULT NULL,
+  `avg_rate_20` float DEFAULT NULL,
+  PRIMARY KEY (`date`, `strategy_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
 -- 完成提示
 SELECT 'InStock 数据库初始化完成!' AS message;
