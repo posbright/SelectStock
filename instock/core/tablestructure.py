@@ -545,7 +545,7 @@ STOCK_KLINE_PATTERN_DATA = {'name': 'cn_stock_pattern_recognitions', 'cn': 'K线
                                 'upside_downside_gap': {'type': SmallInteger, 'cn': '上升/下降跳空三法', 'size': 70,
                                                         'func': tl.CDLXSIDEGAP3METHODS}}}
 
-TABLE_CN_STOCK_KLINE_PATTERN = {'name': 'cn_stock_pattern', 'cn': '股票K线形态',
+TABLE_CN_STOCK_KLINE_PATTERN = {'name': 'cn_stock_kline_pattern', 'cn': '股票K线形态',
                                 'columns': TABLE_CN_STOCK_FOREIGN_KEY['columns'].copy()}
 TABLE_CN_STOCK_KLINE_PATTERN['columns'].update(STOCK_KLINE_PATTERN_DATA['columns'])
 
