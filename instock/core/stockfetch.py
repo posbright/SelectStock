@@ -545,9 +545,10 @@ def fetch_etf_hist(data_base, date_start=None, date_end=None, adjust='qfq'):
         data.columns = tuple(tbs.CN_STOCK_HIST_DATA['columns'])
         data = data.sort_index()  # 将数据按照日期排序下。
         if data is not None:
-            data.loc[:, 'p_change'] = tl.ROC(data['close'].values, 1)
-            data['p_change'].values[np.isnan(data['p_change'].values)] = 0.0
-            data["volume"] = data['volume'].values.astype('double') * 100  # 成交量单位从手变成股。
+            data = data.copy()  # 创建副本避免只读数组问题
+            data['p_change'] = tl.ROC(data['close'].values, 1)
+            data['p_change'] = data['p_change'].fillna(0.0)
+            data['volume'] = data['volume'].astype('double') * 100  # 成交量单位从手变成股。
         return data
     except Exception as e:
         logging.error(f"stockfetch.fetch_etf_hist处理异常：{e}")
@@ -580,9 +581,11 @@ def fetch_stock_hist(data_base, date_start=None, date_end=None, is_cache=True, y
     try:
         data = stock_hist_cache_incremental(code, date_start, date_end, is_cache, 'qfq')
         if data is not None:
-            data.loc[:, 'p_change'] = tl.ROC(data['close'].values, 1)
-            data['p_change'].values[np.isnan(data['p_change'].values)] = 0.0
-            data["volume"] = data['volume'].values.astype('double') * 100  # 成交量单位从手变成股。
+            # 创建数据副本以避免修改只读数组
+            data = data.copy()
+            data['p_change'] = tl.ROC(data['close'].values, 1)
+            data['p_change'] = data['p_change'].fillna(0.0)
+            data['volume'] = data['volume'].astype('double') * 100  # 成交量单位从手变成股。
         return data
     except Exception as e:
         logging.error(f"stockfetch.fetch_stock_hist处理异常：{e}")
