@@ -77,6 +77,11 @@ class GetStockDataHandler(webBase.BaseHandler, ABC):
             order_columns = f",{web_module_data.order_columns}"
 
         sql = f" SELECT *{order_columns} FROM `{web_module_data.table_name}`{where}{order_by}"
-        data = self.db.query(sql,date)
+        
+        # 只有当 date 存在时才传递参数
+        if date is not None:
+            data = self.db.query(sql, date)
+        else:
+            data = self.db.query(sql)
 
         self.write(json.dumps(data, cls=MyEncoder))
