@@ -4,17 +4,17 @@ export interface StockSpot {
   date: string
   code: string
   name: string
-  new_price: number
-  change_rate: number
-  change_amount: number
-  volume: number
-  deal_amount: number
-  amplitude: number
-  high: number
-  low: number
-  open: number
-  close: number
-  turnover: number
+  new_price: number  // 最新价/收盘价
+  change_rate: number  // 涨跌幅
+  ups_downs: number  // 涨跌额
+  volume: number  // 成交量
+  deal_amount: number  // 成交额
+  amplitude: number  // 振幅
+  high_price: number  // 最高价
+  low_price: number  // 最低价
+  pre_close_price: number  // 昨收价
+  volume_ratio: number  // 量比
+  turnoverrate: number  // 换手率
   cdatetime?: string  // 关注时间，有值表示已关注
 }
 

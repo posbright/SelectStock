@@ -228,7 +228,7 @@ def fetch_stock_selection():
         if source == "东方财富":
             data.columns = list(tbs.TABLE_CN_STOCK_SELECTION['columns'])
         elif source == "新浪财经":
-            # 新浪财经数据需要重命名列名为英文
+            # 新浪财经数据需要重命名列名为英文，与数据库字段一致
             data = data.rename(columns={
                 '代码': 'code',
                 '名称': 'name',
@@ -236,14 +236,14 @@ def fetch_stock_selection():
                 '涨跌幅': 'change_rate',
                 '涨跌额': 'ups_downs',
                 '成交量': 'volume',
-                '成交额': 'turnover',
+                '成交额': 'deal_amount',
                 '振幅': 'amplitude',
                 '换手率': 'turnoverrate',
                 '量比': 'volume_ratio',
-                '今开': 'open',
-                '最高': 'high',
-                '最低': 'low',
-                '昨收': 'pre_close',
+                '今开': 'open_price',
+                '最高': 'high_price',
+                '最低': 'low_price',
+                '昨收': 'pre_close_price',
             })
         
         # 添加 date 列（如果不存在）

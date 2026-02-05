@@ -28,6 +28,12 @@ const pagedData = computed(() => {
 const tableName = computed(() => route.meta.tableName as string || 'cn_stock_spot')
 const pageTitle = computed(() => route.meta.title as string || '股票数据')
 
+// 判断是否有开盘价字段（cn_stock_spot有，cn_stock_selection没有）
+const hasOpenPrice = computed(() => {
+  if (tableData.value.length === 0) return false
+  return 'open_price' in tableData.value[0]
+})
+
 // 搜索关键词
 const searchKeyword = ref('')
 
@@ -217,10 +223,10 @@ onMounted(() => {
           </template>
         </el-table-column>
         
-        <el-table-column prop="change_amount" label="涨跌额" width="90" align="right">
+        <el-table-column prop="ups_downs" label="涨跌额" width="90" align="right">
           <template #default="{ row }">
-            <span :class="getChangeClass(row.change_amount)">
-              {{ row.change_amount?.toFixed(2) }}
+            <span :class="getChangeClass(row.ups_downs)">
+              {{ row.ups_downs?.toFixed(2) }}
             </span>
           </template>
         </el-table-column>
@@ -243,14 +249,15 @@ onMounted(() => {
           </template>
         </el-table-column>
         
-        <el-table-column prop="high" label="最高价" width="90" align="right" />
-        <el-table-column prop="low" label="最低价" width="90" align="right" />
-        <el-table-column prop="open" label="开盘价" width="90" align="right" />
-        <el-table-column prop="close" label="收盘价" width="90" align="right" />
+        <el-table-column prop="high_price" label="最高价" width="90" align="right" />
+        <el-table-column prop="low_price" label="最低价" width="90" align="right" />
+        <el-table-column v-if="hasOpenPrice" prop="open_price" label="开盘价" width="90" align="right" />
+        <el-table-column prop="pre_close_price" label="昨收价" width="90" align="right" />
+        <el-table-column prop="new_price" label="收盘价" width="90" align="right" />
         
-        <el-table-column prop="turnover" label="换手率" width="90" align="right">
+        <el-table-column prop="turnoverrate" label="换手率" width="90" align="right">
           <template #default="{ row }">
-            {{ row.turnover ? row.turnover.toFixed(2) + '%' : '-' }}
+            {{ row.turnoverrate ? row.turnoverrate.toFixed(2) + '%' : '-' }}
           </template>
         </el-table-column>
         
