@@ -19,11 +19,11 @@ export function formatNumber(num: number, decimals = 2): string {
 }
 
 /**
- * 格式化百分比
+ * 格式化百分比（后端返回的已是百分比形式，如 -7 表示 -7%）
  */
 export function formatPercent(value: number, decimals = 2): string {
   if (value === null || value === undefined || isNaN(value)) return '-'
-  const formatted = (value * 100).toFixed(decimals)
+  const formatted = value.toFixed(decimals)
   return value >= 0 ? `+${formatted}%` : `${formatted}%`
 }
 

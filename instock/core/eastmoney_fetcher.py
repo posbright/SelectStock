@@ -75,6 +75,10 @@ class eastmoney_fetcher:
             'Accept': '*/*',
             'Accept-Language': 'zh-CN,zh;q=0.9',
         }
+        
+        # 每次请求前添加随机延迟，避免请求过快被封禁
+        time.sleep(random.uniform(5, 10))
+        
         for i in range(retry):
             try:
                 response = requests.get(
@@ -89,8 +93,8 @@ class eastmoney_fetcher:
             except requests.exceptions.RequestException as e:
                 print(f"请求错误: {e}, 第 {i + 1}/{retry} 次重试")
                 if i < retry - 1:
-                    # 随机延迟后重试，逐步增加延迟
-                    time.sleep(random.uniform(2, 5) * (i + 1))
+                    # 随机延迟后重试，逐步增加延迟（增大延迟时间）
+                    time.sleep(random.uniform(10, 30) * (i + 1))
                 else:
                     raise
 

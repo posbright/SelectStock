@@ -93,10 +93,10 @@ const handleAttention = async (row: any) => {
   }
 }
 
-// 格式化涨跌幅
+// 格式化涨跌幅（后端返回的已是百分比形式，如 -7 表示 -7%）
 const formatPercent = (value: number) => {
   if (value === null || value === undefined) return '-'
-  const formatted = (value * 100).toFixed(2)
+  const formatted = value.toFixed(2)
   return value >= 0 ? `+${formatted}%` : `${formatted}%`
 }
 
@@ -239,7 +239,7 @@ onMounted(() => {
         
         <el-table-column prop="amplitude" label="振幅" width="90" align="right">
           <template #default="{ row }">
-            {{ row.amplitude ? (row.amplitude * 100).toFixed(2) + '%' : '-' }}
+            {{ row.amplitude ? row.amplitude.toFixed(2) + '%' : '-' }}
           </template>
         </el-table-column>
         
@@ -250,7 +250,7 @@ onMounted(() => {
         
         <el-table-column prop="turnover" label="换手率" width="90" align="right">
           <template #default="{ row }">
-            {{ row.turnover ? (row.turnover * 100).toFixed(2) + '%' : '-' }}
+            {{ row.turnover ? row.turnover.toFixed(2) + '%' : '-' }}
           </template>
         </el-table-column>
         
