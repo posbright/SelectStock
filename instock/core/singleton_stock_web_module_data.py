@@ -238,4 +238,6 @@ class stock_web_module_data(metaclass=singleton_type):
         return self.data_list
 
     def get_data(self, name):
-        return self.data[name]
+        if name is None:
+            return None
+        return self.data.get(name, None)

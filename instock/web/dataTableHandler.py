@@ -48,8 +48,19 @@ class GetStockDataHandler(webBase.BaseHandler, ABC):
     def get(self):
         name = self.get_argument("name", default=None, strip=False)
         date = self.get_argument("date", default=None, strip=False)
-        web_module_data = sswmd.stock_web_module_data().get_data(name)
         self.set_header('Content-Type', 'application/json;charset=UTF-8')
+        
+        # 参数验证
+        if name is None:
+            self.set_status(400)
+            self.write(json.dumps({"error": "缺少必要参数 name", "code": 400}))
+            return
+        
+        web_module_data = sswmd.stock_web_module_data().get_data(name)
+        if web_module_data is None:
+            self.set_status(404)
+            self.write(json.dumps({"error": f"未找到数据模块: {name}", "code": 404}))
+            return
 
         if date is None:
             where = ""
