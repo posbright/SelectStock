@@ -226,7 +226,10 @@ def fetch_stock_selection():
         logging.info(f"成功从{source}获取 {len(data)} 条选股数据")
         
         if source == "东方财富":
-            data.columns = list(tbs.TABLE_CN_STOCK_SELECTION['columns'])
+            # 东方财富返回的列名是大写的API字段名（map值），需要映射回数据库字段名
+            cols = tbs.TABLE_CN_STOCK_SELECTION['columns']
+            rename_map = {cols[k]['map']: k for k in cols if 'map' in cols[k]}
+            data = data.rename(columns=rename_map)
         elif source == "新浪财经":
             # 新浪财经数据需要重命名列名为英文，与数据库字段一致
             data = data.rename(columns={
