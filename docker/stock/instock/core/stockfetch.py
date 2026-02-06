@@ -230,6 +230,9 @@ def fetch_stock_selection():
             cols = tbs.TABLE_CN_STOCK_SELECTION['columns']
             rename_map = {cols[k]['map']: k for k in cols if 'map' in cols[k]}
             data = data.rename(columns=rename_map)
+            # 东方财富API不返回涨跌额，需要计算: ups_downs = new_price - pre_close
+            if 'new_price' in data.columns and 'pre_close' in data.columns:
+                data['ups_downs'] = (data['new_price'] - data['pre_close']).round(4)
         elif source == "新浪财经":
             # 新浪财经数据需要重命名列名为英文，与数据库字段一致
             data = data.rename(columns={
