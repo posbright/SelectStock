@@ -74,7 +74,7 @@ crontab -e
 # 添加以下内容（假设项目在 /root/SelectStock）：
 
 # 每小时执行（交易日9:30-15:00）
-30 9-15 * * 1-5 /root/SelectStock/cron/cron.hourly/run_hourly
+#30 9-15 * * 1-5 /root/SelectStock/cron/cron.hourly/run_hourly
 
 # 每个工作日18:00执行完整任务
 0 18 * * 1-5 /root/SelectStock/cron/cron.workdayly/run_workdayly
