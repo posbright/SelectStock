@@ -20,10 +20,12 @@ class MyEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, bytes):
             return "是" if ord(obj) == 1 else "否"
+        elif isinstance(obj, datetime.datetime):
+            # datetime 对象转为 ISO 格式字符串
+            return obj.strftime("%Y-%m-%d %H:%M:%S")
         elif isinstance(obj, datetime.date):
-            delta = datetime.datetime.combine(obj, datetime.time.min) - datetime.datetime(1899, 12, 30)
-            return f'/OADate({float(delta.days) + (float(delta.seconds) / 86400)})/'  # 86,400 seconds in day
-            # return obj.isoformat()
+            # date 对象转为 YYYY-MM-DD 格式字符串
+            return obj.strftime("%Y-%m-%d")
         else:
             return json.JSONEncoder.default(self, obj)
 
@@ -77,6 +79,16 @@ class GetStockDataHandler(webBase.BaseHandler, ABC):
             order_columns = f",{web_module_data.order_columns}"
 
         sql = f" SELECT *{order_columns} FROM `{web_module_data.table_name}`{where}{order_by}"
-        data = self.db.query(sql,date)
+        
+        # 只有当 date 存在时才传递参数
+        if date is not None:
+            data = self.db.query(sql, date)
+        else:
+            data = self.db.query(sql)
 
-        self.write(json.dumps(data, cls=MyEncoder))
+        # 返回包含列定义和数据的响应
+        response = {
+            "columns": web_module_data.column_names,
+            "data": data
+        }
+        self.write(json.dumps(response, cls=MyEncoder))

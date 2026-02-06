@@ -5,11 +5,21 @@ import { ElMessage } from 'element-plus'
 import { getStockData, toggleAttention } from '@/api/stock'
 import dayjs from 'dayjs'
 
+// 列定义接口
+interface ColumnDef {
+  value: string       // 字段名
+  caption: string     // 中文名
+  width: number       // 列宽
+  headerStyle?: any
+  conditionalFormats?: any[]
+}
+
 const route = useRoute()
 const router = useRouter()
 
-// 表格数据
+// 表格数据和列定义
 const tableData = ref<any[]>([])
+const columnDefs = ref<ColumnDef[]>([])
 const loading = ref(false)
 const selectedDate = ref(dayjs().format('YYYY-MM-DD'))
 
@@ -28,33 +38,17 @@ const pagedData = computed(() => {
 const tableName = computed(() => route.meta.tableName as string || 'cn_stock_spot')
 const pageTitle = computed(() => route.meta.title as string || '股票数据')
 
-// 判断是否有开盘价字段（不同表字段名不同：open 或 open_price）
-const hasOpenPrice = computed(() => {
-  if (tableData.value.length === 0) return false
-  const row = tableData.value[0]
-  return 'open' in row || 'open_price' in row
+// 动态列（排除 date, code, name, cdatetime 这些固定列）
+const dynamicColumns = computed(() => {
+  return columnDefs.value.filter(col => 
+    !['date', 'code', 'name', 'cdatetime'].includes(col.value)
+  )
 })
 
-// 获取字段值（支持多个可能的字段名）
-const getFieldValue = (row: any, ...fieldNames: string[]) => {
-  for (const field of fieldNames) {
-    if (row[field] !== undefined && row[field] !== null) {
-      return row[field]
-    }
-  }
-  return null
-}
-
-// 获取成交额（cn_stock_selection用turnover，其他表用deal_amount）
-const getDealAmount = (row: any) => getFieldValue(row, 'turnover', 'deal_amount')
-// 获取最高价
-const getHigh = (row: any) => getFieldValue(row, 'high', 'high_price')
-// 获取最低价
-const getLow = (row: any) => getFieldValue(row, 'low', 'low_price')
-// 获取开盘价
-const getOpen = (row: any) => getFieldValue(row, 'open', 'open_price')
-// 获取昨收价
-const getPreClose = (row: any) => getFieldValue(row, 'pre_close', 'pre_close_price')
+// 判断是否有code字段（用于显示关注按钮）
+const hasCodeField = computed(() => {
+  return columnDefs.value.some(col => col.value === 'code')
+})
 
 // 搜索关键词
 const searchKeyword = ref('')
@@ -75,11 +69,20 @@ const filteredData = computed(() => {
 const loadData = async () => {
   loading.value = true
   try {
-    const res = await getStockData({
+    const res: any = await getStockData({
       name: tableName.value,
       date: selectedDate.value
     })
-    tableData.value = Array.isArray(res) ? res : []
+    // 新的响应格式包含 columns 和 data
+    if (res && res.columns && res.data) {
+      columnDefs.value = res.columns
+      tableData.value = Array.isArray(res.data) ? res.data : []
+    } else if (Array.isArray(res)) {
+      // 兼容旧格式
+      tableData.value = res
+    } else {
+      tableData.value = []
+    }
   } catch (error) {
     console.error('加载数据失败:', error)
     ElMessage.error('加载数据失败')
@@ -102,18 +105,17 @@ const viewIndicators = (row: any) => {
 
 // 关注/取消关注
 const handleAttention = async (row: any) => {
-  const isCurrentlyAttention = !!row.cdatetime  // 当前是否已关注
+  const isCurrentlyAttention = !!row.cdatetime
   try {
     await toggleAttention({
       code: row.code,
-      otype: isCurrentlyAttention ? '1' : '0'  // 1: 取消关注, 0: 添加关注
+      otype: isCurrentlyAttention ? '1' : '0'
     })
-    // 更新 cdatetime 字段来反映关注状态
     if (isCurrentlyAttention) {
-      row.cdatetime = null  // 取消关注
+      row.cdatetime = null
       ElMessage.success('已取消关注')
     } else {
-      row.cdatetime = new Date().toISOString()  // 添加关注，设置当前时间
+      row.cdatetime = new Date().toISOString()
       ElMessage.success('已添加关注')
     }
   } catch (error) {
@@ -121,18 +123,59 @@ const handleAttention = async (row: any) => {
   }
 }
 
-// 格式化涨跌幅（后端返回的已是百分比形式，如 -7 表示 -7%）
-const formatPercent = (value: number) => {
+// 格式化单元格值
+const formatCellValue = (value: any, fieldName: string) => {
   if (value === null || value === undefined) return '-'
-  const formatted = value.toFixed(2)
-  return value >= 0 ? `+${formatted}%` : `${formatted}%`
+  
+  // 涨跌幅类字段，添加百分号
+  if (fieldName.includes('rate') || fieldName.includes('ratio') || 
+      fieldName === 'amplitude' || fieldName === 'turnoverrate' ||
+      fieldName.includes('yield')) {
+    return typeof value === 'number' ? value.toFixed(2) + '%' : value
+  }
+  
+  // 大金额字段，转换为亿
+  if (fieldName.includes('amount') || fieldName === 'turnover' || 
+      fieldName.includes('cap') || fieldName.includes('shares') ||
+      fieldName.includes('netprofit') || fieldName.includes('income')) {
+    if (typeof value === 'number' && Math.abs(value) >= 100000000) {
+      return (value / 100000000).toFixed(2) + '亿'
+    } else if (typeof value === 'number' && Math.abs(value) >= 10000) {
+      return (value / 10000).toFixed(2) + '万'
+    }
+  }
+  
+  // 成交量转换为万
+  if (fieldName === 'volume') {
+    return typeof value === 'number' ? (value / 10000).toFixed(2) + '万' : value
+  }
+  
+  // 浮点数保留2位小数
+  if (typeof value === 'number' && !Number.isInteger(value)) {
+    return value.toFixed(2)
+  }
+  
+  return value
 }
 
-// 获取涨跌样式
-const getChangeClass = (value: number) => {
-  if (value > 0) return 'text-up'
-  if (value < 0) return 'text-down'
+// 获取单元格样式类
+const getCellClass = (value: any, fieldName: string) => {
+  // 涨跌相关字段使用颜色
+  if (fieldName === 'change_rate' || fieldName === 'ups_downs' ||
+      fieldName.includes('change') || fieldName.includes('ranking_after')) {
+    if (typeof value === 'number') {
+      if (value > 0) return 'text-up'
+      if (value < 0) return 'text-down'
+    }
+  }
   return ''
+}
+
+// 获取列宽
+const getColumnWidth = (col: ColumnDef) => {
+  if (col.width && col.width > 0) return col.width
+  // 默认宽度
+  return 100
 }
 
 // 日期变更
@@ -156,6 +199,7 @@ watch(
   () => route.path,
   () => {
     currentPage.value = 1
+    columnDefs.value = []
     loadData()
   }
 )
@@ -217,9 +261,11 @@ onMounted(() => {
       >
         <el-table-column type="index" label="#" width="50" fixed="left" />
         
+        <!-- 固定列：日期 -->
         <el-table-column prop="date" label="日期" width="110" fixed="left" />
         
-        <el-table-column prop="code" label="代码" width="90" fixed="left">
+        <!-- 固定列：代码（如果有） -->
+        <el-table-column v-if="hasCodeField" prop="code" label="代码" width="90" fixed="left">
           <template #default="{ row }">
             <el-link type="primary" @click="viewIndicators(row)">
               {{ row.code }}
@@ -227,71 +273,27 @@ onMounted(() => {
           </template>
         </el-table-column>
         
+        <!-- 固定列：名称 -->
         <el-table-column prop="name" label="名称" width="100" fixed="left" />
         
-        <el-table-column prop="new_price" label="最新价" width="90" align="right">
+        <!-- 动态列：根据后端返回的列定义动态生成 -->
+        <el-table-column
+          v-for="col in dynamicColumns"
+          :key="col.value"
+          :prop="col.value"
+          :label="col.caption"
+          :width="getColumnWidth(col)"
+          align="right"
+        >
           <template #default="{ row }">
-            <span :class="getChangeClass(row.change_rate)">
-              {{ row.new_price?.toFixed(2) }}
+            <span :class="getCellClass(row[col.value], col.value)">
+              {{ formatCellValue(row[col.value], col.value) }}
             </span>
           </template>
         </el-table-column>
         
-        <el-table-column prop="change_rate" label="涨跌幅" width="100" align="right">
-          <template #default="{ row }">
-            <span :class="getChangeClass(row.change_rate)">
-              {{ formatPercent(row.change_rate) }}
-            </span>
-          </template>
-        </el-table-column>
-        
-        <el-table-column prop="ups_downs" label="涨跌额" width="90" align="right">
-          <template #default="{ row }">
-            <span :class="getChangeClass(row.ups_downs)">
-              {{ row.ups_downs?.toFixed(2) }}
-            </span>
-          </template>
-        </el-table-column>
-        
-        <el-table-column prop="volume" label="成交量" width="120" align="right">
-          <template #default="{ row }">
-            {{ row.volume ? (row.volume / 10000).toFixed(2) + '万' : '-' }}
-          </template>
-        </el-table-column>
-        
-        <el-table-column label="成交额" width="120" align="right">
-          <template #default="{ row }">
-            {{ getDealAmount(row) ? (getDealAmount(row) / 100000000).toFixed(2) + '亿' : '-' }}
-          </template>
-        </el-table-column>
-        
-        <el-table-column prop="amplitude" label="振幅" width="90" align="right">
-          <template #default="{ row }">
-            {{ row.amplitude ? row.amplitude.toFixed(2) + '%' : '-' }}
-          </template>
-        </el-table-column>
-        
-        <el-table-column label="最高价" width="90" align="right">
-          <template #default="{ row }">{{ getHigh(row) }}</template>
-        </el-table-column>
-        <el-table-column label="最低价" width="90" align="right">
-          <template #default="{ row }">{{ getLow(row) }}</template>
-        </el-table-column>
-        <el-table-column v-if="hasOpenPrice" label="开盘价" width="90" align="right">
-          <template #default="{ row }">{{ getOpen(row) }}</template>
-        </el-table-column>
-        <el-table-column label="昨收价" width="90" align="right">
-          <template #default="{ row }">{{ getPreClose(row) }}</template>
-        </el-table-column>
-        <el-table-column prop="new_price" label="收盘价" width="90" align="right" />
-        
-        <el-table-column prop="turnoverrate" label="换手率" width="90" align="right">
-          <template #default="{ row }">
-            {{ row.turnoverrate ? row.turnoverrate.toFixed(2) + '%' : '-' }}
-          </template>
-        </el-table-column>
-        
-        <el-table-column label="操作" width="100" fixed="right" align="center">
+        <!-- 固定列：操作（仅当有code字段时显示） -->
+        <el-table-column v-if="hasCodeField" label="操作" width="100" fixed="right" align="center">
           <template #default="{ row }">
             <el-button
               :type="row.cdatetime ? 'warning' : 'primary'"

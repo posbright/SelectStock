@@ -86,4 +86,9 @@ class GetStockDataHandler(webBase.BaseHandler, ABC):
         else:
             data = self.db.query(sql)
 
-        self.write(json.dumps(data, cls=MyEncoder))
+        # 返回包含列定义和数据的响应
+        response = {
+            "columns": web_module_data.column_names,
+            "data": data
+        }
+        self.write(json.dumps(response, cls=MyEncoder))
