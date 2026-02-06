@@ -188,16 +188,17 @@ def fetch_stocks(date):
     return None
 
 
-# 选股器（支持多数据源：新浪财经基础数据 -> 东方财富选股器）
+# 选股器（支持多数据源：东方财富选股器 -> 新浪财经基础数据）
 def fetch_stock_selection():
     data = None
     source = None
     
     # 数据源列表，按优先级排序
-    # 新浪财经没有专门的选股器API，使用基础股票数据作为备选
+    # 东方财富提供更完整的数据（包含换手率等），作为首选
+    # 新浪财经作为备选（不提供换手率、量比等）
     data_sources = [
-        ("新浪财经", ssa.stock_zh_a_spot_sina),
         ("东方财富", sst.stock_selection),
+        ("新浪财经", ssa.stock_zh_a_spot_sina),
     ]
     
     for source_name, fetch_func in data_sources:
