@@ -263,6 +263,12 @@ def fetch_stock_selection():
         
         if 'code' in data.columns:
             data.drop_duplicates('code', keep='last', inplace=True)
+        
+        # 只保留表定义中存在的列，避免 INSERT 时列不匹配
+        valid_columns = list(tbs.TABLE_CN_STOCK_SELECTION['columns'].keys())
+        existing_columns = [col for col in valid_columns if col in data.columns]
+        data = data[existing_columns]
+        
         return data
     except Exception as e:
         logging.error(f"stockfetch.fetch_stocks_selection处理异常：{e}")
