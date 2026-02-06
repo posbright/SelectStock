@@ -226,6 +226,9 @@ def fetch_stock_selection():
     try:
         logging.info(f"成功从{source}获取 {len(data)} 条选股数据")
         
+        # 先做一次 copy() 去碎片化，避免 PerformanceWarning
+        data = data.copy()
+        
         if source == "东方财富":
             # 东方财富返回的列名是大写的API字段名（map值），需要映射回数据库字段名
             cols = tbs.TABLE_CN_STOCK_SELECTION['columns']
@@ -233,8 +236,7 @@ def fetch_stock_selection():
             data = data.rename(columns=rename_map)
             # 东方财富API不返回涨跌额，需要计算: ups_downs = new_price - pre_close
             if 'new_price' in data.columns and 'pre_close' in data.columns:
-                # 使用 assign 避免 PerformanceWarning
-                data = data.assign(ups_downs=(data['new_price'] - data['pre_close']).round(4))
+                data['ups_downs'] = (data['new_price'] - data['pre_close']).round(4)
         elif source == "新浪财经":
             # 新浪财经数据需要重命名列名为英文，与数据库字段一致
             data = data.rename(columns={
@@ -257,7 +259,7 @@ def fetch_stock_selection():
         # 添加 date 列（如果不存在）
         if 'date' not in data.columns:
             import datetime
-            data = data.assign(date=datetime.date.today())
+            data['date'] = datetime.date.today()
         
         if 'code' in data.columns:
             data.drop_duplicates('code', keep='last', inplace=True)
