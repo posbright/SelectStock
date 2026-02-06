@@ -26,7 +26,8 @@ def stock_selection() -> pd.DataFrame:
     page_current = 1
     sty = ""  # 初始值 "SECUCODE,SECURITY_CODE,SECURITY_NAME_ABBR,CHANGE_RATE"
     for k in cols:
-        sty = f"{sty},{cols[k]['map']}"
+        if 'map' in cols[k]:
+            sty = f"{sty},{cols[k]['map']}"
     url = "https://data.eastmoney.com/dataapi/xuangu/list"
     params = {
         "sty": sty[1:],
@@ -64,11 +65,16 @@ def stock_selection() -> pd.DataFrame:
     temp_df.loc[mask, 'STYLE'] = temp_df.loc[mask, 'STYLE'].apply(lambda x: ', '.join(x))
 
     for k in cols:
+        if 'map' not in cols[k]:
+            continue
+        map_name = cols[k]["map"]
+        if map_name not in temp_df.columns:
+            continue
         t = tbs.get_field_type_name(cols[k]["type"])
         if t == 'numeric':
-            temp_df[cols[k]["map"]] = pd.to_numeric(temp_df[cols[k]["map"]], errors="coerce")
+            temp_df[map_name] = pd.to_numeric(temp_df[map_name], errors="coerce")
         elif t == 'datetime':
-            temp_df[cols[k]["map"]] = pd.to_datetime(temp_df[cols[k]["map"]], errors="coerce").dt.date
+            temp_df[map_name] = pd.to_datetime(temp_df[map_name], errors="coerce").dt.date
 
     return temp_df
 
