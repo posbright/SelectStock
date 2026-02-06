@@ -89,16 +89,16 @@ def fetch_stocks_trade_date():
 
 
 # 读取当天ETF数据（支持多数据源自动切换）
-# 优先级: 新浪财经 -> 腾讯财经 -> 东方财富
+# 优先级: 东方财富 -> 腾讯财经 -> 新浪财经
 def fetch_etfs(date):
     data = None
     source = None
     
-    # 数据源列表，按优先级排序
+    # 数据源列表，按优先级排序（东方财富更稳定，作为首选）
     data_sources = [
-        ("新浪财经", esa.fund_etf_spot_sina),
-        ("腾讯财经", etc.fund_etf_spot_tencent),
         ("东方财富", fee.fund_etf_spot_em),
+        ("腾讯财经", etc.fund_etf_spot_tencent),
+        ("新浪财经", esa.fund_etf_spot_sina),
     ]
     
     for source_name, fetch_func in data_sources:
@@ -139,16 +139,16 @@ def fetch_etfs(date):
 
 
 # 读取当天股票数据（支持多数据源自动切换）
-# 优先级: 新浪财经 -> 腾讯财经 -> 东方财富
+# 优先级: 东方财富 -> 腾讯财经 -> 新浪财经
 def fetch_stocks(date):
     data = None
     source = None
     
-    # 数据源列表，按优先级排序
+    # 数据源列表，按优先级排序（东方财富更稳定，作为首选）
     data_sources = [
-        ("新浪财经", ssa.stock_zh_a_spot_sina),
-        ("腾讯财经", stc.stock_zh_a_spot_tencent),
         ("东方财富", she.stock_zh_a_spot_em),
+        ("腾讯财经", stc.stock_zh_a_spot_tencent),
+        ("新浪财经", ssa.stock_zh_a_spot_sina),
     ]
     
     for source_name, fetch_func in data_sources:
@@ -281,10 +281,10 @@ def fetch_stocks_fund_flow(index):
     source = None
     cn_flow = tbs.CN_STOCK_FUND_FLOW[index]
     
-    # 数据源列表，按优先级排序
+    # 数据源列表，按优先级排序（东方财富更稳定，作为首选）
     data_sources = [
-        ("新浪财经", lambda: sfs.stock_individual_fund_flow_rank_sina(indicator=cn_flow['cn'])),
         ("东方财富", lambda: sff.stock_individual_fund_flow_rank(indicator=cn_flow['cn'])),
+        ("新浪财经", lambda: sfs.stock_individual_fund_flow_rank_sina(indicator=cn_flow['cn'])),
     ]
     
     for source_name, fetch_func in data_sources:
@@ -389,10 +389,10 @@ def fetch_stock_lhb_data(date, count=12):
     start_date = trd.get_previous_trade_date(date, count).strftime("%Y%m%d")
     end_date = date.strftime("%Y%m%d")
     
-    # 数据源列表，按优先级排序
+    # 数据源列表，按优先级排序（东方财富更稳定，作为首选）
     data_sources = [
-        ("新浪财经", lambda: sls.stock_lhb_detail_daily_sina(end_date)),
         ("东方财富", lambda: sle.stock_lhb_detail_em(start_date, end_date)),
+        ("新浪财经", lambda: sls.stock_lhb_detail_daily_sina(end_date)),
     ]
     
     for source_name, fetch_func in data_sources:
@@ -662,7 +662,7 @@ def stock_hist_cache_incremental(code, date_start, date_end, is_cache=True, adju
     3. 只获取缓存最后日期之后的增量数据
     4. 合并增量数据到缓存
     
-    数据源优先级：新浪财经 → 东方财富
+    数据源优先级：东方财富 → 新浪财经（东方财富更稳定）
     
     参数：
         code: 股票代码
@@ -719,16 +719,17 @@ def stock_hist_cache_incremental(code, date_start, date_end, is_cache=True, adju
         
         new_data = None
         if need_fetch:
-            # 多数据源获取，优先级：新浪财经 → 东方财富
+            # 多数据源获取，优先级：东方财富 → 新浪财经
+            # 注：新浪财经经常返回456限流错误，东方财富更稳定
             data_sources = [
-                ('新浪财经', lambda: shs.stock_zh_a_hist_sina(
+                ('东方财富', lambda: she.stock_zh_a_hist(
                     symbol=code, 
                     period="daily", 
                     start_date=fetch_start, 
                     end_date=date_end,
                     adjust=adjust
                 )),
-                ('东方财富', lambda: she.stock_zh_a_hist(
+                ('新浪财经', lambda: shs.stock_zh_a_hist_sina(
                     symbol=code, 
                     period="daily", 
                     start_date=fetch_start, 
@@ -742,7 +743,7 @@ def stock_hist_cache_incremental(code, date_start, date_end, is_cache=True, adju
                     try:
                         new_data = fetch_func()
                         if new_data is not None and len(new_data) > 0:
-                            # 新浪数据已经是标准格式，东方财富需要转换列名
+                            # 东方财富需要转换列名，新浪数据已经是标准格式
                             if source_name == '东方财富':
                                 new_data.columns = tuple(tbs.CN_STOCK_HIST_DATA['columns'])
                             logging.debug(f"从{source_name}成功获取增量数据: {code}")
