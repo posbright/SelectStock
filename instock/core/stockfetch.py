@@ -239,14 +239,14 @@ def fetch_stock_selection():
                 '涨跌幅': 'change_rate',
                 '涨跌额': 'ups_downs',
                 '成交量': 'volume',
-                '成交额': 'deal_amount',
+                '成交额': 'turnover',
                 '振幅': 'amplitude',
                 '换手率': 'turnoverrate',
                 '量比': 'volume_ratio',
-                '今开': 'open_price',
-                '最高': 'high_price',
-                '最低': 'low_price',
-                '昨收': 'pre_close_price',
+                '今开': 'open',
+                '最高': 'high',
+                '最低': 'low',
+                '昨收': 'pre_close',
             })
         
         # 添加 date 列（如果不存在）

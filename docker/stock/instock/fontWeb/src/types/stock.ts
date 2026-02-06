@@ -1,4 +1,5 @@
 // 股票数据类型定义
+// 字段名与数据库实际字段名保持一致
 
 export interface StockSpot {
   date: string
@@ -8,11 +9,12 @@ export interface StockSpot {
   change_rate: number  // 涨跌幅
   ups_downs: number  // 涨跌额
   volume: number  // 成交量
-  deal_amount: number  // 成交额
+  turnover: number  // 成交额（数据库字段名）
   amplitude: number  // 振幅
-  high_price: number  // 最高价
-  low_price: number  // 最低价
-  pre_close_price: number  // 昨收价
+  high: number  // 最高价（数据库字段名）
+  low: number  // 最低价（数据库字段名）
+  open?: number  // 开盘价（数据库字段名，部分表有）
+  pre_close: number  // 昨收价（数据库字段名）
   volume_ratio: number  // 量比
   turnoverrate: number  // 换手率
   cdatetime?: string  // 关注时间，有值表示已关注

@@ -28,10 +28,10 @@ const pagedData = computed(() => {
 const tableName = computed(() => route.meta.tableName as string || 'cn_stock_spot')
 const pageTitle = computed(() => route.meta.title as string || '股票数据')
 
-// 判断是否有开盘价字段（cn_stock_spot有，cn_stock_selection没有）
+// 判断是否有开盘价字段（数据库实际字段名是open）
 const hasOpenPrice = computed(() => {
   if (tableData.value.length === 0) return false
-  return 'open_price' in tableData.value[0]
+  return 'open' in tableData.value[0]
 })
 
 // 搜索关键词
@@ -237,9 +237,9 @@ onMounted(() => {
           </template>
         </el-table-column>
         
-        <el-table-column prop="deal_amount" label="成交额" width="120" align="right">
+        <el-table-column prop="turnover" label="成交额" width="120" align="right">
           <template #default="{ row }">
-            {{ row.deal_amount ? (row.deal_amount / 100000000).toFixed(2) + '亿' : '-' }}
+            {{ row.turnover ? (row.turnover / 100000000).toFixed(2) + '亿' : '-' }}
           </template>
         </el-table-column>
         
@@ -249,10 +249,10 @@ onMounted(() => {
           </template>
         </el-table-column>
         
-        <el-table-column prop="high_price" label="最高价" width="90" align="right" />
-        <el-table-column prop="low_price" label="最低价" width="90" align="right" />
-        <el-table-column v-if="hasOpenPrice" prop="open_price" label="开盘价" width="90" align="right" />
-        <el-table-column prop="pre_close_price" label="昨收价" width="90" align="right" />
+        <el-table-column prop="high" label="最高价" width="90" align="right" />
+        <el-table-column prop="low" label="最低价" width="90" align="right" />
+        <el-table-column v-if="hasOpenPrice" prop="open" label="开盘价" width="90" align="right" />
+        <el-table-column prop="pre_close" label="昨收价" width="90" align="right" />
         <el-table-column prop="new_price" label="收盘价" width="90" align="right" />
         
         <el-table-column prop="turnoverrate" label="换手率" width="90" align="right">
