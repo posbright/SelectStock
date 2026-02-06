@@ -214,6 +214,24 @@ const routes: RouteRecordRaw[] = [
         name: 'StrategyLowAtr',
         component: () => import('@/views/stock/StockData.vue'),
         meta: { title: '低ATR成长', tableName: 'cn_stock_strategy_low_atr' }
+      },
+      {
+        path: 'trend-pullback',
+        name: 'StrategyTrendPullback',
+        component: () => import('@/views/stock/StockData.vue'),
+        meta: { title: '趋势回调', tableName: 'cn_stock_strategy_trend_pullback' }
+      },
+      {
+        path: 'oversold-rebound',
+        name: 'StrategyOversoldRebound',
+        component: () => import('@/views/stock/StockData.vue'),
+        meta: { title: '超跌反弹', tableName: 'cn_stock_strategy_oversold_rebound' }
+      },
+      {
+        path: 'breakout-confirm',
+        name: 'StrategyBreakoutConfirm',
+        component: () => import('@/views/stock/StockData.vue'),
+        meta: { title: '突破确认', tableName: 'cn_stock_strategy_breakout_confirm' }
       }
     ]
   },

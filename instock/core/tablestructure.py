@@ -14,6 +14,7 @@ from instock.core.strategy import parking_apron
 from instock.core.strategy import low_backtrace_increase
 from instock.core.strategy import keep_increasing
 from instock.core.strategy import high_tight_flag
+from instock.core.strategy.technical import value_invest_strategies
 
 __author__ = 'myh '
 __date__ = '2023/3/10 '
@@ -424,6 +425,16 @@ TABLE_CN_STOCK_STRATEGIES = [
     {'name': 'cn_stock_strategy_climax_limitdown', 'cn': '放量跌停', 'size': 70, 'func': climax_limitdown.check,
      'columns': _tmp_columns},
     {'name': 'cn_stock_strategy_low_atr', 'cn': '低ATR成长', 'size': 70, 'func': low_atr.check_low_increase,
+     'columns': _tmp_columns},
+    # 长期价值投资策略组
+    {'name': 'cn_stock_strategy_trend_pullback', 'cn': '趋势回调', 'size': 70,
+     'func': value_invest_strategies.check_trend_pullback,
+     'columns': _tmp_columns},
+    {'name': 'cn_stock_strategy_oversold_rebound', 'cn': '超跌反弹', 'size': 70,
+     'func': value_invest_strategies.check_oversold_rebound,
+     'columns': _tmp_columns},
+    {'name': 'cn_stock_strategy_breakout_confirm', 'cn': '突破确认', 'size': 70,
+     'func': value_invest_strategies.check_breakout_confirm,
      'columns': _tmp_columns}
 ]
 
