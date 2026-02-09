@@ -134,26 +134,38 @@
 
 ## 4. 对应代码实现
 
-已实现的策略类（位于 `instock/core/strategy/fundamental/`）：
+已实现的策略代码（位于 `instock/core/strategy/gpt_value_strategy.py`）：
 
-| 策略类 | 策略ID | 说明 |
-|--------|--------|------|
-| `ValueInvestStrategy` | value_invest | 价值投资策略 |
-| `GrowthInvestStrategy` | growth_invest | 成长投资策略 |
-| `MoatStrategy` | moat_invest | 护城河策略 |
-| `DividendGrowthStrategy` | dividend_growth | 股息成长策略 |
+| 函数 | 说明 |
+|------|------|
+| `check_gpt_value(code_name, data, date, threshold)` | 兼容K线策略框架的占位函数，始终返回 False |
+| `check_gpt_value_from_selection(stock_row)` | 从 cn_stock_selection 数据中检查单只股票是否满足条件 |
+| `filter_gpt_value_stocks(selection_data)` | 批量筛选，返回满足所有条件的股票 DataFrame |
 
-**快捷函数：**
-```python
-from instock.core.strategy.fundamental import filter_value_stocks, score_stocks
+**实际实现的筛选条件**（已从上方五层过滤体系中精简实现）：
 
-# 价值投资筛选
-result = filter_value_stocks(stock_data, strict=True)
+| 层 | 指标 | 代码字段 | 条件 |
+|----|------|---------|------|
+| 第一层 | 资产负债率 | `debt_asset_ratio` | < 60% |
+| 第一层 | 每股经营现金流 | `per_netcash_operate` | > 0 |
+| 第二层 | ROE(加权) | `roe_weight` | >= 15% |
+| 第二层 | 毛利率 | `sale_gpr` | >= 30% |
+| 第二层 | 净利率 | `sale_npr` | >= 10% |
+| 第三层 | 营收3年CAGR | `income_growthrate_3y` | > 10% |
+| 第三层 | 净利润3年CAGR | `netprofit_growthrate_3y` | > 10% |
+| 第五层 | PE(TTM) | `pe9` | 0 < PE <= 50 |
 
-# 护城河评分
-scored = score_stocks(stock_data)
-top20 = scored.nlargest(20, 'moat_score')
-```
+> 注意：第四层（护城河评估）为定性分析，暂未在代码中实现。
+
+**作业入口**：`instock/job/gpt_value_data_job.py`
+- 从 `cn_stock_selection` 表读取综合选股数据
+- 调用 `filter_gpt_value_stocks` 批量筛选
+- 结果保存到 `cn_stock_strategy_gpt_value` 表
+- 在 `execute_daily_job.py` 步骤 5.1 中并行执行
+
+**数据表**：`cn_stock_strategy_gpt_value`（定义在 `tablestructure.py` 的 `TABLE_CN_STOCK_STRATEGY_GPT_VALUE` 常量中）
+
+**回测**：已集成到 `backtest_data_daily_job.py`，与其他策略一同参与回测验证。
 
 ---
 

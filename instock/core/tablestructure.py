@@ -438,6 +438,12 @@ TABLE_CN_STOCK_STRATEGIES = [
      'columns': _tmp_columns}
 ]
 
+# GPT综合选股（基本面策略，不走K线策略框架，有独立的 gpt_value_data_job）
+TABLE_CN_STOCK_STRATEGY_GPT_VALUE = {
+    'name': 'cn_stock_strategy_gpt_value', 'cn': 'GPT综合选股', 'size': 70,
+    'columns': _tmp_columns
+}
+
 STOCK_KLINE_PATTERN_DATA = {'name': 'cn_stock_pattern_recognitions', 'cn': 'K线形态',
                             'columns': {
                                 'tow_crows': {'type': SmallInteger, 'cn': '两只乌鸦', 'size': 70, 'func': tl.CDL2CROWS},

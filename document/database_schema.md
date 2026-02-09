@@ -536,7 +536,7 @@ CREATE TABLE IF NOT EXISTS `cn_stock_pattern` (
 
 ### 3.13 策略选股表
 
-系统内置 10 种选股策略，每种策略对应一张表。
+系统内置 14 种选股策略，每种策略对应一张表。其中前 13 种为 K线/技术类策略，GPT综合选股为基本面策略。
 
 ```sql
 -- 放量上涨策略
@@ -587,6 +587,22 @@ ALTER TABLE `cn_stock_strategy_climax_limitdown` COMMENT='策略-放量跌停';
 -- 低ATR成长策略
 CREATE TABLE IF NOT EXISTS `cn_stock_strategy_low_atr` LIKE `cn_stock_strategy_enter`;
 ALTER TABLE `cn_stock_strategy_low_atr` COMMENT='策略-低ATR成长';
+
+-- 趋势回调策略
+CREATE TABLE IF NOT EXISTS `cn_stock_strategy_trend_pullback` LIKE `cn_stock_strategy_enter`;
+ALTER TABLE `cn_stock_strategy_trend_pullback` COMMENT='策略-趋势回调';
+
+-- 超跌反弹策略
+CREATE TABLE IF NOT EXISTS `cn_stock_strategy_oversold_rebound` LIKE `cn_stock_strategy_enter`;
+ALTER TABLE `cn_stock_strategy_oversold_rebound` COMMENT='策略-超跌反弹';
+
+-- 突破确认策略
+CREATE TABLE IF NOT EXISTS `cn_stock_strategy_breakout_confirm` LIKE `cn_stock_strategy_enter`;
+ALTER TABLE `cn_stock_strategy_breakout_confirm` COMMENT='策略-突破确认';
+
+-- GPT综合选股策略（基本面策略，独立作业 gpt_value_data_job）
+CREATE TABLE IF NOT EXISTS `cn_stock_strategy_gpt_value` LIKE `cn_stock_strategy_enter`;
+ALTER TABLE `cn_stock_strategy_gpt_value` COMMENT='策略-GPT综合选股';
 ```
 
 ---
@@ -699,7 +715,7 @@ CREATE TABLE IF NOT EXISTS `cn_stock_backtest_data` (
 │       │       ├── cn_stock_indicators_buy (买入信号)             │
 │       │       └── cn_stock_indicators_sell (卖出信号)            │
 │       ├── cn_stock_pattern (K线形态)                             │
-│       └── cn_stock_strategy_* (10种策略表)                       │
+│       └── cn_stock_strategy_* (14种策略表)                       │
 ├─────────────────────────────────────────────────────────────────┤
 │  cn_etf_spot (每日ETF数据)                                       │
 ├─────────────────────────────────────────────────────────────────┤
@@ -741,8 +757,13 @@ CREATE TABLE IF NOT EXISTS `cn_stock_backtest_data` (
 | 21 | cn_stock_strategy_high_tight_flag | 高而窄的旗形 | 策略选股结果 |
 | 22 | cn_stock_strategy_climax_limitdown | 放量跌停 | 策略选股结果 |
 | 23 | cn_stock_strategy_low_atr | 低ATR成长 | 策略选股结果 |
-| 24 | cn_stock_selection | 综合选股 | 多条件综合筛选结果 |
-| 25 | cn_stock_backtest_data | 股票回测数据 | 策略回测收益率数据 |
+| 24 | cn_stock_strategy_trend_pullback | 趋势回调 | 策略选股结果 |
+| 25 | cn_stock_strategy_oversold_rebound | 超跌反弹 | 策略选股结果 |
+| 26 | cn_stock_strategy_breakout_confirm | 突破确认 | 策略选股结果 |
+| 27 | cn_stock_strategy_gpt_value | GPT综合选股 | 基本面策略选股结果 |
+| 28 | cn_stock_selection | 综合选股 | 多条件综合筛选结果 |
+| 29 | cn_stock_backtest_data | 股票回测数据 | 策略回测收益率数据 |
+| 30 | cn_stock_backtest | 回测验证汇总 | 策略回测汇总统计 |
 
 ---
 

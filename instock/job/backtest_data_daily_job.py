@@ -25,6 +25,8 @@ __date__ = '2023/3/10 '
 def prepare():
     tables = [tbs.TABLE_CN_STOCK_INDICATORS_BUY, tbs.TABLE_CN_STOCK_INDICATORS_SELL]
     tables.extend(tbs.TABLE_CN_STOCK_STRATEGIES)
+    # GPT综合选股独立于策略列表，单独加入回测
+    tables.append(tbs.TABLE_CN_STOCK_STRATEGY_GPT_VALUE)
     backtest_columns = list(tbs.TABLE_CN_STOCK_BACKTEST_DATA['columns'])
     backtest_columns.insert(0, 'code')
     backtest_columns.insert(0, 'date')

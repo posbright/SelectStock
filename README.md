@@ -116,7 +116,9 @@ VR:
 
 内置放量上涨、停机坪、回踩年线、突破平台、放量跌停等多种选股策略，同时封装了策略模板，方便扩展实现自己的策略。
 
+策略分为两大类：**K线技术策略**（基于K线和成交量数据）和**策略选股**（含基本面策略）。
 
+### K线技术策略
 ```
 1、放量上涨
     1）当日比前一天上涨小于2%或收盘价小于开盘价。
@@ -142,6 +144,10 @@ VR:
 6、无大幅回撤
     1）当日收盘价比60日前的收盘价的涨幅小于0.6。
     2）最近60日，不能有单日跌幅超7%、高开低走7%、两日累计跌幅10%、两日高开低走累计10%。
+```
+
+### 策略选股
+```
 7、海龟交易法则
     最后一个交易日收市价为指定区间内最高价。
     1）当日收盘价>=最近60日最高收盘价。
@@ -156,10 +162,22 @@ VR:
 10、低ATR成长
     1）必须至少上市交易250日。
     2）最近10个交易日的最高收盘价必须比最近10个交易日的最低收盘价高1.1倍。
-11、股票基本面选股
-    1）市盈率小于等于20，且大于0。
-    2）市净率小于等于10。
-    3）净资产收益率大于等于15。
+11、趋势回调
+    优质公司长期趋势向上时的回调买入机会。
+12、超跌反弹
+    市场恐慌但基本面未变时的超跌修复买入机会。
+13、突破确认
+    横盘整理后放量突破确认买入。
+14、GPT综合选股（基本面策略）
+    基于ChatGPT选股文档的基本面筛选策略，从综合选股数据中筛选：
+    1）资产负债率 < 60%。
+    2）每股经营现金流 > 0。
+    3）ROE(加权) >= 15%。
+    4）毛利率 >= 30%。
+    5）净利率 >= 10%。
+    6）营收3年CAGR > 10%。
+    7）净利润3年CAGR > 10%。
+    8）PE(TTM) 在 (0, 50] 之间。
 ```
 
 ![](img/04.jpg)
@@ -203,8 +221,9 @@ VR:
 基础数据实时作业 python basic_data_daily_job.py
 基础数据非实时作业 python basic_data_other_daily_job.py
 指标数据作业 python indicators_data_daily_job.py
-K线形态作业 klinepattern_data_daily_job.py
+K线形态作业 python klinepattern_data_daily_job.py
 策略数据作业 python strategy_data_daily_job.py
+GPT综合选股作业 python gpt_value_data_job.py
 回测数据 python backtest_data_daily_job.py
 ```
 ## 十二：支持代理及Cookie
@@ -563,11 +582,12 @@ cat InStock/instock/bin/run_job.sh
 ------单功能作业，支持批量作业，回测数据自动填补到当前
 综合选股作业 python selection_data_daily_job.py
 基础数据实时作业 python basic_data_daily_job.py
-基础数据收盘2小时后作业 python backtest_data_daily_job.py
+基础数据收盘2小时后作业 python basic_data_after_close_daily_job.py
 基础数据非实时作业 python basic_data_other_daily_job.py
 指标数据作业 python indicators_data_daily_job.py
-K线形态作业 klinepattern_data_daily_job.py
+K线形态作业 python klinepattern_data_daily_job.py
 策略数据作业 python strategy_data_daily_job.py
+GPT综合选股作业 python gpt_value_data_job.py
 回测数据 python backtest_data_daily_job.py
 第一种方法：
 python execute_daily_job.py 2023-03-01,2023-03-02

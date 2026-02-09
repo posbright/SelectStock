@@ -35,8 +35,9 @@
 5. **indicators_data_daily_job** - 技术指标数据（并行）
 6. **klinepattern_data_daily_job** - K线形态识别（并行）
 7. **strategy_data_daily_job** - 策略选股数据（并行）
-8. **backtest_data_daily_job** - 策略回测数据
-9. **basic_data_after_close_daily_job** - 收盘后数据
+8. **gpt_value_data_job** - GPT综合选股（并行）
+9. **backtest_data_daily_job** - 策略回测数据
+10. **basic_data_after_close_daily_job** - 收盘后数据
 
 **适用场景**: 每个交易日收盘后运行（建议18:00后执行）
 

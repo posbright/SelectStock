@@ -83,9 +83,12 @@ const loadData = async () => {
     } else {
       tableData.value = []
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error('加载数据失败:', error)
-    ElMessage.error('加载数据失败')
+    const errMsg = error?.response?.data?.error || '加载数据失败'
+    ElMessage.error(errMsg)
+    columnDefs.value = []
+    tableData.value = []
   } finally {
     loading.value = false
   }

@@ -63,8 +63,22 @@ GET /instock/api_data
 | cn_stock_blocktrade | 股票大宗交易 |
 | cn_stock_spot_buy | 基本面选股 |
 | cn_stock_indicators | 股票指标数据 |
-| cn_stock_strategy_* | 策略选股结果 |
+| cn_stock_strategy_enter | 放量上涨 |
+| cn_stock_strategy_keep_increasing | 均线多头 |
+| cn_stock_strategy_parking_apron | 停机坪 |
+| cn_stock_strategy_backtrace_ma250 | 回踩年线 |
+| cn_stock_strategy_breakthrough_platform | 突破平台 |
+| cn_stock_strategy_low_backtrace_increase | 无大幅回撤 |
+| cn_stock_strategy_turtle_trade | 海龟交易法则 |
+| cn_stock_strategy_high_tight_flag | 高而窄的旗形 |
+| cn_stock_strategy_climax_limitdown | 放量跌停 |
+| cn_stock_strategy_low_atr | 低ATR成长 |
+| cn_stock_strategy_trend_pullback | 趋势回调 |
+| cn_stock_strategy_oversold_rebound | 超跌反弹 |
+| cn_stock_strategy_breakout_confirm | 突破确认 |
+| cn_stock_strategy_gpt_value | GPT综合选股 |
 | cn_stock_kline_pattern_* | K线形态识别 |
+| cn_stock_backtest | 回测验证汇总 |
 
 #### 响应示例
 

@@ -231,6 +231,24 @@ class stock_web_module_data(metaclass=singleton_type):
                 )
             )
 
+        # 添加GPT综合选股（基本面策略，独立于K线策略框架）
+        _gpt = tbs.TABLE_CN_STOCK_STRATEGY_GPT_VALUE
+        self.data_list.append(
+            wmd.web_module_data(
+                mode="query",
+                type="股票策略数据",
+                ico="fa fa-check-square-o",
+                name=_gpt['cn'],
+                table_name=_gpt['name'],
+                columns=tuple(_gpt['columns']),
+                column_names=tbs.get_field_cns(_gpt['columns']),
+                primary_key=[],
+                is_realtime=False,
+                order_columns=f"(SELECT `datetime` FROM `{tbs.TABLE_CN_STOCK_ATTENTION['name']}` WHERE `code`=`{_gpt['name']}`.`code`) AS `cdatetime`",
+                order_by=" `cdatetime` DESC"
+            )
+        )
+
         # 添加回测汇总表
         self.data_list.append(
             wmd.web_module_data(
