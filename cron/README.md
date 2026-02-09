@@ -45,9 +45,17 @@
 
 ## 3. run_monthly - 每月任务
 
-**作用**: 清理 `instock/cache/hist/` 目录下的历史K线缓存
+**作用**: 智能清理 `instock/cache/hist/` 目录下的历史K线缓存
 
-**适用场景**: 月初清理过期缓存，释放磁盘空间
+**清理策略**:
+- 默认模式（智能清理）：
+  - 删除已退市股票的缓存（不在当前活跃股票列表中的）
+  - 刷新近期有除权除息股票的前复权缓存（除权后历史价格需要重算）
+  - 清理损坏的缓存文件
+  - **保留**活跃股票、停牌股票、长假期间的缓存（历史数据不可变，不因未更新而误删）
+- 全量模式：使用 `--all` 参数删除所有缓存（下次运行将全量重新拉取，耗时较长）
+
+**适用场景**: 月初清理退市/除权缓存，释放磁盘空间
 
 ---
 
@@ -62,8 +70,11 @@
 # 执行每日完整任务
 ./cron/cron.workdayly/run_workdayly
 
-# 执行月度清理
+# 执行月度清理（清理过期缓存）
 ./cron/cron.monthly/run_monthly
+
+# 执行月度清理（全量清除所有缓存）
+./cron/cron.monthly/run_monthly --all
 ```
 
 ### 配置 Crontab 自动执行
@@ -105,6 +116,54 @@ crontab -e
 4. **日志位置**: 任务执行日志保存在 `instock/log/` 目录下
 
 5. **交易日判断**: 系统会自动判断是否为交易日，非交易日不会采集数据
+
+---
+
+## 异常恢复与数据完整性
+
+### 数据写入机制
+
+所有 Job 使用 **先删后插（DELETE + INSERT）** 模式写入数据库，保证重跑时数据不会重复。但 DELETE 和 INSERT 不在同一个事务中（`autocommit=True`），如果 DELETE 执行后程序崩溃，当次数据会暂时缺失，需要下次重跑恢复。
+
+### K线缓存增量更新
+
+- 缓存使用 gzip 压缩的 pickle 文件（`.gzip.pickle` + `.meta`）
+- 增量逻辑：读取缓存最后日期 → 只从数据源拉取新增数据 → 合并写入
+- **缓存损坏**（如写入时崩溃导致文件截断）：下次读取时自动检测异常，触发全量重拉，不会永久丢失数据
+- **API 拉取失败**：返回已有缓存数据，不覆盖写入，下次重试即可恢复
+
+### 各 Job 异常恢复能力
+
+| Job | 异常后重跑 | 可否补历史数据 | 说明 |
+|-----|-----------|--------------|------|
+| basic_data_daily_job | ✅ 恢复 | ❌ 仅当天 | 实时行情快照，数据源不提供历史回查 |
+| selection_data_daily_job | ✅ 恢复 | ❌ 仅当天 | 同上，综合选股为实时快照 |
+| basic_data_other_daily_job | ✅ 恢复 | ⚠️ 部分可 | 龙虎榜/资金流为实时，早盘抢筹/涨停原因可补 |
+| indicators_data_daily_job | ✅ 恢复 | ✅ 可补跑 | 基于K线缓存计算，支持日期参数 |
+| klinepattern_data_daily_job | ✅ 恢复 | ✅ 可补跑 | 基于K线缓存计算，支持日期参数 |
+| strategy_data_daily_job | ✅ 恢复 | ✅ 可补跑 | 基于K线缓存计算，支持日期参数 |
+| gpt_value_data_job | ✅ 恢复 | ⚠️ 需数据 | 依赖 `cn_stock_selection` 表有对应日期数据 |
+| backtest_data_daily_job | ✅ 恢复 | ✅ 自动补 | 查询 NULL 字段自动补填，天然幂等 |
+| basic_data_after_close_daily_job | ✅ 恢复 | ✅ 可补跑 | 大宗交易等，支持日期参数 |
+
+### 补跑历史数据
+
+对于支持日期参数的 Job，可以手动补跑指定日期：
+
+```bash
+cd /root/SelectStock
+
+# 补跑单个日期
+python3 instock/job/strategy_data_daily_job.py 2026-02-06
+
+# 补跑日期区间
+python3 instock/job/strategy_data_daily_job.py 2026-02-01 2026-02-06
+
+# 补跑多个指定日期
+python3 instock/job/indicators_data_daily_job.py 2026-02-03,2026-02-05
+```
+
+> **注意**：`save_nph_*` 前缀的函数（实时快照类数据）不支持历史日期参数，补跑时会自动跳过。
 
 ---
 

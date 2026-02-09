@@ -9,9 +9,11 @@ export LANG=zh_CN.UTF-8
 export PYTHONPATH=$PROJECT_ROOT
 export LC_CTYPE=zh_CN.UTF-8
 
-# 清除缓存数据
-rm -rf $PROJECT_ROOT/instock/cache/hist/*
-
-#mkdir -p $PROJECT_ROOT/instock/log
-#DATE=`date +%Y-%m-%d:%H:%M:%S`
-#echo $DATE >> $PROJECT_ROOT/instock/log/monthly.log
+# 清理过期缓存数据（仅删除超过指定天数未更新的缓存）
+# 使用 --all 参数可全量清除所有缓存
+if [ "$1" = "--all" ]; then
+    rm -rf $PROJECT_ROOT/instock/cache/hist/*
+    echo "已全量清除所有历史K线缓存"
+else
+    python3 -c "from instock.core.stockfetch import clean_expired_cache; clean_expired_cache()"
+fi

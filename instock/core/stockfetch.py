@@ -799,44 +799,125 @@ def stock_hist_cache_incremental(code, date_start, date_end, is_cache=True, adju
 
 def clean_expired_cache(expire_days=None):
     """
-    清理过期的缓存文件
-    
+    智能清理缓存文件：
+    1. 删除已退市股票（不在当前股票列表中）的缓存
+    2. 删除除权除息后前复权数据已过时的缓存（以便下次运行时重新拉取正确的前复权数据）
+    3. 删除损坏的缓存文件（无法解析的 .meta 文件）
+
+    保留策略：
+    - 活跃股票的缓存始终保留（历史数据不可变，具有分析价值）
+    - 停牌股票的缓存保留（停牌结束后可继续增量更新）
+    - 长假期间的缓存保留（不因未更新而误删）
+
     参数：
-        expire_days: 过期天数，超过此天数未更新的缓存将被删除
+        expire_days: 兼容参数，不再使用（保留以避免调用方报错）
     """
-    if expire_days is None:
-        expire_days = HIST_DATA_CACHE_EXPIRE_DAYS
-    
-    expire_time = datetime.datetime.now() - datetime.timedelta(days=expire_days)
-    cleaned_count = 0
-    
+    # 获取当前全部A股代码集合（包含停牌股，不过滤价格）
+    # 注意：不能使用 fetch_stocks()，因为它会用 is_open 过滤掉停牌股（价格为NaN），
+    #       导致停牌股被误判为退市而删除缓存
+    active_codes = set()
+    try:
+        raw_data = she.stock_zh_a_spot_em()
+        if raw_data is not None and len(raw_data) > 0:
+            # 东方财富返回的列中，'代码'列（第11列，f12字段）包含股票代码
+            code_col = '代码' if '代码' in raw_data.columns else raw_data.columns[10]
+            all_codes = raw_data[code_col].astype(str).tolist()
+            # 只保留A股代码
+            active_codes = set(c for c in all_codes if is_a_stock(c))
+            logging.info(f"获取到 {len(active_codes)} 只A股代码（含停牌股）")
+        else:
+            logging.warning("无法获取股票列表，跳过退市股票清理（避免误删）")
+    except Exception as e:
+        logging.warning(f"获取股票列表失败，跳过退市股票清理：{e}")
+
+    # 获取近期已实施除权除息的股票代码（需要刷新前复权缓存）
+    bonus_codes = set()
+    try:
+        bonus_data = fetch_stocks_bonus(None)
+        if bonus_data is not None and len(bonus_data) > 0:
+            # 只筛选除权除息日在最近35天内的股票（即上个月内已实施除权的）
+            cutoff_date = (datetime.datetime.now() - datetime.timedelta(days=35)).strftime("%Y-%m-%d")
+            ex_div_col = 'ex_dividend_date'
+            if ex_div_col in bonus_data.columns:
+                recent_bonus = bonus_data[
+                    bonus_data[ex_div_col].notna() &
+                    (bonus_data[ex_div_col].astype(str) >= cutoff_date)
+                ]
+                bonus_codes = set(recent_bonus['code'].tolist())
+            if bonus_codes:
+                logging.info(f"发现 {len(bonus_codes)} 只近期已除权除息的股票")
+    except Exception:
+        pass  # 获取失败不影响清理
+
+    delisted_count = 0
+    bonus_count = 0
+    corrupt_count = 0
+
     try:
         for root, dirs, files in os.walk(stock_hist_cache_path):
             for file in files:
-                if file.endswith('.meta'):
-                    meta_path = os.path.join(root, file)
-                    try:
-                        with open(meta_path, 'r') as f:
-                            content = f.read().strip()
-                            parts = content.split(',')
-                            if len(parts) > 1:
-                                update_time = datetime.datetime.strptime(parts[1], "%Y%m%d%H%M%S")
-                                if update_time < expire_time:
-                                    # 删除缓存文件和元数据文件
-                                    cache_file = meta_path.replace('.meta', '.gzip.pickle')
-                                    if os.path.exists(cache_file):
-                                        os.remove(cache_file)
-                                    os.remove(meta_path)
-                                    cleaned_count += 1
-                    except Exception:
-                        pass
+                if not file.endswith('.meta'):
+                    continue
+
+                meta_path = os.path.join(root, file)
+
+                # 从文件名提取股票代码（格式：000001qfq.meta）
+                code = None
+                adjust = ''
+                try:
+                    base_name = file.replace('.meta', '')
+                    # 代码为6位数字
+                    if len(base_name) >= 6 and base_name[:6].isdigit():
+                        code = base_name[:6]
+                        adjust = base_name[6:]  # 如 'qfq', 'hfq', ''
+                except Exception:
+                    pass
+
+                if code is None:
+                    # 文件名格式无法解析，视为损坏文件
+                    _remove_cache_pair(meta_path)
+                    corrupt_count += 1
+                    continue
+
+                # 1. 清理退市股票缓存
+                if active_codes and code not in active_codes:
+                    _remove_cache_pair(meta_path)
+                    delisted_count += 1
+                    continue
+
+                # 2. 清理有除权除息的股票的前复权缓存（以便重新拉取正确数据）
+                if code in bonus_codes and adjust == 'qfq':
+                    _remove_cache_pair(meta_path)
+                    bonus_count += 1
+                    continue
+
     except Exception as e:
         logging.error(f"清理缓存失败: {e}")
-    
-    if cleaned_count > 0:
-        logging.info(f"已清理 {cleaned_count} 个过期缓存文件")
-    
-    return cleaned_count
+
+    total = delisted_count + bonus_count + corrupt_count
+    if total > 0:
+        logging.info(
+            f"缓存清理完成：退市股票 {delisted_count} 个，"
+            f"除权除息刷新 {bonus_count} 个，"
+            f"损坏文件 {corrupt_count} 个，"
+            f"共清理 {total} 个"
+        )
+    else:
+        logging.info("缓存清理完成：无需清理")
+
+    return total
+
+
+def _remove_cache_pair(meta_path):
+    """删除缓存文件对（.meta + .gzip.pickle）"""
+    try:
+        cache_file = meta_path.replace('.meta', '.gzip.pickle')
+        if os.path.exists(cache_file):
+            os.remove(cache_file)
+        if os.path.exists(meta_path):
+            os.remove(meta_path)
+    except Exception as e:
+        logging.warning(f"删除缓存文件失败: {meta_path} - {e}")
 
 
 # 保留原有函数以兼容旧代码

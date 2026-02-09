@@ -15,11 +15,11 @@ export default defineConfig({
     proxy: {
       // 代理后端 API
       '/api': {
-        target: 'http://localhost:9988',
+        target: 'http://115.29.213.22:9988',
         changeOrigin: true
       },
       '/instock': {
-        target: 'http://localhost:9988',
+        target: 'http://115.29.213.22:9988',
         changeOrigin: true
       }
     }
