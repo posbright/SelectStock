@@ -118,7 +118,7 @@ def is_open(now_time):
     return False
 
 
-def get_trade_hist_interval(date, years=3):
+def get_trade_hist_interval(date, years=15):
     """
     获取历史数据的时间区间
     
@@ -127,7 +127,7 @@ def get_trade_hist_interval(date, years=3):
               - datetime对象
               - 字符串 YYYY-MM-DD
               - 字符串 YYYYMMDD
-        years: 历史数据年数，默认3年
+        years: 历史数据年数，默认15年
     
     返回：
         (date_start, is_cache): 起始日期YYYYMMDD格式，是否可以缓存

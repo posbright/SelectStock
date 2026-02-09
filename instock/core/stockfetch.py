@@ -31,12 +31,11 @@ import time
 __author__ = 'myh '
 
 # 数据源重试配置（支持环境变量覆盖）
-DATA_SOURCE_MAX_RETRIES = int(os.environ.get('DATA_SOURCE_MAX_RETRIES', 2))  # 最大重试次数
-DATA_SOURCE_RETRY_INTERVAL = int(os.environ.get('DATA_SOURCE_RETRY_INTERVAL', 30))  # 重试间隔（秒）
+DATA_SOURCE_MAX_RETRIES = int(os.environ.get('DATA_SOURCE_MAX_RETRIES', 3))  # 最大重试次数
+DATA_SOURCE_RETRY_INTERVAL = int(os.environ.get('DATA_SOURCE_RETRY_INTERVAL', 60))  # 重试间隔（秒）
 
 # 历史数据配置（支持环境变量覆盖）
-HIST_DATA_DEFAULT_YEARS = int(os.environ.get('HIST_DATA_DEFAULT_YEARS', 3))  # 默认获取历史数据年数
-HIST_DATA_CACHE_EXPIRE_DAYS = int(os.environ.get('HIST_DATA_CACHE_EXPIRE_DAYS', 7))  # 缓存过期天数
+HIST_DATA_DEFAULT_YEARS = int(os.environ.get('HIST_DATA_DEFAULT_YEARS', 15))  # 默认获取历史数据年数
 
 __date__ = '2023/3/10 '
 
@@ -574,10 +573,10 @@ def fetch_etf_hist(data_base, date_start=None, date_end=None, adjust='qfq'):
 # 读取股票历史数据（支持增量更新）
 # 参数说明：
 #   data_base: (date, code) 元组
-#   date_start: 起始日期，格式 YYYYMMDD，默认为3年前
+#   date_start: 起始日期，格式 YYYYMMDD，默认为15年前
 #   date_end: 结束日期，格式 YYYYMMDD，默认为当前日期
 #   is_cache: 是否使用缓存
-#   years: 历史数据年数，默认3年
+#   years: 历史数据年数，默认15年
 def fetch_stock_hist(data_base, date_start=None, date_end=None, is_cache=True, years=None):
     date = data_base[0]
     code = data_base[1]
