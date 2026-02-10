@@ -39,20 +39,15 @@ const pageSize = ref(50)
 
 // 搜索
 const searchKeyword = ref('')
-const filteredResult = computed(() => {
-  if (!searchKeyword.value) return filterResult.value
-  const keyword = searchKeyword.value.toLowerCase()
-  return filterResult.value.filter((item: any) =>
-    item.code?.toLowerCase().includes(keyword) ||
-    item.name?.toLowerCase().includes(keyword)
-  )
-})
+let filterSearchTimer: ReturnType<typeof setTimeout> | null = null
 
-const pagedFilteredResult = computed(() => {
-  const start = (currentPage.value - 1) * pageSize.value
-  const end = start + pageSize.value
-  return filteredResult.value.slice(start, end)
-})
+const handleFilterSearch = () => {
+  if (filterSearchTimer) clearTimeout(filterSearchTimer)
+  filterSearchTimer = setTimeout(() => {
+    currentPage.value = 1
+    loadFilterResult()
+  }, 500)
+}
 
 // 是否有自定义修改
 const hasCustomParams = computed(() => {
@@ -131,6 +126,28 @@ const handleReset = async () => {
   }
 }
 
+// ========== 加载筛选结果（支持分页） ==========
+const loadFilterResult = async () => {
+  filtering.value = true
+  try {
+    const res: any = await filterStocks(
+      activeStrategy.value,
+      filterDate.value,
+      currentPage.value,
+      pageSize.value
+    )
+    filterColumns.value = res.columns || []
+    filterResult.value = Array.isArray(res.data) ? res.data : []
+    filterTotal.value = res.total ?? filterResult.value.length
+    paramsUsed.value = res.params_used || {}
+  } catch (error: any) {
+    console.error('加载筛选结果失败:', error)
+    ElMessage.error('加载筛选结果失败: ' + (error?.message || '未知错误'))
+  } finally {
+    filtering.value = false
+  }
+}
+
 // ========== 执行筛选 ==========
 const handleFilter = async () => {
   if (activeStrategy.value !== 'gpt_value') {
@@ -149,19 +166,14 @@ const handleFilter = async () => {
     }
     await saveStrategyParams(activeStrategy.value, params)
 
-    // 执行筛选
-    const res: any = await filterStocks(activeStrategy.value, filterDate.value)
-    filterColumns.value = res.columns || []
-    filterResult.value = Array.isArray(res.data) ? res.data : []
-    filterTotal.value = res.total || filterResult.value.length
-    paramsUsed.value = res.params_used || {}
-    showResult.value = true
     currentPage.value = 1
+    await loadFilterResult()
+    showResult.value = true
 
-    if (filterResult.value.length === 0) {
+    if (filterTotal.value === 0) {
       ElMessage.warning('没有符合条件的股票，请尝试放宽筛选条件')
     } else {
-      ElMessage.success(`筛选出 ${filterResult.value.length} 只股票`)
+      ElMessage.success(`筛选出 ${filterTotal.value} 只股票`)
     }
   } catch (error: any) {
     console.error('筛选失败:', error)
@@ -169,6 +181,16 @@ const handleFilter = async () => {
   } finally {
     filtering.value = false
   }
+}
+
+// ========== 分页变更 ==========
+const handleFilterPageChange = () => {
+  loadFilterResult()
+}
+
+const handleFilterSizeChange = () => {
+  currentPage.value = 1
+  loadFilterResult()
 }
 
 // ========== 查看指标详情 ==========
@@ -370,7 +392,7 @@ onMounted(() => {
             <el-icon><DataAnalysis /></el-icon>
             筛选结果
             <el-tag type="info" size="small" style="margin-left: 8px">
-              {{ filterDate }} · {{ filteredResult.length }} 只
+              {{ filterDate }} · {{ filterTotal }} 只
             </el-tag>
           </span>
           <el-input
@@ -378,6 +400,8 @@ onMounted(() => {
             placeholder="搜索代码/名称"
             clearable
             style="width: 200px"
+            @input="handleFilterSearch"
+            @clear="handleFilterSearch"
           >
             <template #prefix>
               <el-icon><Search /></el-icon>
@@ -401,7 +425,7 @@ onMounted(() => {
       </div>
 
       <el-table
-        :data="pagedFilteredResult"
+        :data="filterResult"
         stripe
         border
         v-loading="filtering"
@@ -457,14 +481,16 @@ onMounted(() => {
       </el-table>
 
       <div class="pagination-wrapper">
-        <span class="total-info">共 {{ filteredResult.length }} 条记录</span>
+        <span class="total-info">共 {{ filterTotal }} 条记录</span>
         <el-pagination
           v-model:current-page="currentPage"
           v-model:page-size="pageSize"
           :page-sizes="[20, 50, 100, 200]"
-          :total="filteredResult.length"
+          :total="filterTotal"
           layout="sizes, prev, pager, next, jumper"
           background
+          @current-change="handleFilterPageChange"
+          @size-change="handleFilterSizeChange"
         />
       </div>
     </el-card>

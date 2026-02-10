@@ -22,17 +22,11 @@ const tableData = ref<any[]>([])
 const columnDefs = ref<ColumnDef[]>([])
 const loading = ref(false)
 const selectedDate = ref(dayjs().format('YYYY-MM-DD'))
+const totalCount = ref(0)
 
 // 分页
 const currentPage = ref(1)
 const pageSize = ref(50)
-
-// 当前页数据（基于过滤后的数据）
-const pagedData = computed(() => {
-  const start = (currentPage.value - 1) * pageSize.value
-  const end = start + pageSize.value
-  return filteredData.value.slice(start, end)
-})
 
 // 表名
 const tableName = computed(() => route.meta.tableName as string || 'cn_stock_spot')
@@ -52,36 +46,43 @@ const hasCodeField = computed(() => {
 
 // 搜索关键词
 const searchKeyword = ref('')
+let searchTimer: ReturnType<typeof setTimeout> | null = null
 
-// 过滤后的数据
-const filteredData = computed(() => {
-  if (!searchKeyword.value) return tableData.value
-  const keyword = searchKeyword.value.toLowerCase()
-  return tableData.value.filter((item: any) => {
-    return (
-      item.code?.toLowerCase().includes(keyword) ||
-      item.name?.toLowerCase().includes(keyword)
-    )
-  })
-})
+// 搜索变更时重新请求（防抖 500ms）
+const handleSearch = () => {
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    currentPage.value = 1
+    loadData()
+  }, 500)
+}
 
 // 加载数据
 const loadData = async () => {
   loading.value = true
   try {
-    const res: any = await getStockData({
+    const params: any = {
       name: tableName.value,
-      date: selectedDate.value
-    })
-    // 新的响应格式包含 columns 和 data
+      date: selectedDate.value,
+      page: currentPage.value,
+      page_size: pageSize.value
+    }
+    if (searchKeyword.value) {
+      params.keyword = searchKeyword.value
+    }
+    const res: any = await getStockData(params)
+    // 新的响应格式包含 columns、data 和 total
     if (res && res.columns && res.data) {
       columnDefs.value = res.columns
       tableData.value = Array.isArray(res.data) ? res.data : []
+      totalCount.value = res.total ?? tableData.value.length
     } else if (Array.isArray(res)) {
       // 兼容旧格式
       tableData.value = res
+      totalCount.value = res.length
     } else {
       tableData.value = []
+      totalCount.value = 0
     }
   } catch (error: any) {
     console.error('加载数据失败:', error)
@@ -89,6 +90,7 @@ const loadData = async () => {
     ElMessage.error(errMsg)
     columnDefs.value = []
     tableData.value = []
+    totalCount.value = 0
   } finally {
     loading.value = false
   }
@@ -187,6 +189,16 @@ const handleDateChange = () => {
   loadData()
 }
 
+// 分页变更
+const handlePageChange = () => {
+  loadData()
+}
+
+const handleSizeChange = () => {
+  currentPage.value = 1
+  loadData()
+}
+
 // 导出 Excel
 const exportExcel = () => {
   ElMessage.info('导出功能开发中...')
@@ -233,6 +245,8 @@ onMounted(() => {
             placeholder="搜索代码/名称"
             clearable
             style="width: 200px"
+            @input="handleSearch"
+            @clear="handleSearch"
           >
             <template #prefix>
               <el-icon><Search /></el-icon>
@@ -256,7 +270,7 @@ onMounted(() => {
     <el-card class="table-card" shadow="never">
       <el-table
         v-loading="loading"
-        :data="pagedData"
+        :data="tableData"
         stripe
         border
         height="calc(100vh - 280px)"
@@ -317,15 +331,17 @@ onMounted(() => {
       <!-- 分页 -->
       <div class="pagination-wrapper">
         <span class="total-info">
-          共 {{ filteredData.length }} 条记录
+          共 {{ totalCount }} 条记录
         </span>
         <el-pagination
           v-model:current-page="currentPage"
           v-model:page-size="pageSize"
           :page-sizes="[20, 50, 100, 200]"
-          :total="filteredData.length"
+          :total="totalCount"
           layout="sizes, prev, pager, next, jumper"
           background
+          @current-change="handlePageChange"
+          @size-change="handleSizeChange"
         />
       </div>
     </el-card>

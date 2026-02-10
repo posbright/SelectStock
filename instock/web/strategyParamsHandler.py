@@ -12,6 +12,7 @@ import logging
 from abc import ABC
 import instock.web.base as webBase
 import instock.lib.database as mdb
+from instock.lib.query_cache import filter_result_cache
 
 __author__ = 'InStock'
 __date__ = '2026/02/10'
@@ -551,6 +552,9 @@ class SaveStrategyParamsHandler(webBase.BaseHandler, ABC):
             if _save_param(strategy_key, key, value):
                 saved_count += 1
         
+        # 参数变更后清除筛选结果缓存
+        filter_result_cache.invalidate()
+        
         self.write(json.dumps({
             "success": True,
             "message": f"已保存 {saved_count} 个参数",
@@ -581,6 +585,8 @@ class ResetStrategyParamsHandler(webBase.BaseHandler, ABC):
         _ensure_params_table()
         
         if _delete_strategy_params(strategy_key):
+            # 参数重置后清除筛选结果缓存
+            filter_result_cache.invalidate()
             self.write(json.dumps({
                 "success": True,
                 "message": f"策略 {strategy_key} 已重置为默认值"
@@ -597,16 +603,30 @@ class FilterStocksHandler(webBase.BaseHandler, ABC):
         self.set_header('Content-Type', 'application/json;charset=UTF-8')
         strategy_key = self.get_argument("strategy", default="gpt_value", strip=True)
         date = self.get_argument("date", default=None, strip=True)
+        page = self.get_argument("page", default=None, strip=True)
+        page_size = self.get_argument("page_size", default=None, strip=True)
         
         if strategy_key == "gpt_value":
-            self._filter_gpt_value(date)
+            self._filter_gpt_value(date, page, page_size)
         else:
             self.set_status(400)
             self.write(json.dumps({"error": f"策略 {strategy_key} 暂不支持动态筛选"}, ensure_ascii=False))
     
-    def _filter_gpt_value(self, date):
+    def _filter_gpt_value(self, date, page=None, page_size=None):
         """使用用户自定义参数筛选GPT综合选股"""
         params = get_gpt_filter_values()
+        
+        # 分页参数处理
+        use_pagination = page is not None and page_size is not None
+        limit_clause = ""
+        if use_pagination:
+            try:
+                page_int = max(1, int(page))
+                page_size_int = max(1, min(500, int(page_size)))
+                offset = (page_int - 1) * page_size_int
+                limit_clause = f" LIMIT {page_size_int} OFFSET {offset}"
+            except (ValueError, TypeError):
+                use_pagination = False
         
         # 构建SQL WHERE条件
         conditions = []
@@ -662,14 +682,32 @@ class FilterStocksHandler(webBase.BaseHandler, ABC):
         
         where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
         
-        sql = f"""SELECT `date`, `code`, `name`, `pe9`, `roe_weight`, `sale_gpr`, 
+        count_sql = f"SELECT COUNT(*) AS cnt FROM `cn_stock_selection`{where_clause}"
+        data_sql = f"""SELECT `date`, `code`, `name`, `pe9`, `roe_weight`, `sale_gpr`, 
                          `sale_npr`, `income_growthrate_3y`, `netprofit_growthrate_3y`, 
                          `debt_asset_ratio`, `per_netcash_operate`
                   FROM `cn_stock_selection`{where_clause}
-                  ORDER BY `roe_weight` DESC"""
+                  ORDER BY `roe_weight` DESC{limit_clause}"""
         
         try:
-            data = self.db.query(sql, *sql_params)
+            cache_params = tuple(sql_params)
+            
+            # 尝试从缓存获取总数
+            hit, cached_total = filter_result_cache.get(count_sql, cache_params)
+            if hit:
+                total = cached_total
+            else:
+                total_result = self.db.query(count_sql, *sql_params)
+                total = total_result[0]["cnt"] if total_result else 0
+                filter_result_cache.put(count_sql, cache_params, total)
+            
+            # 尝试从缓存获取数据
+            hit, cached_data = filter_result_cache.get(data_sql, cache_params)
+            if hit:
+                data = cached_data
+            else:
+                data = self.db.query(data_sql, *sql_params)
+                filter_result_cache.put(data_sql, cache_params, data)
             
             # 列定义
             columns = [
@@ -691,7 +729,7 @@ class FilterStocksHandler(webBase.BaseHandler, ABC):
             result = json.loads(json.dumps({
                 "columns": columns,
                 "data": data if data else [],
-                "total": len(data) if data else 0,
+                "total": total,
                 "params_used": params
             }, cls=MyEncoder))
             

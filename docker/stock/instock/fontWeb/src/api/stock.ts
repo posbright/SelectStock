@@ -3,6 +3,9 @@ import request from './request'
 export interface StockDataParams {
   name: string
   date?: string
+  page?: number
+  page_size?: number
+  keyword?: string
 }
 
 export interface StockIndicatorParams {

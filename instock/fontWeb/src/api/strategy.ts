@@ -83,10 +83,10 @@ export function resetStrategyParams(strategy: string) {
 /**
  * 根据当前参数动态筛选股票
  */
-export function filterStocks(strategy: string, date?: string) {
+export function filterStocks(strategy: string, date?: string, page?: number, pageSize?: number) {
   return request({
     url: '/api/strategy/filter',
     method: 'get',
-    params: { strategy, date }
+    params: { strategy, date, page, page_size: pageSize }
   })
 }
