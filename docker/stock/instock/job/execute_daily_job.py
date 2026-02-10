@@ -27,6 +27,7 @@ import strategy_data_daily_job as sdj
 import backtest_data_daily_job as bdj
 import klinepattern_data_daily_job as kdj
 import selection_data_daily_job as sddj
+import gpt_value_data_job as gptj
 
 __author__ = 'myh '
 __date__ = '2023/3/10 '
@@ -46,14 +47,16 @@ def main():
         # # 第3.1步创建股票其它基础数据表
         executor.submit(hdtj.main)
         # # 第3.2步创建股票指标数据表
-        # executor.submit(gdj.main)
+        executor.submit(gdj.main)
         # # # # 第4步创建股票k线形态表
-        # executor.submit(kdj.main)
+        executor.submit(kdj.main)
         # # # # 第5步创建股票策略数据表
-        # executor.submit(sdj.main)
+        executor.submit(sdj.main)
+        # # # # 第5.1步执行GPT综合选股
+        executor.submit(gptj.main)
 
     # # # # 第6步创建股票回测
-    # bdj.main()
+    bdj.main()
 
     # # # # 第7步创建股票闭盘后才有的数据
     acdj.main()
