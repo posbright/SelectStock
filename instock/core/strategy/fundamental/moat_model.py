@@ -451,5 +451,28 @@ SCORING_THRESHOLDS = {
 
 
 def get_threshold_config() -> Dict:
-    """获取评分阈值配置"""
-    return SCORING_THRESHOLDS.copy()
+    """获取评分阈值配置（优先从数据库加载用户自定义值）"""
+    import copy
+    config = copy.deepcopy(SCORING_THRESHOLDS)
+    try:
+        from instock.web.strategyParamsHandler import get_strategy_params
+        params = get_strategy_params("moat_scoring")
+        if params:
+            values = {}
+            for group in params.get('groups', []):
+                for p in group.get('params', []):
+                    values[p['key']] = p['value']
+            # 更新权重
+            weight_map = {
+                'roe_weight': 'roe_weight',
+                'sale_gpr_weight': 'sale_gpr',
+                'sale_npr_weight': 'sale_npr',
+                'income_growth_weight': 'income_growthrate_3y',
+                'profit_growth_weight': 'netprofit_growthrate_3y',
+            }
+            for param_key, threshold_key in weight_map.items():
+                if param_key in values and threshold_key in config:
+                    config[threshold_key]['weight'] = values[param_key]
+    except Exception:
+        pass
+    return config

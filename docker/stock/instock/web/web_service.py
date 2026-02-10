@@ -26,6 +26,7 @@ import instock.lib.database as mdb
 import instock.lib.version as version
 import instock.web.dataTableHandler as dataTableHandler
 import instock.web.dataIndicatorsHandler as dataIndicatorsHandler
+import instock.web.strategyParamsHandler as strategyParamsHandler
 import instock.web.base as webBase
 
 __author__ = 'myh '
@@ -45,6 +46,11 @@ class Application(tornado.web.Application):
             (r"/instock/data/indicators", dataIndicatorsHandler.GetDataIndicatorsHandler),
             # 加入关注
             (r"/instock/control/attention", dataIndicatorsHandler.SaveCollectHandler),
+            # 策略参数管理
+            (r"/instock/api/strategy/params", strategyParamsHandler.GetStrategyParamsHandler),
+            (r"/instock/api/strategy/params/save", strategyParamsHandler.SaveStrategyParamsHandler),
+            (r"/instock/api/strategy/params/reset", strategyParamsHandler.ResetStrategyParamsHandler),
+            (r"/instock/api/strategy/filter", strategyParamsHandler.FilterStocksHandler),
         ]
         settings = dict(  # 配置
             template_path=os.path.join(os.path.dirname(__file__), "templates"),

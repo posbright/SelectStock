@@ -1,0 +1,92 @@
+import request from './request'
+
+/**
+ * 策略参数相关API
+ */
+
+export interface StrategyParam {
+  key: string
+  label: string
+  description: string
+  type: 'number' | 'text' | 'password' | 'select'
+  value: any
+  min?: number
+  max?: number
+  step?: number
+  unit?: string
+  field?: string
+  options?: { label: string; value: string }[]
+  is_custom?: boolean
+}
+
+export interface ParamGroup {
+  group_name: string
+  group_description: string
+  params: StrategyParam[]
+}
+
+export interface StrategyParamsResponse {
+  name: string
+  description: string
+  groups: ParamGroup[]
+}
+
+export interface StrategyListItem {
+  key: string
+  name: string
+  description: string
+}
+
+/**
+ * 获取可配置的策略列表
+ */
+export function getStrategyList() {
+  return request({
+    url: '/api/strategy/params',
+    method: 'get'
+  })
+}
+
+/**
+ * 获取指定策略的参数配置
+ */
+export function getStrategyParams(strategy: string) {
+  return request({
+    url: '/api/strategy/params',
+    method: 'get',
+    params: { strategy }
+  })
+}
+
+/**
+ * 保存策略参数
+ */
+export function saveStrategyParams(strategy: string, params: Record<string, any>) {
+  return request({
+    url: '/api/strategy/params/save',
+    method: 'post',
+    data: { strategy, params }
+  })
+}
+
+/**
+ * 重置策略参数为默认值
+ */
+export function resetStrategyParams(strategy: string) {
+  return request({
+    url: '/api/strategy/params/reset',
+    method: 'post',
+    data: { strategy }
+  })
+}
+
+/**
+ * 根据当前参数动态筛选股票
+ */
+export function filterStocks(strategy: string, date?: string) {
+  return request({
+    url: '/api/strategy/filter',
+    method: 'get',
+    params: { strategy, date }
+  })
+}

@@ -146,51 +146,51 @@ const routes: RouteRecordRaw[] = [
         name: 'KlinePattern',
         component: () => import('@/views/stock/StockData.vue'),
         meta: { title: 'K线形态识别', tableName: 'cn_stock_kline_pattern' }
+      },
+      {
+        path: 'enter',
+        name: 'KlineEnter',
+        component: () => import('@/views/stock/StockData.vue'),
+        meta: { title: '放量上涨', tableName: 'cn_stock_strategy_enter' }
+      },
+      {
+        path: 'keep-increasing',
+        name: 'KlineKeepIncreasing',
+        component: () => import('@/views/stock/StockData.vue'),
+        meta: { title: '均线多头', tableName: 'cn_stock_strategy_keep_increasing' }
+      },
+      {
+        path: 'parking-apron',
+        name: 'KlineParkingApron',
+        component: () => import('@/views/stock/StockData.vue'),
+        meta: { title: '停机坪', tableName: 'cn_stock_strategy_parking_apron' }
+      },
+      {
+        path: 'backtrace-ma250',
+        name: 'KlineBacktraceMa250',
+        component: () => import('@/views/stock/StockData.vue'),
+        meta: { title: '回踩年线', tableName: 'cn_stock_strategy_backtrace_ma250' }
+      },
+      {
+        path: 'breakthrough-platform',
+        name: 'KlineBreakthroughPlatform',
+        component: () => import('@/views/stock/StockData.vue'),
+        meta: { title: '突破平台', tableName: 'cn_stock_strategy_breakthrough_platform' }
+      },
+      {
+        path: 'low-backtrace-increase',
+        name: 'KlineLowBacktraceIncrease',
+        component: () => import('@/views/stock/StockData.vue'),
+        meta: { title: '无大幅回撤', tableName: 'cn_stock_strategy_low_backtrace_increase' }
       }
     ]
   },
   {
     path: '/strategy',
     component: Layout,
-    redirect: '/strategy/list',
+    redirect: '/strategy/turtle-trade',
     meta: { title: '策略选股', icon: 'Aim' },
     children: [
-      {
-        path: 'enter',
-        name: 'StrategyEnter',
-        component: () => import('@/views/stock/StockData.vue'),
-        meta: { title: '放量上涨', tableName: 'cn_stock_strategy_enter' }
-      },
-      {
-        path: 'keep-increasing',
-        name: 'StrategyKeepIncreasing',
-        component: () => import('@/views/stock/StockData.vue'),
-        meta: { title: '均线多头', tableName: 'cn_stock_strategy_keep_increasing' }
-      },
-      {
-        path: 'parking-apron',
-        name: 'StrategyParkingApron',
-        component: () => import('@/views/stock/StockData.vue'),
-        meta: { title: '停机坪', tableName: 'cn_stock_strategy_parking_apron' }
-      },
-      {
-        path: 'backtrace-ma250',
-        name: 'StrategyBacktraceMa250',
-        component: () => import('@/views/stock/StockData.vue'),
-        meta: { title: '回踩年线', tableName: 'cn_stock_strategy_backtrace_ma250' }
-      },
-      {
-        path: 'breakthrough-platform',
-        name: 'StrategyBreakthroughPlatform',
-        component: () => import('@/views/stock/StockData.vue'),
-        meta: { title: '突破平台', tableName: 'cn_stock_strategy_breakthrough_platform' }
-      },
-      {
-        path: 'low-backtrace-increase',
-        name: 'StrategyLowBacktraceIncrease',
-        component: () => import('@/views/stock/StockData.vue'),
-        meta: { title: '无大幅回撤', tableName: 'cn_stock_strategy_low_backtrace_increase' }
-      },
       {
         path: 'turtle-trade',
         name: 'StrategyTurtleTrade',
@@ -214,6 +214,36 @@ const routes: RouteRecordRaw[] = [
         name: 'StrategyLowAtr',
         component: () => import('@/views/stock/StockData.vue'),
         meta: { title: '低ATR成长', tableName: 'cn_stock_strategy_low_atr' }
+      },
+      {
+        path: 'trend-pullback',
+        name: 'StrategyTrendPullback',
+        component: () => import('@/views/stock/StockData.vue'),
+        meta: { title: '趋势回调', tableName: 'cn_stock_strategy_trend_pullback' }
+      },
+      {
+        path: 'oversold-rebound',
+        name: 'StrategyOversoldRebound',
+        component: () => import('@/views/stock/StockData.vue'),
+        meta: { title: '超跌反弹', tableName: 'cn_stock_strategy_oversold_rebound' }
+      },
+      {
+        path: 'breakout-confirm',
+        name: 'StrategyBreakoutConfirm',
+        component: () => import('@/views/stock/StockData.vue'),
+        meta: { title: '突破确认', tableName: 'cn_stock_strategy_breakout_confirm' }
+      },
+      {
+        path: 'gpt-value',
+        name: 'StrategyGptValue',
+        component: () => import('@/views/stock/StockData.vue'),
+        meta: { title: 'GPT综合选股', tableName: 'cn_stock_strategy_gpt_value' }
+      },
+      {
+        path: 'config',
+        name: 'StrategyConfig',
+        component: () => import('@/views/strategy/StrategyConfig.vue'),
+        meta: { title: '策略参数配置', icon: 'Setting' }
       }
     ]
   },

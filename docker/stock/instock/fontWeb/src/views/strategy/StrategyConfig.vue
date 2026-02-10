@@ -1,0 +1,644 @@
+<script setup lang="ts">
+import { ref, computed, watch, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  getStrategyList,
+  getStrategyParams,
+  saveStrategyParams,
+  resetStrategyParams,
+  filterStocks
+} from '@/api/strategy'
+import { toggleAttention } from '@/api/stock'
+import dayjs from 'dayjs'
+import type { ParamGroup, StrategyListItem } from '@/api/strategy'
+
+const router = useRouter()
+
+// ========== 状态 ==========
+const strategies = ref<StrategyListItem[]>([])
+const activeStrategy = ref('gpt_value')
+const strategyName = ref('')
+const strategyDescription = ref('')
+const paramGroups = ref<ParamGroup[]>([])
+const loading = ref(false)
+const saving = ref(false)
+const filtering = ref(false)
+
+// 筛选结果
+const filterDate = ref(dayjs().format('YYYY-MM-DD'))
+const filterResult = ref<any[]>([])
+const filterColumns = ref<any[]>([])
+const filterTotal = ref(0)
+const showResult = ref(false)
+const paramsUsed = ref<Record<string, any>>({})
+
+// 分页
+const currentPage = ref(1)
+const pageSize = ref(50)
+
+// 搜索
+const searchKeyword = ref('')
+const filteredResult = computed(() => {
+  if (!searchKeyword.value) return filterResult.value
+  const keyword = searchKeyword.value.toLowerCase()
+  return filterResult.value.filter((item: any) =>
+    item.code?.toLowerCase().includes(keyword) ||
+    item.name?.toLowerCase().includes(keyword)
+  )
+})
+
+const pagedFilteredResult = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  const end = start + pageSize.value
+  return filteredResult.value.slice(start, end)
+})
+
+// 是否有自定义修改
+const hasCustomParams = computed(() => {
+  for (const group of paramGroups.value) {
+    for (const param of group.params) {
+      if (param.is_custom) return true
+    }
+  }
+  return false
+})
+
+// ========== 加载策略列表 ==========
+const loadStrategies = async () => {
+  try {
+    const res: any = await getStrategyList()
+    strategies.value = res.strategies || []
+  } catch (error) {
+    console.error('加载策略列表失败:', error)
+  }
+}
+
+// ========== 加载策略参数 ==========
+const loadParams = async () => {
+  loading.value = true
+  try {
+    const res: any = await getStrategyParams(activeStrategy.value)
+    strategyName.value = res.name || ''
+    strategyDescription.value = res.description || ''
+    paramGroups.value = res.groups || []
+  } catch (error: any) {
+    console.error('加载策略参数失败:', error)
+    ElMessage.error('加载策略参数失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+// ========== 保存参数 ==========
+const handleSave = async () => {
+  saving.value = true
+  try {
+    // 收集所有参数
+    const params: Record<string, any> = {}
+    for (const group of paramGroups.value) {
+      for (const param of group.params) {
+        params[param.key] = param.value
+      }
+    }
+    const res: any = await saveStrategyParams(activeStrategy.value, params)
+    ElMessage.success(res.message || '保存成功')
+    // 重新加载以更新 is_custom 标记
+    await loadParams()
+  } catch (error) {
+    ElMessage.error('保存失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+// ========== 重置为默认值 ==========
+const handleReset = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '确认将所有参数重置为默认值？此操作不可撤销。',
+      '重置确认',
+      { confirmButtonText: '确认重置', cancelButtonText: '取消', type: 'warning' }
+    )
+    saving.value = true
+    const res: any = await resetStrategyParams(activeStrategy.value)
+    ElMessage.success(res.message || '已重置')
+    await loadParams()
+  } catch (e: any) {
+    if (e !== 'cancel') ElMessage.error('重置失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+// ========== 执行筛选 ==========
+const handleFilter = async () => {
+  if (activeStrategy.value !== 'gpt_value') {
+    ElMessage.info('当前仅支持GPT综合选股的动态筛选')
+    return
+  }
+
+  // 先保存当前参数
+  filtering.value = true
+  try {
+    const params: Record<string, any> = {}
+    for (const group of paramGroups.value) {
+      for (const param of group.params) {
+        params[param.key] = param.value
+      }
+    }
+    await saveStrategyParams(activeStrategy.value, params)
+
+    // 执行筛选
+    const res: any = await filterStocks(activeStrategy.value, filterDate.value)
+    filterColumns.value = res.columns || []
+    filterResult.value = Array.isArray(res.data) ? res.data : []
+    filterTotal.value = res.total || filterResult.value.length
+    paramsUsed.value = res.params_used || {}
+    showResult.value = true
+    currentPage.value = 1
+
+    if (filterResult.value.length === 0) {
+      ElMessage.warning('没有符合条件的股票，请尝试放宽筛选条件')
+    } else {
+      ElMessage.success(`筛选出 ${filterResult.value.length} 只股票`)
+    }
+  } catch (error: any) {
+    console.error('筛选失败:', error)
+    ElMessage.error('筛选失败: ' + (error?.message || '未知错误'))
+  } finally {
+    filtering.value = false
+  }
+}
+
+// ========== 查看指标详情 ==========
+const viewIndicators = (row: any) => {
+  router.push({
+    path: '/indicator/detail',
+    query: {
+      code: row.code,
+      date: row.date || filterDate.value,
+      name: row.name
+    }
+  })
+}
+
+// ========== 关注/取消关注 ==========
+const handleAttention = async (row: any) => {
+  const isAttention = !!row.cdatetime
+  try {
+    await toggleAttention({
+      code: row.code,
+      otype: isAttention ? '1' : '0'
+    })
+    if (isAttention) {
+      row.cdatetime = null
+      ElMessage.success('已取消关注')
+    } else {
+      row.cdatetime = new Date().toISOString()
+      ElMessage.success('已添加关注')
+    }
+  } catch {
+    ElMessage.error('操作失败')
+  }
+}
+
+// ========== 格式化 ==========
+const formatValue = (value: any) => {
+  if (value === null || value === undefined) return '-'
+  if (typeof value === 'number' && !Number.isInteger(value)) return value.toFixed(2)
+  return value
+}
+
+// 监听策略切换
+watch(activeStrategy, () => {
+  loadParams()
+  showResult.value = false
+})
+
+onMounted(() => {
+  loadStrategies()
+  loadParams()
+})
+</script>
+
+<template>
+  <div class="strategy-config-container">
+    <!-- 策略选择 -->
+    <el-card shadow="never" class="strategy-selector-card">
+      <div class="strategy-header">
+        <el-icon style="font-size: 20px; color: #409eff"><Setting /></el-icon>
+        <span class="main-title">策略参数配置</span>
+        <el-select v-model="activeStrategy" placeholder="选择策略" style="width: 200px">
+          <el-option
+            v-for="s in strategies"
+            :key="s.key"
+            :label="s.name"
+            :value="s.key"
+          />
+        </el-select>
+        <el-tag v-if="hasCustomParams" type="warning" effect="plain" size="small">
+          已自定义
+        </el-tag>
+      </div>
+      <div class="strategy-desc" v-if="strategyDescription">
+        <el-icon><InfoFilled /></el-icon>
+        {{ strategyDescription }}
+      </div>
+    </el-card>
+
+    <!-- 参数配置区域 -->
+    <div class="config-layout" v-loading="loading">
+      <!-- 左侧：参数面板 -->
+      <div class="params-panel">
+        <el-card
+          v-for="(group, gi) in paramGroups"
+          :key="gi"
+          shadow="never"
+          class="param-group-card"
+        >
+          <template #header>
+            <div class="group-header">
+              <span class="group-title">{{ group.group_name }}</span>
+              <span class="group-desc">{{ group.group_description }}</span>
+            </div>
+          </template>
+
+          <div class="param-list">
+            <div v-for="param in group.params" :key="param.key" class="param-item">
+              <div class="param-label-row">
+                <span class="param-label">
+                  {{ param.label }}
+                  <el-tag v-if="param.is_custom" size="small" type="success" effect="plain">已修改</el-tag>
+                </span>
+                <span class="param-unit" v-if="param.unit">{{ param.unit }}</span>
+              </div>
+
+              <div class="param-control">
+                <!-- 数字类型：滑块+输入 -->
+                <template v-if="param.type === 'number'">
+                  <el-slider
+                    v-model="param.value"
+                    :min="param.min"
+                    :max="param.max"
+                    :step="param.step"
+                    :show-tooltip="true"
+                    style="flex: 1; margin-right: 16px"
+                  />
+                  <el-input-number
+                    v-model="param.value"
+                    :min="param.min"
+                    :max="param.max"
+                    :step="param.step"
+                    :precision="param.step && param.step < 1 ? 2 : 0"
+                    size="small"
+                    style="width: 120px"
+                    controls-position="right"
+                  />
+                </template>
+
+                <!-- 文本类型 -->
+                <template v-else-if="param.type === 'text'">
+                  <el-input v-model="param.value" placeholder="请输入" clearable />
+                </template>
+
+                <!-- 密码类型 -->
+                <template v-else-if="param.type === 'password'">
+                  <el-input v-model="param.value" type="password" show-password placeholder="请输入密钥" clearable />
+                </template>
+
+                <!-- 选择类型 -->
+                <template v-else-if="param.type === 'select'">
+                  <el-select v-model="param.value" placeholder="请选择" style="width: 100%">
+                    <el-option
+                      v-for="opt in param.options"
+                      :key="opt.value"
+                      :label="opt.label"
+                      :value="opt.value"
+                    />
+                  </el-select>
+                </template>
+              </div>
+
+              <div class="param-description">
+                <el-icon><QuestionFilled /></el-icon>
+                {{ param.description }}
+              </div>
+            </div>
+          </div>
+        </el-card>
+
+        <!-- 操作按钮 -->
+        <div class="action-buttons">
+          <el-button type="primary" @click="handleSave" :loading="saving" size="large">
+            <el-icon><Check /></el-icon>
+            保存参数
+          </el-button>
+          <el-button @click="handleReset" :loading="saving" size="large">
+            <el-icon><RefreshLeft /></el-icon>
+            恢复默认
+          </el-button>
+          <el-button
+            v-if="activeStrategy === 'gpt_value'"
+            type="success"
+            @click="handleFilter"
+            :loading="filtering"
+            size="large"
+          >
+            <el-icon><Search /></el-icon>
+            应用筛选
+          </el-button>
+          <el-date-picker
+            v-if="activeStrategy === 'gpt_value'"
+            v-model="filterDate"
+            type="date"
+            placeholder="筛选日期"
+            format="YYYY-MM-DD"
+            value-format="YYYY-MM-DD"
+            :clearable="false"
+            style="width: 160px"
+          />
+        </div>
+      </div>
+    </div>
+
+    <!-- 筛选结果 -->
+    <el-card v-if="showResult" shadow="never" class="result-card">
+      <template #header>
+        <div class="result-header">
+          <span class="result-title">
+            <el-icon><DataAnalysis /></el-icon>
+            筛选结果
+            <el-tag type="info" size="small" style="margin-left: 8px">
+              {{ filterDate }} · {{ filteredResult.length }} 只
+            </el-tag>
+          </span>
+          <el-input
+            v-model="searchKeyword"
+            placeholder="搜索代码/名称"
+            clearable
+            style="width: 200px"
+          >
+            <template #prefix>
+              <el-icon><Search /></el-icon>
+            </template>
+          </el-input>
+        </div>
+      </template>
+
+      <!-- 当前参数摘要 -->
+      <div class="params-summary" v-if="Object.keys(paramsUsed).length > 0">
+        <el-tag
+          v-for="(val, key) in paramsUsed"
+          :key="key as string"
+          type="info"
+          effect="plain"
+          size="small"
+          style="margin: 2px 4px"
+        >
+          {{ key }}: {{ val }}
+        </el-tag>
+      </div>
+
+      <el-table
+        :data="pagedFilteredResult"
+        stripe
+        border
+        v-loading="filtering"
+        height="400"
+      >
+        <el-table-column type="index" label="#" width="50" fixed="left" />
+        <el-table-column prop="date" label="日期" width="110" fixed="left" />
+        <el-table-column prop="code" label="代码" width="90" fixed="left">
+          <template #default="{ row }">
+            <el-link type="primary" @click="viewIndicators(row)">{{ row.code }}</el-link>
+          </template>
+        </el-table-column>
+        <el-table-column prop="name" label="名称" width="100" fixed="left" />
+        <el-table-column prop="pe9" label="PE(TTM)" width="90" align="right">
+          <template #default="{ row }"><span>{{ formatValue(row.pe9) }}</span></template>
+        </el-table-column>
+        <el-table-column prop="roe_weight" label="ROE(%)" width="90" align="right">
+          <template #default="{ row }"><span>{{ formatValue(row.roe_weight) }}</span></template>
+        </el-table-column>
+        <el-table-column prop="sale_gpr" label="毛利率(%)" width="100" align="right">
+          <template #default="{ row }"><span>{{ formatValue(row.sale_gpr) }}</span></template>
+        </el-table-column>
+        <el-table-column prop="sale_npr" label="净利率(%)" width="100" align="right">
+          <template #default="{ row }"><span>{{ formatValue(row.sale_npr) }}</span></template>
+        </el-table-column>
+        <el-table-column prop="income_growthrate_3y" label="营收3年CAGR(%)" width="130" align="right">
+          <template #default="{ row }"><span>{{ formatValue(row.income_growthrate_3y) }}</span></template>
+        </el-table-column>
+        <el-table-column prop="netprofit_growthrate_3y" label="净利润3年CAGR(%)" width="140" align="right">
+          <template #default="{ row }"><span>{{ formatValue(row.netprofit_growthrate_3y) }}</span></template>
+        </el-table-column>
+        <el-table-column prop="debt_asset_ratio" label="资产负债率(%)" width="120" align="right">
+          <template #default="{ row }"><span>{{ formatValue(row.debt_asset_ratio) }}</span></template>
+        </el-table-column>
+        <el-table-column prop="per_netcash_operate" label="每股现金流" width="100" align="right">
+          <template #default="{ row }"><span>{{ formatValue(row.per_netcash_operate) }}</span></template>
+        </el-table-column>
+        <el-table-column label="操作" width="80" fixed="right" align="center">
+          <template #default="{ row }">
+            <el-button
+              :type="row.cdatetime ? 'warning' : 'primary'"
+              size="small"
+              text
+              @click="handleAttention(row)"
+            >
+              <el-icon>
+                <StarFilled v-if="row.cdatetime" />
+                <Star v-else />
+              </el-icon>
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div class="pagination-wrapper">
+        <span class="total-info">共 {{ filteredResult.length }} 条记录</span>
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :page-sizes="[20, 50, 100, 200]"
+          :total="filteredResult.length"
+          layout="sizes, prev, pager, next, jumper"
+          background
+        />
+      </div>
+    </el-card>
+  </div>
+</template>
+
+<style lang="scss" scoped>
+.strategy-config-container {
+  padding: 0;
+}
+
+.strategy-selector-card {
+  margin-bottom: 16px;
+
+  :deep(.el-card__body) {
+    padding: 16px 20px;
+  }
+}
+
+.strategy-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+
+  .main-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #303133;
+  }
+}
+
+.strategy-desc {
+  margin-top: 10px;
+  font-size: 13px;
+  color: #909399;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  line-height: 1.5;
+}
+
+.config-layout {
+  display: flex;
+  gap: 16px;
+}
+
+.params-panel {
+  flex: 1;
+}
+
+.param-group-card {
+  margin-bottom: 16px;
+
+  :deep(.el-card__header) {
+    padding: 12px 20px;
+    background: #fafafa;
+  }
+}
+
+.group-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  .group-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #303133;
+  }
+
+  .group-desc {
+    font-size: 12px;
+    color: #909399;
+  }
+}
+
+.param-list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.param-item {
+  padding: 12px 0;
+  border-bottom: 1px dashed #ebeef5;
+
+  &:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+}
+
+.param-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+
+  .param-label {
+    font-size: 14px;
+    font-weight: 500;
+    color: #303133;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .param-unit {
+    font-size: 12px;
+    color: #909399;
+    background: #f4f4f5;
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+}
+
+.param-control {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.param-description {
+  font-size: 12px;
+  color: #a8abb2;
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  line-height: 1.5;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 20px 0;
+  flex-wrap: wrap;
+}
+
+.result-card {
+  margin-top: 16px;
+}
+
+.result-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+
+  .result-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 16px;
+    font-weight: 600;
+  }
+}
+
+.params-summary {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background: #f5f7fa;
+  border-radius: 4px;
+}
+
+.pagination-wrapper {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 0 0;
+
+  .total-info {
+    font-size: 14px;
+    color: #909399;
+  }
+}
+</style>

@@ -1,0 +1,713 @@
+#!/usr/local/bin/python3
+# -*- coding: utf-8 -*-
+"""
+策略参数管理 Handler
+
+提供策略参数的查询、保存、重置和基于参数的动态筛选功能。
+参数持久化到 MySQL 数据库表 cn_strategy_params。
+"""
+
+import json
+import logging
+from abc import ABC
+import instock.web.base as webBase
+import instock.lib.database as mdb
+
+__author__ = 'InStock'
+__date__ = '2026/02/10'
+
+
+# ========== 默认策略参数定义 ==========
+
+DEFAULT_STRATEGY_PARAMS = {
+    "gpt_value": {
+        "name": "GPT综合选股",
+        "description": "基于基本面的多维度选股策略，通过财务安全、盈利能力、成长质量和估值四层过滤筛选优质股票。",
+        "groups": [
+            {
+                "group_name": "财务安全过滤",
+                "group_description": "排除高风险地雷股，确保财务基本安全",
+                "params": [
+                    {
+                        "key": "debt_asset_ratio_max",
+                        "label": "资产负债率上限(%)",
+                        "description": "排除高财务杠杆的公司。银行/地产行业通常较高，可适当放宽。",
+                        "type": "number",
+                        "value": 60,
+                        "min": 20,
+                        "max": 90,
+                        "step": 5,
+                        "unit": "%",
+                        "field": "debt_asset_ratio"
+                    },
+                    {
+                        "key": "per_netcash_operate_min",
+                        "label": "每股经营现金流下限",
+                        "description": "确保公司具备造血能力，经营活动产生正现金流。",
+                        "type": "number",
+                        "value": 0,
+                        "min": -5,
+                        "max": 10,
+                        "step": 0.5,
+                        "unit": "元",
+                        "field": "per_netcash_operate"
+                    }
+                ]
+            },
+            {
+                "group_name": "盈利能力筛选",
+                "group_description": "选出ROE高、利润率好的优质公司",
+                "params": [
+                    {
+                        "key": "roe_weight_min",
+                        "label": "ROE(加权)下限(%)",
+                        "description": "净资产收益率反映股东回报。>=15%为优质企业标准，可放宽至10%扩大选股范围。",
+                        "type": "number",
+                        "value": 15,
+                        "min": 5,
+                        "max": 40,
+                        "step": 1,
+                        "unit": "%",
+                        "field": "roe_weight"
+                    },
+                    {
+                        "key": "sale_gpr_min",
+                        "label": "毛利率下限(%)",
+                        "description": "反映产品定价权和竞争优势。制造业通常较低(可设20%)，消费品/软件行业可设更高。",
+                        "type": "number",
+                        "value": 30,
+                        "min": 10,
+                        "max": 80,
+                        "step": 5,
+                        "unit": "%",
+                        "field": "sale_gpr"
+                    },
+                    {
+                        "key": "sale_npr_min",
+                        "label": "净利率下限(%)",
+                        "description": "衡量成本控制能力和最终盈利水平。一般>=10%为佳。",
+                        "type": "number",
+                        "value": 10,
+                        "min": 3,
+                        "max": 50,
+                        "step": 1,
+                        "unit": "%",
+                        "field": "sale_npr"
+                    }
+                ]
+            },
+            {
+                "group_name": "成长质量筛选",
+                "group_description": "确保公司具备可持续增长能力",
+                "params": [
+                    {
+                        "key": "income_growthrate_3y_min",
+                        "label": "营收3年CAGR下限(%)",
+                        "description": "营业收入3年复合增长率。>10%表明业务持续扩张，蓝筹股可放宽至5%。",
+                        "type": "number",
+                        "value": 10,
+                        "min": 0,
+                        "max": 50,
+                        "step": 1,
+                        "unit": "%",
+                        "field": "income_growthrate_3y"
+                    },
+                    {
+                        "key": "netprofit_growthrate_3y_min",
+                        "label": "净利润3年CAGR下限(%)",
+                        "description": "净利润3年复合增长率。>10%表明盈利能力持续增强。",
+                        "type": "number",
+                        "value": 10,
+                        "min": 0,
+                        "max": 50,
+                        "step": 1,
+                        "unit": "%",
+                        "field": "netprofit_growthrate_3y"
+                    }
+                ]
+            },
+            {
+                "group_name": "估值约束",
+                "group_description": "在合理价格买入好公司",
+                "params": [
+                    {
+                        "key": "pe_min",
+                        "label": "PE(TTM)下限",
+                        "description": "排除亏损股(PE<=0)。设为0表示PE必须大于0。",
+                        "type": "number",
+                        "value": 0,
+                        "min": 0,
+                        "max": 10,
+                        "step": 1,
+                        "unit": "倍",
+                        "field": "pe9"
+                    },
+                    {
+                        "key": "pe_max",
+                        "label": "PE(TTM)上限",
+                        "description": "排除泡沫股。50为默认值，成长股可放宽至60-80，价值股可收紧至30。",
+                        "type": "number",
+                        "value": 50,
+                        "min": 15,
+                        "max": 200,
+                        "step": 5,
+                        "unit": "倍",
+                        "field": "pe9"
+                    }
+                ]
+            }
+        ]
+    },
+    "moat_scoring": {
+        "name": "护城河评分模型",
+        "description": "量化评估公司护城河强度的评分模型，用于AI分析的阈值和权重配置。",
+        "groups": [
+            {
+                "group_name": "盈利能力权重",
+                "group_description": "评估公司盈利质量的指标权重配置",
+                "params": [
+                    {
+                        "key": "roe_weight",
+                        "label": "ROE权重",
+                        "description": "净资产收益率在评分中的权重。ROE是衡量股东回报最核心的指标。",
+                        "type": "number",
+                        "value": 0.15,
+                        "min": 0.05,
+                        "max": 0.30,
+                        "step": 0.01,
+                        "unit": ""
+                    },
+                    {
+                        "key": "sale_gpr_weight",
+                        "label": "毛利率权重",
+                        "description": "毛利率在评分中的权重。高毛利率通常意味着定价权。",
+                        "type": "number",
+                        "value": 0.10,
+                        "min": 0.05,
+                        "max": 0.20,
+                        "step": 0.01,
+                        "unit": ""
+                    },
+                    {
+                        "key": "sale_npr_weight",
+                        "label": "净利率权重",
+                        "description": "净利率在评分中的权重。反映公司综合盈利能力。",
+                        "type": "number",
+                        "value": 0.10,
+                        "min": 0.05,
+                        "max": 0.20,
+                        "step": 0.01,
+                        "unit": ""
+                    }
+                ]
+            },
+            {
+                "group_name": "成长能力权重",
+                "group_description": "评估公司成长质量的指标权重配置",
+                "params": [
+                    {
+                        "key": "income_growth_weight",
+                        "label": "营收增长权重",
+                        "description": "营收3年CAGR在评分中的权重。",
+                        "type": "number",
+                        "value": 0.10,
+                        "min": 0.05,
+                        "max": 0.20,
+                        "step": 0.01,
+                        "unit": ""
+                    },
+                    {
+                        "key": "profit_growth_weight",
+                        "label": "净利润增长权重",
+                        "description": "净利润3年CAGR在评分中的权重。",
+                        "type": "number",
+                        "value": 0.10,
+                        "min": 0.05,
+                        "max": 0.20,
+                        "step": 0.01,
+                        "unit": ""
+                    }
+                ]
+            },
+            {
+                "group_name": "评级阈值",
+                "group_description": "综合评分对应的投资评级分数线",
+                "params": [
+                    {
+                        "key": "grade_a_threshold",
+                        "label": "A级(强烈推荐)分数线",
+                        "description": "总分达到此值评为A级，建议核心持仓。",
+                        "type": "number",
+                        "value": 80,
+                        "min": 70,
+                        "max": 95,
+                        "step": 5,
+                        "unit": "分"
+                    },
+                    {
+                        "key": "grade_b_threshold",
+                        "label": "B级(推荐关注)分数线",
+                        "description": "总分达到此值评为B级，建议标准仓位。",
+                        "type": "number",
+                        "value": 65,
+                        "min": 50,
+                        "max": 80,
+                        "step": 5,
+                        "unit": "分"
+                    },
+                    {
+                        "key": "grade_c_threshold",
+                        "label": "C级(谨慎持有)分数线",
+                        "description": "总分达到此值评为C级，建议降低仓位。低于此值为D级，不建议投资。",
+                        "type": "number",
+                        "value": 50,
+                        "min": 30,
+                        "max": 65,
+                        "step": 5,
+                        "unit": "分"
+                    }
+                ]
+            },
+            {
+                "group_name": "综合评分权重",
+                "group_description": "量化评分与定性评分的配比",
+                "params": [
+                    {
+                        "key": "quantitative_weight",
+                        "label": "量化评分权重",
+                        "description": "量化指标（财务数据）在最终得分中的占比。定性权重自动为 1 - 此值。",
+                        "type": "number",
+                        "value": 0.60,
+                        "min": 0.30,
+                        "max": 0.90,
+                        "step": 0.05,
+                        "unit": ""
+                    }
+                ]
+            }
+        ]
+    },
+    "ai_model": {
+        "name": "AI模型配置",
+        "description": "配置AI大语言模型的接口参数，用于护城河分析和智能选股。支持OpenAI、DeepSeek等兼容API。",
+        "groups": [
+            {
+                "group_name": "API接口配置",
+                "group_description": "大语言模型的接口地址和认证信息",
+                "params": [
+                    {
+                        "key": "api_base",
+                        "label": "API基础地址",
+                        "description": "AI服务的API地址。OpenAI: https://api.openai.com/v1，DeepSeek: https://api.deepseek.com/v1，本地: http://localhost:11434/v1",
+                        "type": "text",
+                        "value": "https://api.openai.com/v1"
+                    },
+                    {
+                        "key": "api_key",
+                        "label": "API密钥",
+                        "description": "AI服务的认证密钥。请从对应平台获取。此密钥会加密存储。",
+                        "type": "password",
+                        "value": ""
+                    },
+                    {
+                        "key": "model",
+                        "label": "模型名称",
+                        "description": "使用的模型标识。如 gpt-4、gpt-4o、gpt-3.5-turbo、deepseek-chat、qwen-plus 等。",
+                        "type": "select",
+                        "value": "gpt-4",
+                        "options": [
+                            {"label": "GPT-4", "value": "gpt-4"},
+                            {"label": "GPT-4o", "value": "gpt-4o"},
+                            {"label": "GPT-4o-mini", "value": "gpt-4o-mini"},
+                            {"label": "GPT-3.5 Turbo", "value": "gpt-3.5-turbo"},
+                            {"label": "DeepSeek Chat", "value": "deepseek-chat"},
+                            {"label": "DeepSeek Reasoner", "value": "deepseek-reasoner"},
+                            {"label": "通义千问 Plus", "value": "qwen-plus"},
+                            {"label": "通义千问 Max", "value": "qwen-max"},
+                            {"label": "自定义", "value": "custom"}
+                        ]
+                    },
+                    {
+                        "key": "custom_model",
+                        "label": "自定义模型名",
+                        "description": "当模型选择'自定义'时，在此填写实际的模型标识符。",
+                        "type": "text",
+                        "value": ""
+                    }
+                ]
+            },
+            {
+                "group_name": "模型参数",
+                "group_description": "调整AI生成的行为参数",
+                "params": [
+                    {
+                        "key": "temperature",
+                        "label": "温度(Temperature)",
+                        "description": "控制生成随机性。0=完全确定性，1=最大随机性。分析任务建议0.1-0.4。",
+                        "type": "number",
+                        "value": 0.3,
+                        "min": 0,
+                        "max": 1.0,
+                        "step": 0.1,
+                        "unit": ""
+                    },
+                    {
+                        "key": "max_tokens",
+                        "label": "最大Token数",
+                        "description": "AI单次回复的最大长度。分析报告建议2000-4000。过小会导致输出截断。",
+                        "type": "number",
+                        "value": 2000,
+                        "min": 500,
+                        "max": 8000,
+                        "step": 500,
+                        "unit": "tokens"
+                    },
+                    {
+                        "key": "timeout",
+                        "label": "请求超时时间",
+                        "description": "API请求超时时间。网络较慢时可增大。",
+                        "type": "number",
+                        "value": 60,
+                        "min": 10,
+                        "max": 300,
+                        "step": 10,
+                        "unit": "秒"
+                    }
+                ]
+            }
+        ]
+    }
+}
+
+
+# ========== 数据库操作 ==========
+
+def _ensure_params_table():
+    """确保参数存储表存在"""
+    try:
+        if not mdb.checkTableIsExist('cn_strategy_params'):
+            with mdb.get_connection() as conn:
+                with conn.cursor() as db:
+                    db.execute("""
+                        CREATE TABLE `cn_strategy_params` (
+                            `strategy_key` VARCHAR(50) NOT NULL COMMENT '策略标识',
+                            `param_key` VARCHAR(100) NOT NULL COMMENT '参数标识',
+                            `param_value` TEXT COMMENT '参数值(JSON)',
+                            `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                            PRIMARY KEY (`strategy_key`, `param_key`)
+                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='策略参数配置表';
+                    """)
+            logging.info("已创建策略参数表 cn_strategy_params")
+    except Exception as e:
+        logging.error(f"创建策略参数表异常: {e}")
+
+
+def _load_saved_params(strategy_key):
+    """从数据库加载已保存的参数"""
+    try:
+        result = mdb.executeSqlFetch(
+            "SELECT `param_key`, `param_value` FROM `cn_strategy_params` WHERE `strategy_key` = %s",
+            (strategy_key,)
+        )
+        if result:
+            return {row[0]: json.loads(row[1]) for row in result}
+    except Exception as e:
+        logging.error(f"加载策略参数异常: {e}")
+    return {}
+
+
+def _save_param(strategy_key, param_key, param_value):
+    """保存单个参数到数据库"""
+    try:
+        value_json = json.dumps(param_value, ensure_ascii=False)
+        mdb.executeSql(
+            """INSERT INTO `cn_strategy_params` (`strategy_key`, `param_key`, `param_value`)
+               VALUES (%s, %s, %s)
+               ON DUPLICATE KEY UPDATE `param_value` = %s, `updated_at` = NOW()""",
+            (strategy_key, param_key, value_json, value_json)
+        )
+        return True
+    except Exception as e:
+        logging.error(f"保存策略参数异常: {e}")
+        return False
+
+
+def _delete_strategy_params(strategy_key):
+    """删除某个策略的所有自定义参数（恢复默认）"""
+    try:
+        mdb.executeSql(
+            "DELETE FROM `cn_strategy_params` WHERE `strategy_key` = %s",
+            (strategy_key,)
+        )
+        return True
+    except Exception as e:
+        logging.error(f"删除策略参数异常: {e}")
+        return False
+
+
+def get_strategy_params(strategy_key):
+    """
+    获取策略参数（合并默认值和用户自定义值）
+    
+    Returns:
+        dict: 完整的策略参数定义，value已替换为用户设定值
+    """
+    import copy
+    if strategy_key not in DEFAULT_STRATEGY_PARAMS:
+        return None
+    
+    _ensure_params_table()
+    
+    params_def = copy.deepcopy(DEFAULT_STRATEGY_PARAMS[strategy_key])
+    saved = _load_saved_params(strategy_key)
+    
+    # 将保存的值合并到参数定义中
+    for group in params_def.get('groups', []):
+        for param in group.get('params', []):
+            if param['key'] in saved:
+                param['value'] = saved[param['key']]
+                param['is_custom'] = True
+            else:
+                param['is_custom'] = False
+    
+    return params_def
+
+
+def get_gpt_filter_values():
+    """
+    获取 GPT综合选股 的筛选参数值（用于实际筛选）
+    
+    Returns:
+        dict: {param_key: value}
+    """
+    _ensure_params_table()
+    saved = _load_saved_params("gpt_value")
+    
+    # 构建最终值：优先使用保存值，否则用默认值
+    result = {}
+    for group in DEFAULT_STRATEGY_PARAMS["gpt_value"]["groups"]:
+        for param in group["params"]:
+            key = param["key"]
+            result[key] = saved.get(key, param["value"])
+    
+    return result
+
+
+# ========== Handler ==========
+
+class GetStrategyParamsHandler(webBase.BaseHandler, ABC):
+    """获取策略参数配置"""
+    
+    def get(self):
+        self.set_header('Content-Type', 'application/json;charset=UTF-8')
+        strategy_key = self.get_argument("strategy", default=None, strip=True)
+        
+        if strategy_key is None:
+            # 返回所有可配置的策略列表
+            strategies = []
+            for key, val in DEFAULT_STRATEGY_PARAMS.items():
+                strategies.append({
+                    "key": key,
+                    "name": val["name"],
+                    "description": val["description"]
+                })
+            self.write(json.dumps({"strategies": strategies}, ensure_ascii=False))
+            return
+        
+        params = get_strategy_params(strategy_key)
+        if params is None:
+            self.set_status(404)
+            self.write(json.dumps({"error": f"未知策略: {strategy_key}"}, ensure_ascii=False))
+            return
+        
+        self.write(json.dumps(params, ensure_ascii=False))
+
+
+class SaveStrategyParamsHandler(webBase.BaseHandler, ABC):
+    """保存策略参数"""
+    
+    def post(self):
+        self.set_header('Content-Type', 'application/json;charset=UTF-8')
+        
+        try:
+            body = json.loads(self.request.body.decode('utf-8'))
+        except Exception:
+            self.set_status(400)
+            self.write(json.dumps({"error": "请求体JSON解析失败"}, ensure_ascii=False))
+            return
+        
+        strategy_key = body.get("strategy")
+        params = body.get("params", {})
+        
+        if not strategy_key or strategy_key not in DEFAULT_STRATEGY_PARAMS:
+            self.set_status(400)
+            self.write(json.dumps({"error": f"无效的策略标识: {strategy_key}"}, ensure_ascii=False))
+            return
+        
+        _ensure_params_table()
+        
+        saved_count = 0
+        for key, value in params.items():
+            if _save_param(strategy_key, key, value):
+                saved_count += 1
+        
+        self.write(json.dumps({
+            "success": True,
+            "message": f"已保存 {saved_count} 个参数",
+            "saved_count": saved_count
+        }, ensure_ascii=False))
+
+
+class ResetStrategyParamsHandler(webBase.BaseHandler, ABC):
+    """重置策略参数为默认值"""
+    
+    def post(self):
+        self.set_header('Content-Type', 'application/json;charset=UTF-8')
+        
+        try:
+            body = json.loads(self.request.body.decode('utf-8'))
+        except Exception:
+            self.set_status(400)
+            self.write(json.dumps({"error": "请求体JSON解析失败"}, ensure_ascii=False))
+            return
+        
+        strategy_key = body.get("strategy")
+        
+        if not strategy_key or strategy_key not in DEFAULT_STRATEGY_PARAMS:
+            self.set_status(400)
+            self.write(json.dumps({"error": f"无效的策略标识: {strategy_key}"}, ensure_ascii=False))
+            return
+        
+        _ensure_params_table()
+        
+        if _delete_strategy_params(strategy_key):
+            self.write(json.dumps({
+                "success": True,
+                "message": f"策略 {strategy_key} 已重置为默认值"
+            }, ensure_ascii=False))
+        else:
+            self.set_status(500)
+            self.write(json.dumps({"error": "重置失败"}, ensure_ascii=False))
+
+
+class FilterStocksHandler(webBase.BaseHandler, ABC):
+    """根据当前策略参数动态筛选股票"""
+    
+    def get(self):
+        self.set_header('Content-Type', 'application/json;charset=UTF-8')
+        strategy_key = self.get_argument("strategy", default="gpt_value", strip=True)
+        date = self.get_argument("date", default=None, strip=True)
+        
+        if strategy_key == "gpt_value":
+            self._filter_gpt_value(date)
+        else:
+            self.set_status(400)
+            self.write(json.dumps({"error": f"策略 {strategy_key} 暂不支持动态筛选"}, ensure_ascii=False))
+    
+    def _filter_gpt_value(self, date):
+        """使用用户自定义参数筛选GPT综合选股"""
+        params = get_gpt_filter_values()
+        
+        # 构建SQL WHERE条件
+        conditions = []
+        sql_params = []
+        
+        if date:
+            conditions.append("`date` = %s")
+            sql_params.append(date)
+        
+        # 资产负债率 < 上限
+        conditions.append("`debt_asset_ratio` < %s")
+        sql_params.append(params["debt_asset_ratio_max"])
+        
+        # 每股经营现金流 > 下限
+        conditions.append("`per_netcash_operate` > %s")
+        sql_params.append(params["per_netcash_operate_min"])
+        
+        # ROE >= 下限
+        conditions.append("`roe_weight` >= %s")
+        sql_params.append(params["roe_weight_min"])
+        
+        # 毛利率 >= 下限
+        conditions.append("`sale_gpr` >= %s")
+        sql_params.append(params["sale_gpr_min"])
+        
+        # 净利率 >= 下限
+        conditions.append("`sale_npr` >= %s")
+        sql_params.append(params["sale_npr_min"])
+        
+        # 营收3年CAGR > 下限
+        conditions.append("`income_growthrate_3y` > %s")
+        sql_params.append(params["income_growthrate_3y_min"])
+        
+        # 净利润3年CAGR > 下限
+        conditions.append("`netprofit_growthrate_3y` > %s")
+        sql_params.append(params["netprofit_growthrate_3y_min"])
+        
+        # PE 范围
+        conditions.append("`pe9` > %s")
+        sql_params.append(params["pe_min"])
+        
+        conditions.append("`pe9` <= %s")
+        sql_params.append(params["pe_max"])
+        
+        # 排除空值
+        not_null_fields = [
+            'debt_asset_ratio', 'per_netcash_operate', 'roe_weight',
+            'sale_gpr', 'sale_npr', 'income_growthrate_3y',
+            'netprofit_growthrate_3y', 'pe9'
+        ]
+        for field in not_null_fields:
+            conditions.append(f"`{field}` IS NOT NULL")
+        
+        where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+        
+        sql = f"""SELECT `date`, `code`, `name`, `pe9`, `roe_weight`, `sale_gpr`, 
+                         `sale_npr`, `income_growthrate_3y`, `netprofit_growthrate_3y`, 
+                         `debt_asset_ratio`, `per_netcash_operate`
+                  FROM `cn_stock_selection`{where_clause}
+                  ORDER BY `roe_weight` DESC"""
+        
+        try:
+            data = self.db.query(sql, *sql_params)
+            
+            # 列定义
+            columns = [
+                {"value": "date", "caption": "日期", "width": 110},
+                {"value": "code", "caption": "代码", "width": 90},
+                {"value": "name", "caption": "名称", "width": 100},
+                {"value": "pe9", "caption": "PE(TTM)", "width": 80},
+                {"value": "roe_weight", "caption": "ROE(%)", "width": 80},
+                {"value": "sale_gpr", "caption": "毛利率(%)", "width": 90},
+                {"value": "sale_npr", "caption": "净利率(%)", "width": 90},
+                {"value": "income_growthrate_3y", "caption": "营收3年CAGR(%)", "width": 120},
+                {"value": "netprofit_growthrate_3y", "caption": "净利润3年CAGR(%)", "width": 130},
+                {"value": "debt_asset_ratio", "caption": "资产负债率(%)", "width": 110},
+                {"value": "per_netcash_operate", "caption": "每股现金流", "width": 100}
+            ]
+            
+            # 格式化数据
+            from instock.web.dataTableHandler import MyEncoder
+            result = json.loads(json.dumps({
+                "columns": columns,
+                "data": data if data else [],
+                "total": len(data) if data else 0,
+                "params_used": params
+            }, cls=MyEncoder))
+            
+            self.write(json.dumps(result, ensure_ascii=False))
+            
+        except Exception as e:
+            error_msg = str(e)
+            if "doesn't exist" in error_msg:
+                self.write(json.dumps({
+                    "columns": [],
+                    "data": [],
+                    "total": 0,
+                    "params_used": params,
+                    "warning": "cn_stock_selection 表尚未创建，请先执行选股作业"
+                }, ensure_ascii=False))
+            else:
+                logging.error(f"FilterStocksHandler 查询异常: {e}")
+                self.set_status(500)
+                self.write(json.dumps({"error": f"查询异常: {error_msg}"}, ensure_ascii=False))

@@ -135,6 +135,37 @@ class MoatAIConfig:
     max_tokens: int = 2000
     timeout: int = 60
 
+    @classmethod
+    def from_db(cls) -> 'MoatAIConfig':
+        """从数据库加载用户配置的AI参数"""
+        try:
+            from instock.web.strategyParamsHandler import get_strategy_params
+            params = get_strategy_params("ai_model")
+            if params is None:
+                return cls()
+            
+            # 提取所有参数值到字典
+            values = {}
+            for group in params.get('groups', []):
+                for p in group.get('params', []):
+                    values[p['key']] = p['value']
+            
+            model = values.get('model', 'gpt-4')
+            if model == 'custom':
+                model = values.get('custom_model') or 'gpt-4'
+            
+            return cls(
+                api_base=values.get('api_base', 'https://api.openai.com/v1'),
+                api_key=values.get('api_key', ''),
+                model=model,
+                temperature=float(values.get('temperature', 0.3)),
+                max_tokens=int(values.get('max_tokens', 2000)),
+                timeout=int(values.get('timeout', 60))
+            )
+        except Exception as e:
+            logging.warning(f"从数据库加载AI配置失败，使用默认值: {e}")
+            return cls()
+
 
 class MoatAIService:
     """
@@ -156,7 +187,11 @@ class MoatAIService:
     """
     
     def __init__(self, config: MoatAIConfig = None, api_key: str = None):
-        self.config = config or MoatAIConfig()
+        if config:
+            self.config = config
+        else:
+            # 默认从数据库加载用户配置
+            self.config = MoatAIConfig.from_db()
         if api_key:
             self.config.api_key = api_key
     

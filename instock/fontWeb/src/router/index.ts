@@ -238,6 +238,12 @@ const routes: RouteRecordRaw[] = [
         name: 'StrategyGptValue',
         component: () => import('@/views/stock/StockData.vue'),
         meta: { title: 'GPT综合选股', tableName: 'cn_stock_strategy_gpt_value' }
+      },
+      {
+        path: 'config',
+        name: 'StrategyConfig',
+        component: () => import('@/views/strategy/StrategyConfig.vue'),
+        meta: { title: '策略参数配置', icon: 'Setting' }
       }
     ]
   },
