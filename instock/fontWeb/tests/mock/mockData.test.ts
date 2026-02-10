@@ -12,7 +12,7 @@ describe('Mock Data 测试数据验证', () => {
       expect(stock).toHaveProperty('new_price')
       expect(stock).toHaveProperty('change_rate')
       expect(stock).toHaveProperty('volume')
-      expect(stock).toHaveProperty('deal_amount')
+      expect(stock).toHaveProperty('turnover')
     })
 
     it('应该有足够的测试数据', () => {

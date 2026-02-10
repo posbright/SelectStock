@@ -42,13 +42,13 @@ describe('Utils 工具函数测试', () => {
 
   describe('formatPercent 百分比格式化', () => {
     it('应该正确格式化正数百分比', () => {
-      expect(formatPercent(0.0523)).toBe('+5.23%')
-      expect(formatPercent(0.1)).toBe('+10.00%')
+      expect(formatPercent(5.23)).toBe('+5.23%')
+      expect(formatPercent(10)).toBe('+10.00%')
     })
 
     it('应该正确格式化负数百分比', () => {
-      expect(formatPercent(-0.0234)).toBe('-2.34%')
-      expect(formatPercent(-0.1)).toBe('-10.00%')
+      expect(formatPercent(-2.34)).toBe('-2.34%')
+      expect(formatPercent(-10)).toBe('-10.00%')
     })
 
     it('应该正确格式化零', () => {

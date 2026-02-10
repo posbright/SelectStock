@@ -270,7 +270,14 @@ if pymysql is not None:
         field_types.append(FIELD_TYPE.VARCHAR)
 
     for field_type in field_types:
-        CONVERSIONS[field_type] = [(FLAG.BINARY, str)] + CONVERSIONS[field_type]
+        # pymysql < 1.0: CONVERSIONS values are lists of (flag, func) tuples
+        # pymysql >= 1.0: CONVERSIONS values are simple functions
+        if isinstance(CONVERSIONS.get(field_type), list):
+            CONVERSIONS[field_type] = [(FLAG.BINARY, str)] + CONVERSIONS[field_type]
+        else:
+            # New pymysql: charset-based decoding is handled at connection level
+            # Just ensure these field types pass through (already the default)
+            pass
 
     # Alias some common MySQL exceptions
     IntegrityError = pymysql.IntegrityError
