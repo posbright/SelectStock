@@ -14,6 +14,7 @@ from instock.core.strategy import parking_apron
 from instock.core.strategy import low_backtrace_increase
 from instock.core.strategy import keep_increasing
 from instock.core.strategy import high_tight_flag
+from instock.core.strategy.technical import value_invest_strategies
 
 __author__ = 'myh '
 __date__ = '2023/3/10 '
@@ -424,8 +425,24 @@ TABLE_CN_STOCK_STRATEGIES = [
     {'name': 'cn_stock_strategy_climax_limitdown', 'cn': '放量跌停', 'size': 70, 'func': climax_limitdown.check,
      'columns': _tmp_columns},
     {'name': 'cn_stock_strategy_low_atr', 'cn': '低ATR成长', 'size': 70, 'func': low_atr.check_low_increase,
+     'columns': _tmp_columns},
+    # 长期价值投资策略组
+    {'name': 'cn_stock_strategy_trend_pullback', 'cn': '趋势回调', 'size': 70,
+     'func': value_invest_strategies.check_trend_pullback,
+     'columns': _tmp_columns},
+    {'name': 'cn_stock_strategy_oversold_rebound', 'cn': '超跌反弹', 'size': 70,
+     'func': value_invest_strategies.check_oversold_rebound,
+     'columns': _tmp_columns},
+    {'name': 'cn_stock_strategy_breakout_confirm', 'cn': '突破确认', 'size': 70,
+     'func': value_invest_strategies.check_breakout_confirm,
      'columns': _tmp_columns}
 ]
+
+# GPT综合选股（基本面策略，不走K线策略框架，有独立的 gpt_value_data_job）
+TABLE_CN_STOCK_STRATEGY_GPT_VALUE = {
+    'name': 'cn_stock_strategy_gpt_value', 'cn': 'GPT综合选股', 'size': 70,
+    'columns': _tmp_columns
+}
 
 STOCK_KLINE_PATTERN_DATA = {'name': 'cn_stock_pattern_recognitions', 'cn': 'K线形态',
                             'columns': {
@@ -1061,19 +1078,23 @@ def get_field_cn(key, table):
 def get_field_cns(cols):
     data = []
     for k in cols:
+        # 根据列的实际类型确定数据类型标识
+        col_type = cols[k].get('type')
+        data_type = get_field_type_name(col_type) if col_type else 'string'
+        # BIGINT 类型单独标识为 bigint，用于前端区分大数值和普通数值
+        if col_type == BIGINT:
+            data_type = 'bigint'
+
+        entry = {"value": k, "caption": cols[k]['cn'], "width": cols[k]['size'],
+                 "dataType": data_type,
+                 "headerStyle": {"font": "bold 9pt Calibri", "wordWrap": "true"}}
         if k == 'code':
-            data.append({"value": k, "caption": cols[k]['cn'], "width": cols[k]['size'],
-                         "headerStyle": {"font": "bold 9pt Calibri", "wordWrap": "true"}, "style": ""})
+            entry["style"] = ""
         elif k == 'change_rate':
-            data.append({"value": k, "caption": cols[k]['cn'], "width": cols[k]['size'],
-                         "headerStyle": {"font": "bold 9pt Calibri", "wordWrap": "true"}, "conditionalFormats": [
+            entry["conditionalFormats"] = [
                     {"ruleType": "formulaRule", "formula": "@>0", "style": {"foreColor": "red"}},
-                    {"ruleType": "formulaRule", "formula": "@<0", "style": {"foreColor": "green"}}]})
-        else:
-            data.append({"value": k, "caption": cols[k]['cn'], "width": cols[k]['size'],
-                         "headerStyle": {"font": "bold 9pt Calibri", "wordWrap": "true"}})
-        # data.append({"value": k, "caption": cols[k]['cn'], "width": cols[k]['size'], "headerStyle": {"font": "bold 9pt Calibri", "wordWrap": "true"}})
-        # data.append({"name": k, "displayName": cols[k]['cn'], "size": cols[k]['size']})
+                    {"ruleType": "formulaRule", "formula": "@<0", "style": {"foreColor": "green"}}]
+        data.append(entry)
     return data
 
 

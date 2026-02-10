@@ -81,9 +81,18 @@ class GetStockDataHandler(webBase.BaseHandler, ABC):
         # 关键词搜索（代码/名称模糊匹配）
         if keyword is not None and keyword.strip():
             keyword_like = f"%{keyword.strip()}%"
-            conditions.append("(`code` LIKE %s OR `name` LIKE %s)")
-            query_params.append(keyword_like)
-            query_params.append(keyword_like)
+            has_code = 'code' in web_module_data.columns
+            has_name = 'name' in web_module_data.columns
+            if has_code and has_name:
+                conditions.append("(`code` LIKE %s OR `name` LIKE %s)")
+                query_params.append(keyword_like)
+                query_params.append(keyword_like)
+            elif has_code:
+                conditions.append("`code` LIKE %s")
+                query_params.append(keyword_like)
+            elif has_name:
+                conditions.append("`name` LIKE %s")
+                query_params.append(keyword_like)
 
         where = ""
         if conditions:

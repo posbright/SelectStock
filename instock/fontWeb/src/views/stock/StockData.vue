@@ -10,6 +10,7 @@ interface ColumnDef {
   value: string       // 字段名
   caption: string     // 中文名
   width: number       // 列宽
+  dataType?: string   // 数据类型: 'numeric' | 'bigint' | 'datetime' | 'string'
   headerStyle?: any
   conditionalFormats?: any[]
 }
@@ -32,11 +33,20 @@ const pageSize = ref(50)
 const tableName = computed(() => route.meta.tableName as string || 'cn_stock_spot')
 const pageTitle = computed(() => route.meta.title as string || '股票数据')
 
-// 动态列（排除 date, code, name, cdatetime 这些固定列）
+// 动态列（排除 date, code, name, cdatetime 这些固定列，并隐藏全为空值的列）
 const dynamicColumns = computed(() => {
-  return columnDefs.value.filter(col => 
+  const baseCols = columnDefs.value.filter(col => 
     !['date', 'code', 'name', 'cdatetime'].includes(col.value)
   )
+  // 如果没有数据行，返回所有列
+  if (tableData.value.length === 0) return baseCols
+  // 过滤掉所有值都为空/0/null 的列
+  return baseCols.filter(col => {
+    return tableData.value.some(row => {
+      const v = row[col.value]
+      return v !== null && v !== undefined && v !== '' && v !== 0
+    })
+  })
 })
 
 // 判断是否有code字段（用于显示关注按钮）
@@ -128,31 +138,62 @@ const handleAttention = async (row: any) => {
   }
 }
 
+// 根据列定义获取字段的数据类型
+const getFieldDataType = (fieldName: string): string => {
+  const col = columnDefs.value.find(c => c.value === fieldName)
+  return col?.dataType || 'string'
+}
+
+// 格式化大数值为亿/万
+const formatLargeNumber = (value: number): string => {
+  if (Math.abs(value) >= 100000000) {
+    return (value / 100000000).toFixed(2) + '亿'
+  } else if (Math.abs(value) >= 10000) {
+    return (value / 10000).toFixed(2) + '万'
+  }
+  return value.toFixed(2)
+}
+
+// 不应显示为百分比的字段（虽然名称中含有 rate/ratio）
+const nonPercentFields = new Set([
+  'volume_ratio',       // 量比，是一个倍数而非百分比
+  'per_netcash_operate', // 每股经营现金流
+  'equity_multiplier',  // 权益乘数
+  'current_ratio',      // 流动比率
+  'speed_ratio',        // 速动比率
+  'equity_ratio',       // 产权比率
+])
+
 // 格式化单元格值
 const formatCellValue = (value: any, fieldName: string) => {
   if (value === null || value === undefined) return '-'
   
-  // 涨跌幅类字段，添加百分号
-  if (fieldName.includes('rate') || fieldName.includes('ratio') || 
-      fieldName === 'amplitude' || fieldName === 'turnoverrate' ||
-      fieldName.includes('yield')) {
-    return typeof value === 'number' ? value.toFixed(2) + '%' : value
-  }
+  const dataType = getFieldDataType(fieldName)
   
-  // 大金额字段，转换为亿
-  if (fieldName.includes('amount') || fieldName === 'turnover' || 
-      fieldName.includes('cap') || fieldName.includes('shares') ||
-      fieldName.includes('netprofit') || fieldName.includes('income')) {
-    if (typeof value === 'number' && Math.abs(value) >= 100000000) {
-      return (value / 100000000).toFixed(2) + '亿'
-    } else if (typeof value === 'number' && Math.abs(value) >= 10000) {
-      return (value / 10000).toFixed(2) + '万'
+  // bigint 类型：大数值字段（成交额、市值、净利润、营业收入、股本等），转换为亿/万
+  if (dataType === 'bigint') {
+    if (typeof value === 'number') {
+      return formatLargeNumber(value)
     }
+    return value
   }
   
   // 成交量转换为万
   if (fieldName === 'volume') {
     return typeof value === 'number' ? (value / 10000).toFixed(2) + '万' : value
+  }
+  
+  // 百分比类字段：涨跌幅、换手率、振幅、各类比率/占比/增长率等
+  // 但排除量比、流动比率等非百分比字段
+  if (!nonPercentFields.has(fieldName)) {
+    if (fieldName.includes('rate') || fieldName.includes('ratio') ||
+        fieldName === 'amplitude' || fieldName === 'turnoverrate' ||
+        fieldName.includes('yield') || fieldName.includes('growthrate') ||
+        fieldName === 'sale_gpr' || fieldName === 'sale_npr' ||
+        fieldName === 'roe_weight' || fieldName === 'jroa' || fieldName === 'roic' ||
+        fieldName === 'zxgxl' || fieldName === 'dtsyl') {
+      return typeof value === 'number' ? value.toFixed(2) + '%' : value
+    }
   }
   
   // 浮点数保留2位小数

@@ -1078,19 +1078,23 @@ def get_field_cn(key, table):
 def get_field_cns(cols):
     data = []
     for k in cols:
+        # 根据列的实际类型确定数据类型标识
+        col_type = cols[k].get('type')
+        data_type = get_field_type_name(col_type) if col_type else 'string'
+        # BIGINT 类型单独标识为 bigint，用于前端区分大数值和普通数值
+        if col_type == BIGINT:
+            data_type = 'bigint'
+
+        entry = {"value": k, "caption": cols[k]['cn'], "width": cols[k]['size'],
+                 "dataType": data_type,
+                 "headerStyle": {"font": "bold 9pt Calibri", "wordWrap": "true"}}
         if k == 'code':
-            data.append({"value": k, "caption": cols[k]['cn'], "width": cols[k]['size'],
-                         "headerStyle": {"font": "bold 9pt Calibri", "wordWrap": "true"}, "style": ""})
+            entry["style"] = ""
         elif k == 'change_rate':
-            data.append({"value": k, "caption": cols[k]['cn'], "width": cols[k]['size'],
-                         "headerStyle": {"font": "bold 9pt Calibri", "wordWrap": "true"}, "conditionalFormats": [
+            entry["conditionalFormats"] = [
                     {"ruleType": "formulaRule", "formula": "@>0", "style": {"foreColor": "red"}},
-                    {"ruleType": "formulaRule", "formula": "@<0", "style": {"foreColor": "green"}}]})
-        else:
-            data.append({"value": k, "caption": cols[k]['cn'], "width": cols[k]['size'],
-                         "headerStyle": {"font": "bold 9pt Calibri", "wordWrap": "true"}})
-        # data.append({"value": k, "caption": cols[k]['cn'], "width": cols[k]['size'], "headerStyle": {"font": "bold 9pt Calibri", "wordWrap": "true"}})
-        # data.append({"name": k, "displayName": cols[k]['cn'], "size": cols[k]['size']})
+                    {"ruleType": "formulaRule", "formula": "@<0", "style": {"foreColor": "green"}}]
+        data.append(entry)
     return data
 
 
