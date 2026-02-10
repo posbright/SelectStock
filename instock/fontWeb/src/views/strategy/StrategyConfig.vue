@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getStrategyList,
@@ -13,11 +13,12 @@ import { toggleAttention } from '@/api/stock'
 import dayjs from 'dayjs'
 import type { ParamGroup, StrategyListItem } from '@/api/strategy'
 
+const route = useRoute()
 const router = useRouter()
 
 // ========== 状态 ==========
 const strategies = ref<StrategyListItem[]>([])
-const activeStrategy = ref('gpt_value')
+const activeStrategy = ref((route.meta?.defaultStrategy as string) || 'gpt_value')
 const strategyName = ref('')
 const strategyDescription = ref('')
 const paramGroups = ref<ParamGroup[]>([])
@@ -237,6 +238,17 @@ watch(activeStrategy, () => {
   loadParams()
   showResult.value = false
 })
+
+// 监听路由变化（在策略参数配置和AI模型设置间切换时更新）
+watch(
+  () => route.meta?.defaultStrategy,
+  (newStrategy) => {
+    if (newStrategy && typeof newStrategy === 'string' && newStrategy !== activeStrategy.value) {
+      activeStrategy.value = newStrategy
+      showResult.value = false
+    }
+  }
+)
 
 onMounted(() => {
   loadStrategies()
