@@ -27,15 +27,29 @@ import instock.core.crawling.etf_sina as esa  # ETF新浪财经备选
 import instock.core.crawling.stock_fund_sina as sfs  # 新浪财经资金流向
 import instock.core.crawling.stock_hist_sina as shs  # 新浪财经历史K线
 import time
+import random
 
 __author__ = 'myh '
 
 # 数据源重试配置（支持环境变量覆盖）
-DATA_SOURCE_MAX_RETRIES = int(os.environ.get('DATA_SOURCE_MAX_RETRIES', 3))  # 最大重试次数
-DATA_SOURCE_RETRY_INTERVAL = int(os.environ.get('DATA_SOURCE_RETRY_INTERVAL', 60))  # 重试间隔（秒）
+DATA_SOURCE_MAX_RETRIES = int(os.environ.get('DATA_SOURCE_MAX_RETRIES', 2))  # 单个数据源最大重试次数（失败后优先换源）
+DATA_SOURCE_RETRY_INTERVAL = int(os.environ.get('DATA_SOURCE_RETRY_INTERVAL', 90))  # 基础重试间隔（秒），实际使用指数退避
 
 # 历史数据配置（支持环境变量覆盖）
 HIST_DATA_DEFAULT_YEARS = int(os.environ.get('HIST_DATA_DEFAULT_YEARS', 20))  # 默认获取历史数据年数
+
+
+def _retry_sleep(retry_count, base_interval=None):
+    """
+    指数退避重试等待
+    第1次重试等待 base_interval 秒，第2次等待 base_interval*2 秒，以此类推
+    加入随机抖动避免多线程同步重试（惊群效应）
+    """
+    if base_interval is None:
+        base_interval = DATA_SOURCE_RETRY_INTERVAL
+    delay = base_interval * (2 ** retry_count) + random.uniform(5, 15)
+    logging.info(f"等待{delay:.0f}秒后重试...")
+    time.sleep(delay)
 
 __date__ = '2023/3/10 '
 
@@ -101,22 +115,15 @@ def fetch_etfs(date):
     ]
     
     for source_name, fetch_func in data_sources:
-        for retry in range(DATA_SOURCE_MAX_RETRIES):
-            try:
-                logging.info(f"尝试从{source_name}获取ETF数据... (第{retry + 1}次)")
-                data = fetch_func()
-                if data is not None and len(data.index) > 0:
-                    source = source_name
-                    break
-            except Exception as e:
-                logging.warning(f"{source_name}ETF数据获取失败 (第{retry + 1}次)：{e}")
-                data = None
-                if retry < DATA_SOURCE_MAX_RETRIES - 1:
-                    logging.info(f"等待{DATA_SOURCE_RETRY_INTERVAL}秒后重试...")
-                    time.sleep(DATA_SOURCE_RETRY_INTERVAL)
-        
-        if data is not None and len(data.index) > 0:
-            break
+        try:
+            logging.info(f"尝试从{source_name}获取ETF数据...")
+            data = fetch_func()
+            if data is not None and len(data.index) > 0:
+                source = source_name
+                break
+        except Exception as e:
+            logging.warning(f"{source_name}ETF数据获取失败：{e}，切换下一个数据源")
+            data = None
     
     # 所有数据源都失败
     if data is None or len(data.index) == 0:
@@ -151,22 +158,15 @@ def fetch_stocks(date):
     ]
     
     for source_name, fetch_func in data_sources:
-        for retry in range(DATA_SOURCE_MAX_RETRIES):
-            try:
-                logging.info(f"尝试从{source_name}获取股票数据... (第{retry + 1}次)")
-                data = fetch_func()
-                if data is not None and len(data.index) > 0:
-                    source = source_name
-                    break
-            except Exception as e:
-                logging.warning(f"{source_name}数据获取失败 (第{retry + 1}次)：{e}")
-                data = None
-                if retry < DATA_SOURCE_MAX_RETRIES - 1:
-                    logging.info(f"等待{DATA_SOURCE_RETRY_INTERVAL}秒后重试...")
-                    time.sleep(DATA_SOURCE_RETRY_INTERVAL)
-        
-        if data is not None and len(data.index) > 0:
-            break
+        try:
+            logging.info(f"尝试从{source_name}获取股票数据...")
+            data = fetch_func()
+            if data is not None and len(data.index) > 0:
+                source = source_name
+                break
+        except Exception as e:
+            logging.warning(f"{source_name}数据获取失败：{e}，切换下一个数据源")
+            data = None
     
     # 所有数据源都失败
     if data is None or len(data.index) == 0:
@@ -201,22 +201,15 @@ def fetch_stock_selection():
     ]
     
     for source_name, fetch_func in data_sources:
-        for retry in range(DATA_SOURCE_MAX_RETRIES):
-            try:
-                logging.info(f"尝试从{source_name}获取选股数据... (第{retry + 1}次)")
-                data = fetch_func()
-                if data is not None and len(data.index) > 0:
-                    source = source_name
-                    break
-            except Exception as e:
-                logging.warning(f"{source_name}选股数据获取失败 (第{retry + 1}次)：{e}")
-                data = None
-                if retry < DATA_SOURCE_MAX_RETRIES - 1:
-                    logging.info(f"等待{DATA_SOURCE_RETRY_INTERVAL}秒后重试...")
-                    time.sleep(DATA_SOURCE_RETRY_INTERVAL)
-        
-        if data is not None and len(data.index) > 0:
-            break
+        try:
+            logging.info(f"尝试从{source_name}获取选股数据...")
+            data = fetch_func()
+            if data is not None and len(data.index) > 0:
+                source = source_name
+                break
+        except Exception as e:
+            logging.warning(f"{source_name}选股数据获取失败：{e}，切换下一个数据源")
+            data = None
     
     if data is None or len(data.index) == 0:
         logging.error("所有选股数据源均获取失败")
@@ -287,22 +280,15 @@ def fetch_stocks_fund_flow(index):
     ]
     
     for source_name, fetch_func in data_sources:
-        for retry in range(DATA_SOURCE_MAX_RETRIES):
-            try:
-                logging.info(f"尝试从{source_name}获取资金流向数据... (第{retry + 1}次)")
-                data = fetch_func()
-                if data is not None and len(data.index) > 0:
-                    source = source_name
-                    break
-            except Exception as e:
-                logging.warning(f"{source_name}资金流向数据获取失败 (第{retry + 1}次)：{e}")
-                data = None
-                if retry < DATA_SOURCE_MAX_RETRIES - 1:
-                    logging.info(f"等待{DATA_SOURCE_RETRY_INTERVAL}秒后重试...")
-                    time.sleep(DATA_SOURCE_RETRY_INTERVAL)
-        
-        if data is not None and len(data.index) > 0:
-            break
+        try:
+            logging.info(f"尝试从{source_name}获取资金流向数据...")
+            data = fetch_func()
+            if data is not None and len(data.index) > 0:
+                source = source_name
+                break
+        except Exception as e:
+            logging.warning(f"{source_name}资金流向数据获取失败：{e}，切换下一个数据源")
+            data = None
     
     if data is None or len(data.index) == 0:
         logging.error("所有资金流向数据源均获取失败")
@@ -395,22 +381,15 @@ def fetch_stock_lhb_data(date, count=12):
     ]
     
     for source_name, fetch_func in data_sources:
-        for retry in range(DATA_SOURCE_MAX_RETRIES):
-            try:
-                logging.info(f"尝试从{source_name}获取龙虎榜数据... (第{retry + 1}次)")
-                data = fetch_func()
-                if data is not None and len(data.index) > 0:
-                    source = source_name
-                    break
-            except Exception as e:
-                logging.warning(f"{source_name}龙虎榜数据获取失败 (第{retry + 1}次)：{e}")
-                data = None
-                if retry < DATA_SOURCE_MAX_RETRIES - 1:
-                    logging.info(f"等待{DATA_SOURCE_RETRY_INTERVAL}秒后重试...")
-                    time.sleep(DATA_SOURCE_RETRY_INTERVAL)
-        
-        if data is not None and len(data.index) > 0:
-            break
+        try:
+            logging.info(f"尝试从{source_name}获取龙虎榜数据...")
+            data = fetch_func()
+            if data is not None and len(data.index) > 0:
+                source = source_name
+                break
+        except Exception as e:
+            logging.warning(f"{source_name}龙虎榜数据获取失败：{e}，切换下一个数据源")
+            data = None
     
     if data is None or len(data.index) == 0:
         logging.error("所有龙虎榜数据源均获取失败")
@@ -651,15 +630,67 @@ def _write_cache_meta(code, last_date, adjust=''):
         pass
 
 
+def _fetch_from_sources(code, fetch_start, date_end, adjust=''):
+    """
+    从多个数据源获取K线数据（东方财富 → 新浪财经）
+    
+    参数：
+        code: 股票代码
+        fetch_start: 起始日期 YYYYMMDD
+        date_end: 结束日期 YYYYMMDD
+        adjust: 复权类型
+    返回：
+        DataFrame 或 None
+    """
+    data_sources = [
+        ('东方财富', lambda: she.stock_zh_a_hist(
+            symbol=code, period="daily",
+            start_date=fetch_start, end_date=date_end, adjust=adjust
+        )),
+        ('新浪财经', lambda: shs.stock_zh_a_hist_sina(
+            symbol=code, period="daily",
+            start_date=fetch_start, end_date=date_end, adjust=adjust
+        ))
+    ]
+
+    for source_name, fetch_func in data_sources:
+        for retry in range(DATA_SOURCE_MAX_RETRIES):
+            try:
+                new_data = fetch_func()
+                if new_data is not None and len(new_data) > 0:
+                    if source_name == '东方财富':
+                        new_data.columns = tuple(tbs.CN_STOCK_HIST_DATA['columns'])
+                    logging.debug(f"从{source_name}成功获取数据: {code} ({fetch_start}-{date_end})")
+                    return new_data
+            except Exception as e:
+                logging.warning(f"从{source_name}获取数据失败(尝试{retry+1}/{DATA_SOURCE_MAX_RETRIES}): {code} - {e}")
+                if retry < DATA_SOURCE_MAX_RETRIES - 1:
+                    _retry_sleep(retry)
+
+        # 当前数据源所有重试都失败，尝试下一个
+    return None
+
+
+def _to_date_str(d):
+    """将日期转为 YYYYMMDD 格式字符串"""
+    if isinstance(d, str):
+        return d.replace("-", "")
+    return d.strftime("%Y%m%d")
+
+
+def _to_dash_date(yyyymmdd):
+    """将 YYYYMMDD 转为 YYYY-MM-DD"""
+    return f"{yyyymmdd[:4]}-{yyyymmdd[4:6]}-{yyyymmdd[6:]}"
+
+
 def stock_hist_cache_incremental(code, date_start, date_end, is_cache=True, adjust=''):
     """
     增量更新的股票历史数据缓存（多数据源支持）
     
-    逻辑：
-    1. 检查是否有缓存
-    2. 如果有缓存，检查缓存的最后日期
-    3. 只获取缓存最后日期之后的增量数据
-    4. 合并增量数据到缓存
+    支持三种增量场景：
+    1. 尾部追加：缓存最后日期 < date_end，从缓存末尾向后拉取
+    2. 向前补数据：date_start < 缓存最早日期，从 date_start 到缓存起始拉取
+    3. 无缓存：全量拉取 date_start ~ date_end
     
     数据源优先级：东方财富 → 新浪财经（东方财富更稳定）
     
@@ -674,119 +705,81 @@ def stock_hist_cache_incremental(code, date_start, date_end, is_cache=True, adju
     
     try:
         cached_data = None
+        cache_first_date = None
         cache_last_date = None
         
-        # 检查缓存是否存在
+        # 1. 读取缓存
         if is_cache and os.path.isfile(cache_file):
             try:
                 cached_data = pd.read_pickle(cache_file, compression="gzip")
-                if cached_data is not None and len(cached_data) > 0:
-                    # 获取缓存中的最后日期
-                    if 'date' in cached_data.columns:
-                        cache_last_date = cached_data['date'].max()
-                        if isinstance(cache_last_date, str):
-                            cache_last_date = cache_last_date.replace("-", "")
-                        else:
-                            cache_last_date = cache_last_date.strftime("%Y%m%d")
+                if cached_data is not None and len(cached_data) > 0 and 'date' in cached_data.columns:
+                    cache_first_date = _to_date_str(cached_data['date'].min())
+                    cache_last_date = _to_date_str(cached_data['date'].max())
+                else:
+                    cached_data = None
             except Exception as e:
                 logging.warning(f"读取缓存失败，将重新获取: {code} - {e}")
                 cached_data = None
         
-        # 确定需要获取的日期范围
-        fetch_start = date_start
-        need_fetch = True
+        # 2. 确定需要拉取的区间
+        fetch_ranges = []  # [(start, end), ...]
         
-        if cached_data is not None and cache_last_date is not None:
-            # 如果缓存的最后日期 >= 请求的结束日期，直接返回缓存
-            if cache_last_date >= date_end:
-                # 过滤并返回请求范围内的数据
-                result = cached_data[
-                    (cached_data['date'] >= date_start[:4] + '-' + date_start[4:6] + '-' + date_start[6:]) &
-                    (cached_data['date'] <= date_end[:4] + '-' + date_end[4:6] + '-' + date_end[6:])
-                ].copy()
-                return result if len(result) > 0 else None
+        if cached_data is not None:
+            # 2a. 向前补数据：请求起始日期 < 缓存最早日期
+            if date_start < cache_first_date:
+                # 从 date_start 拉到缓存最早日期的前一天
+                first_date_obj = datetime.datetime.strptime(cache_first_date, "%Y%m%d")
+                prev_day = (first_date_obj - datetime.timedelta(days=1)).strftime("%Y%m%d")
+                if date_start <= prev_day:
+                    fetch_ranges.append((date_start, prev_day))
             
-            # 只需要获取增量数据
-            # 从缓存最后日期的下一天开始获取
-            last_date_obj = datetime.datetime.strptime(cache_last_date, "%Y%m%d")
-            next_day = (last_date_obj + datetime.timedelta(days=1)).strftime("%Y%m%d")
-            fetch_start = next_day
-            
-            # 如果增量起始日期 > 结束日期，说明不需要获取新数据
-            if fetch_start > date_end:
-                need_fetch = False
-        
-        new_data = None
-        if need_fetch:
-            # 多数据源获取，优先级：东方财富 → 新浪财经
-            # 注：新浪财经经常返回456限流错误，东方财富更稳定
-            data_sources = [
-                ('东方财富', lambda: she.stock_zh_a_hist(
-                    symbol=code, 
-                    period="daily", 
-                    start_date=fetch_start, 
-                    end_date=date_end,
-                    adjust=adjust
-                )),
-                ('新浪财经', lambda: shs.stock_zh_a_hist_sina(
-                    symbol=code, 
-                    period="daily", 
-                    start_date=fetch_start, 
-                    end_date=date_end,
-                    adjust=adjust
-                ))
-            ]
-            
-            for source_name, fetch_func in data_sources:
-                for retry in range(DATA_SOURCE_MAX_RETRIES):
-                    try:
-                        new_data = fetch_func()
-                        if new_data is not None and len(new_data) > 0:
-                            # 东方财富需要转换列名，新浪数据已经是标准格式
-                            if source_name == '东方财富':
-                                new_data.columns = tuple(tbs.CN_STOCK_HIST_DATA['columns'])
-                            logging.debug(f"从{source_name}成功获取增量数据: {code}")
-                            break
-                    except Exception as e:
-                        logging.warning(f"从{source_name}获取增量数据失败(尝试{retry+1}/{DATA_SOURCE_MAX_RETRIES}): {code} - {e}")
-                        if retry < DATA_SOURCE_MAX_RETRIES - 1:
-                            time.sleep(DATA_SOURCE_RETRY_INTERVAL)
-                        new_data = None
-                
-                if new_data is not None and len(new_data) > 0:
-                    break
-        
-        # 合并数据
-        if cached_data is not None and new_data is not None and len(new_data) > 0:
-            # 合并缓存和新数据
-            combined_data = pd.concat([cached_data, new_data], ignore_index=True)
-            combined_data = combined_data.drop_duplicates(subset=['date'], keep='last')
-            combined_data = combined_data.sort_values(by='date').reset_index(drop=True)
-        elif cached_data is not None:
-            combined_data = cached_data
-        elif new_data is not None and len(new_data) > 0:
-            combined_data = new_data
+            # 2b. 尾部追加：缓存最后日期 < 请求结束日期
+            if cache_last_date < date_end:
+                last_date_obj = datetime.datetime.strptime(cache_last_date, "%Y%m%d")
+                next_day = (last_date_obj + datetime.timedelta(days=1)).strftime("%Y%m%d")
+                if next_day <= date_end:
+                    fetch_ranges.append((next_day, date_end))
         else:
+            # 2c. 无缓存，全量拉取
+            fetch_ranges.append((date_start, date_end))
+        
+        # 3. 执行数据拉取
+        all_new_data = []
+        for fetch_start, fetch_end in fetch_ranges:
+            new_data = _fetch_from_sources(code, fetch_start, fetch_end, adjust)
+            if new_data is not None and len(new_data) > 0:
+                all_new_data.append(new_data)
+        
+        # 4. 合并数据
+        parts = []
+        if cached_data is not None:
+            parts.append(cached_data)
+        parts.extend(all_new_data)
+        
+        if not parts:
             return None
         
-        # 保存更新后的缓存
-        if is_cache and combined_data is not None and len(combined_data) > 0:
+        if len(parts) == 1:
+            combined_data = parts[0]
+        else:
+            combined_data = pd.concat(parts, ignore_index=True)
+            combined_data = combined_data.drop_duplicates(subset=['date'], keep='last')
+            combined_data = combined_data.sort_values(by='date').reset_index(drop=True)
+        
+        # 5. 保存更新后的缓存（有新数据时才写入）
+        if is_cache and len(all_new_data) > 0 and combined_data is not None and len(combined_data) > 0:
             try:
                 combined_data.to_pickle(cache_file, compression="gzip")
-                # 更新元数据
                 if 'date' in combined_data.columns:
-                    last_date = combined_data['date'].max()
-                    if isinstance(last_date, str):
-                        _write_cache_meta(code, last_date.replace("-", ""), adjust)
-                    else:
-                        _write_cache_meta(code, last_date.strftime("%Y%m%d"), adjust)
+                    last_date = _to_date_str(combined_data['date'].max())
+                    _write_cache_meta(code, last_date, adjust)
             except Exception as e:
                 logging.warning(f"保存缓存失败: {code} - {e}")
         
-        # 过滤并返回请求范围内的数据
+        # 6. 过滤并返回请求范围内的数据
         result = combined_data[
-            (combined_data['date'] >= date_start[:4] + '-' + date_start[4:6] + '-' + date_start[6:]) &
-            (combined_data['date'] <= date_end[:4] + '-' + date_end[4:6] + '-' + date_end[6:])
+            (combined_data['date'] >= _to_dash_date(date_start)) &
+            (combined_data['date'] <= _to_dash_date(date_end))
         ].copy()
         
         return result if len(result) > 0 else None

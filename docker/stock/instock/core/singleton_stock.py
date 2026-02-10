@@ -26,7 +26,7 @@ class stock_data(metaclass=singleton_type):
 
 # 读取股票历史数据（支持增量更新和自定义时间范围）
 class stock_hist_data(metaclass=singleton_type):
-    def __init__(self, date=None, stocks=None, workers=16, years=3, date_start=None, date_end=None):
+    def __init__(self, date=None, stocks=None, workers=8, years=3, date_start=None, date_end=None):
         """
         初始化股票历史数据
         

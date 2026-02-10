@@ -116,7 +116,7 @@ def stock_zh_a_hist_sina(
             "datalen": datalen
         }
         
-        time.sleep(random.uniform(0.1, 0.3))  # 添加随机延迟
+        time.sleep(random.uniform(3, 6))  # 添加随机延迟（防止456限流）
         
         response = requests.get(url, params=params, headers=HEADERS, timeout=30)
         response.raise_for_status()
@@ -251,7 +251,7 @@ def stock_zh_a_hist_sina_v2(
             "datalen": datalen
         }
         
-        time.sleep(random.uniform(0.1, 0.3))
+        time.sleep(random.uniform(3, 6))  # 添加随机延迟（防止456限流）
         
         response = requests.get(url, params=params, headers=HEADERS, timeout=30)
         response.raise_for_status()

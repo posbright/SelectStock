@@ -60,7 +60,7 @@ class eastmoney_fetcher:
         session.headers.update(headers)
         return session
 
-    def make_request(self, url, params=None, retry=3, timeout=30):
+    def make_request(self, url, params=None, retry=2, timeout=30):
         """
         发送请求
         :param url: 请求URL
@@ -75,6 +75,7 @@ class eastmoney_fetcher:
             'Accept': '*/*',
             'Accept-Language': 'zh-CN,zh;q=0.9',
         }
+        
         for i in range(retry):
             try:
                 response = requests.get(

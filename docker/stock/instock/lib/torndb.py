@@ -270,8 +270,7 @@ if pymysql is not None:
         field_types.append(FIELD_TYPE.VARCHAR)
 
     for field_type in field_types:
-        # CONVERSIONS[field_type] = [(FLAG.BINARY, str)] + CONVERSIONS[field_type]
-        CONVERSIONS[field_type] = [(FLAG.BINARY, str)].append(CONVERSIONS[field_type])
+        CONVERSIONS[field_type] = [(FLAG.BINARY, str)] + CONVERSIONS[field_type]
 
     # Alias some common MySQL exceptions
     IntegrityError = pymysql.IntegrityError

@@ -15,6 +15,7 @@ class stock_trade_date(metaclass=singleton_type):
         try:
             self.data = stf.fetch_stocks_trade_date()
         except Exception as e:
+            self.data = None
             logging.error(f"singleton.stock_trade_date处理异常：{e}")
 
     def get_data(self):

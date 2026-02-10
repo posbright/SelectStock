@@ -40,7 +40,7 @@ if _db_port is not None:
 _encoded_password = quote_plus(db_password)
 MYSQL_CONN_URL = "mysql+pymysql://%s:%s@%s:%s/%s?charset=%s" % (
     db_user, _encoded_password, db_host, db_port, db_database, db_charset)
-logging.info(f"数据库链接信息：{ MYSQL_CONN_URL}")
+logging.info(f"数据库链接信息：mysql+pymysql://{db_user}:***@{db_host}:{db_port}/{db_database}?charset={db_charset}")
 
 MYSQL_CONN_DBAPI = {'host': db_host, 'user': db_user, 'password': db_password, 'database': db_database,
                     'charset': db_charset, 'port': db_port, 'autocommit': True}
@@ -49,9 +49,22 @@ MYSQL_CONN_TORNDB = {'host': f'{db_host}:{str(db_port)}', 'user': db_user, 'pass
                      'database': db_database, 'charset': db_charset, 'max_idle_time': 3600, 'connect_timeout': 1000}
 
 
-# 通过数据库链接 engine
+# 通过数据库链接 engine（单例模式，避免每次调用创建新连接池）
+# 2核2G服务器优化：pool_size=2, max_overflow=3, 最多5个连接
+_engine_instance = None
+
+
 def engine():
-    return create_engine(MYSQL_CONN_URL)
+    global _engine_instance
+    if _engine_instance is None:
+        _engine_instance = create_engine(
+            MYSQL_CONN_URL,
+            pool_size=2,
+            max_overflow=3,
+            pool_recycle=1800,
+            pool_pre_ping=True
+        )
+    return _engine_instance
 
 
 def engine_to_db(to_db):
@@ -64,8 +77,8 @@ def get_connection():
     try:
         return pymysql.connect(**MYSQL_CONN_DBAPI)
     except Exception as e:
-        logging.error(f"database.conn_not_cursor处理异常：{MYSQL_CONN_DBAPI}{e}")
-    return None
+        logging.error(f"database.get_connection处理异常：{e}")
+        raise
 
 
 # 定义通用方法函数，插入数据库表，并创建数据库主键，保证重跑数据的时候索引唯一。
@@ -122,54 +135,50 @@ def update_db_from_df(data, table_name, where):
     update_string = f'UPDATE `{table_name}` set '
     where_string = ' where '
     cols = tuple(data.columns)
-    with get_connection() as conn:
-        with conn.cursor() as db:
-            try:
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as db:
                 for row in data.values:
-                    sql = update_string
-                    sql_where = where_string
+                    set_parts = []
+                    set_params = []
+                    where_parts = []
+                    where_params = []
                     for index, col in enumerate(cols):
+                        val = row[index]
+                        # 检测 None 和 NaN（NaN != NaN）
+                        is_null = val is None or (val != val)
                         if col in where:
-                            if len(sql_where) == len(where_string):
-                                if type(row[index]) == str:
-                                    sql_where = f'''{sql_where}`{col}` = '{row[index]}' '''
-                                else:
-                                    sql_where = f'''{sql_where}`{col}` = {row[index]} '''
-                            else:
-                                if type(row[index]) == str:
-                                    sql_where = f'''{sql_where} and `{col}` = '{row[index]}' '''
-                                else:
-                                    sql_where = f'''{sql_where} and `{col}` = {row[index]} '''
+                            where_parts.append(f'`{col}` = %s')
+                            where_params.append(val)
                         else:
-                            if type(row[index]) == str:
-                                if row[index] is None or row[index] != row[index]:
-                                    sql = f'''{sql}`{col}` = NULL, '''
-                                else:
-                                    sql = f'''{sql}`{col}` = '{row[index]}', '''
+                            if is_null:
+                                set_parts.append(f'`{col}` = NULL')
                             else:
-                                if row[index] is None or row[index] != row[index]:
-                                    sql = f'''{sql}`{col}` = NULL, '''
-                                else:
-                                    sql = f'''{sql}`{col}` = {row[index]}, '''
-                    sql = f'{sql[:-2]}{sql_where}'
-                    db.execute(sql)
-            except Exception as e:
-                logging.error(f"database.update_db_from_df处理异常：{sql}{e}")
+                                set_parts.append(f'`{col}` = %s')
+                                set_params.append(val)
+                    if not set_parts or not where_parts:
+                        continue
+                    sql = update_string + ', '.join(set_parts) + where_string + ' and '.join(where_parts)
+                    params = set_params + where_params
+                    db.execute(sql, params)
+    except Exception as e:
+        logging.error(f"database.update_db_from_df处理异常：{table_name}表{e}")
 
 
 # 检查表是否存在
 def checkTableIsExist(tableName):
-    with get_connection() as conn:
-        with conn.cursor() as db:
-            db.execute("""
-                SELECT COUNT(*)
-                FROM information_schema.tables
-                WHERE table_name = '{0}'
-                """.format(tableName.replace('\'', '\'\'')))
-            if db.fetchone()[0] == 1:
-                return True
-    return False
-
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as db:
+                db.execute("""
+                    SELECT COUNT(*)
+                    FROM information_schema.tables
+                    WHERE table_name = %s
+                    """, (tableName,))
+                if db.fetchone()[0] == 1:
+                    return True
+    except Exception as e:
+        logging.error(f"database.checkTableIsExist处理异常：{e}")
 
 # 增删改数据
 def executeSql(sql, params=()):

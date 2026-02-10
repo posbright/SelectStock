@@ -75,6 +75,7 @@ def is_pause(now_time):
     for b, e in PAUSE_TIME:
         if b <= now < e:
             return True
+    return False
 
 
 CONTINUE_TIME = (
