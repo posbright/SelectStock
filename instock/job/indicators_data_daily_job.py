@@ -23,11 +23,15 @@ __date__ = '2023/3/10 '
 
 def prepare(date):
     try:
+        logging.info(f"indicators_data_daily_job开始执行：{date}")
         stocks_data = stock_hist_data(date=date).get_data()
         if stocks_data is None:
+            logging.warning("indicators_data_daily_job：stock_hist_data返回None，跳过")
             return
+        logging.info(f"indicators_data_daily_job获取到{len(stocks_data)}只股票历史数据，开始计算指标")
         results = run_check(stocks_data, date=date)
         if results is None:
+            logging.warning("indicators_data_daily_job：run_check返回None，无指标数据")
             return
 
         table_name = tbs.TABLE_CN_STOCK_INDICATORS['name']

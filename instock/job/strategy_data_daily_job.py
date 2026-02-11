@@ -22,8 +22,10 @@ __date__ = '2023/3/10 '
 
 def prepare(date, strategy):
     try:
+        logging.info(f"strategy_data_daily_job开始执行：{strategy.get('name', strategy)}，日期{date}")
         stocks_data = stock_hist_data(date=date).get_data()
         if stocks_data is None:
+            logging.warning(f"strategy_data_daily_job：stock_hist_data返回None，跳过策略{strategy.get('name', strategy)}")
             return
         table_name = strategy['name']
         strategy_func = strategy['func']

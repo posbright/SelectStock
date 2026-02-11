@@ -309,7 +309,8 @@ def fetch_stocks_sector_fund_flow(index_sector, index_indicator):
     try:
         cn_flow = tbs.CN_STOCK_SECTOR_FUND_FLOW[1][index_indicator]
         data = sff.stock_sector_fund_flow_rank(indicator=cn_flow['cn'], sector_type=tbs.CN_STOCK_SECTOR_FUND_FLOW[0][index_sector])
-        if data is None or len(data.index) == 0:
+        if data is None or data.empty:
+            logging.warning(f"板块资金流向数据为空：sector={index_sector}, indicator={cn_flow['cn']}")
             return None
         data.columns = list(cn_flow['columns'])
         return data

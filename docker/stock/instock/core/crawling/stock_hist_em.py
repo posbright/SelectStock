@@ -24,7 +24,7 @@ def stock_zh_a_spot_em() -> pd.DataFrame:
     :return: 实时行情
     :rtype: pandas.DataFrame
     """
-    url = "http://push2.eastmoney.com/api/qt/clist/get"
+    url = "https://push2.eastmoney.com/api/qt/clist/get"
     page_size = 50
     page_current = 1
     params = {
@@ -188,43 +188,57 @@ def stock_zh_a_spot_em() -> pd.DataFrame:
     return temp_df
 
 
+def code_id_map_em() -> dict:
+    """
+    东方财富-股票和市场代码映射
+    
+    使用代码前缀规则推断市场ID（无需网络请求，秒级完成）:
+    - 6xx: 上交所 (market_id=1)
+    - 0xx, 3xx: 深交所 (market_id=0)
+    - 4xx, 8xx: 北交所 (market_id=0)
+    
+    :return: 股票代码 -> 市场ID 的映射字典
+    :rtype: dict
+    """
+    return _CodeIdMapProxy()
+
+
 class _CodeIdMapProxy(dict):
     """
-    根据股票代码前缀推断市场ID的代理字典，替代原有的网络请求方式。
-    规则：6xx -> 上交所(1)，0xx/3xx -> 深交所(0)，4xx/8xx -> 北交所(0)
+    通过代码前缀规则推断市场ID的代理字典。
+    避免向东方财富API发送数百次分页请求来构建完整映射表。
+    
+    规则：
+    - 6开头 → 上交所 (1)
+    - 0、3开头 → 深交所 (0)
+    - 4、8开头 → 北交所 (0)
     """
-
+    
     def __getitem__(self, symbol):
         return self._get_market_id(symbol)
-
+    
     def __contains__(self, symbol):
+        # 所有6位数字代码都视为有效
         return isinstance(symbol, str) and len(symbol) == 6 and symbol.isdigit()
-
+    
     def get(self, symbol, default=None):
         try:
             return self._get_market_id(symbol)
         except KeyError:
             return default
-
+    
     @staticmethod
-    def _get_market_id(symbol: str) -> int:
+    def _get_market_id(symbol):
+        """根据股票代码前缀推断市场ID"""
+        if not symbol or len(symbol) < 1:
+            raise KeyError(symbol)
         prefix = symbol[0]
         if prefix == '6':
-            return 1   # 上交所
+            return 1  # 上交所
         elif prefix in ('0', '3', '4', '8'):
-            return 0   # 深交所 / 北交所
+            return 0  # 深交所/北交所
         else:
             raise KeyError(f"未知股票代码前缀: {symbol}")
-
-
-def code_id_map_em() -> dict:
-    """
-    东方财富-股票和市场代码
-    通过代码前缀规则推断，无需网络请求。
-    :return: 股票和市场代码
-    :rtype: dict
-    """
-    return _CodeIdMapProxy()
 
 
 def stock_zh_a_hist(

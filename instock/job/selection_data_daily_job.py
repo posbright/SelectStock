@@ -29,9 +29,14 @@ def save_nph_stock_selection_data(date, before=True):
             return
 
         table_name = tbs.TABLE_CN_STOCK_SELECTION['name']
+        # 获取数据中的日期，用于删除老数据
+        if 'date' in data.columns and len(data) > 0:
+            _date = data.iloc[0]['date']
+        else:
+            _date = date.strftime("%Y-%m-%d") if hasattr(date, 'strftime') else str(date)
+
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            _date = data.iloc[0]['date']
             del_sql = f"DELETE FROM `{table_name}` where `date` = '{_date}'"
             mdb.executeSql(del_sql)
             cols_type = None

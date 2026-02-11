@@ -42,13 +42,17 @@ class stock_hist_data(metaclass=singleton_type):
         if stocks is None:
             _spot = stock_data(date).get_data()
             if _spot is None:
+                logging.error("stock_hist_data初始化失败：stock_data返回None，无法获取股票列表")
                 self.data = None
                 return
             _subset = _spot[list(tbs.TABLE_CN_STOCK_FOREIGN_KEY['columns'])]
             stocks = [tuple(x) for x in _subset.values]
         if stocks is None or len(stocks) == 0:
+            logging.error("stock_hist_data初始化失败：股票列表为空")
             self.data = None
             return
+        
+        logging.info(f"stock_hist_data开始初始化：{len(stocks)}只股票，{workers}线程，{years}年历史数据")
         
         # 获取时间区间
         if date_start is None:
@@ -78,8 +82,10 @@ class stock_hist_data(metaclass=singleton_type):
         except Exception as e:
             logging.error(f"singleton.stock_hist_data处理异常：{e}")
         if not _data:
+            logging.error(f"stock_hist_data初始化完成但数据为空：{len(stocks)}只股票全部获取失败")
             self.data = None
         else:
+            logging.info(f"stock_hist_data初始化完成：成功获取{len(_data)}/{len(stocks)}只股票的历史数据")
             self.data = _data
 
     def get_data(self):

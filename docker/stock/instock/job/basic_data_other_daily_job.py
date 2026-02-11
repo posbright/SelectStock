@@ -150,13 +150,15 @@ def stock_sector_fund_flow_data(date, index_sector):
         if results is None:
             return
 
+        data = None
         for t in times:
-            if t == 0:
-                data = results.get(t)
+            r = results.get(t)
+            if r is None:
+                continue
+            if data is None:
+                data = r
             else:
-                r = results.get(t)
-                if r is not None:
-                    data = pd.merge(data, r, on=['name'], how='left')
+                data = pd.merge(data, r, on=['name'], how='left')
 
         if data is None or len(data.index) == 0:
             return

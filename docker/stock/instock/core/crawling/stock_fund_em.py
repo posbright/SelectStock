@@ -18,6 +18,31 @@ __date__ = '2025/12/31 '
 # 创建全局实例，供所有函数使用
 fetcher = eastmoney_fetcher()
 
+def _individual_fund_flow_fetch_page(params, page_current=1):
+    """
+    尝试多个域名获取个股资金流向数据（单页）
+    """
+    urls = [
+        "https://push2.eastmoney.com/api/qt/clist/get",
+        "http://push2.eastmoney.com/api/qt/clist/get",
+    ]
+    req_params = dict(params)
+    req_params['pn'] = page_current
+
+    for attempt in range(3):
+        if attempt > 0:
+            time.sleep(random.uniform(2, 4) * attempt)
+        for url in urls:
+            try:
+                r = fetcher.make_request(url, params=req_params, retry=1, timeout=20)
+                data_json = r.json()
+                if data_json and data_json.get("data") is not None:
+                    return data_json
+            except Exception:
+                pass
+    return None
+
+
 def stock_individual_fund_flow_rank(indicator: str = "5日") -> pd.DataFrame:
     """
     东方财富网-数据中心-资金流向-排名
@@ -45,14 +70,12 @@ def stock_individual_fund_flow_rank(indicator: str = "5日") -> pd.DataFrame:
             "f12,f14,f2,f160,f174,f175,f176,f177,f178,f179,f180,f181,f182,f183,f260,f261,f124",
         ],
     }
-    url = "http://push2.eastmoney.com/api/qt/clist/get"
-    page_size = 50
-    page_current = 1
+    page_size = 100
     params = {
         "fid": indicator_map[indicator][0],
         "po": "1",
         "pz": page_size,
-        "pn": page_current,
+        "pn": 1,
         "np": "1",
         "fltt": "2",
         "invt": "2",
@@ -60,23 +83,28 @@ def stock_individual_fund_flow_rank(indicator: str = "5日") -> pd.DataFrame:
         "fs": "m:0+t:6+f:!2,m:0+t:13+f:!2,m:0+t:80+f:!2,m:1+t:2+f:!2,m:1+t:23+f:!2,m:0+t:7+f:!2,m:1+t:3+f:!2",
         "fields": indicator_map[indicator][1],
     }
-    r = fetcher.make_request(url, params=params)
-    data_json = r.json()
+
+    data_json = _individual_fund_flow_fetch_page(params, 1)
+    if data_json is None or data_json.get("data") is None:
+        return pd.DataFrame()
+
     data = data_json["data"]["diff"]
     data_count = data_json["data"]["total"]
-    page_count = math.ceil(data_count/page_size)
+    page_count = math.ceil(data_count / page_size)
+    page_current = 1
     while page_count > 1:
         # 添加随机延迟，避免爬取过快
         time.sleep(random.uniform(1, 1.5))
         page_current = page_current + 1
-        params["pn"] = page_current
-        r = fetcher.make_request(url, params=params)
-        data_json = r.json()
-        _data = data_json["data"]["diff"]
-        data.extend(_data)
-        page_count =page_count - 1
+        json_data = _individual_fund_flow_fetch_page(params, page_current)
+        if json_data is not None and json_data.get("data") is not None:
+            _data = json_data["data"]["diff"]
+            data.extend(_data)
+        page_count = page_count - 1
 
     temp_df = pd.DataFrame(data)
+    if temp_df.empty:
+        return temp_df
     temp_df = temp_df[~temp_df["f2"].isin(["-"])]
     if indicator == "今日":
         temp_df.columns = [
@@ -238,6 +266,36 @@ def stock_individual_fund_flow_rank(indicator: str = "5日") -> pd.DataFrame:
     return temp_df
 
 
+def _sector_fund_flow_fetch_page(params, page_current=1):
+    """
+    尝试多个域名获取板块资金流向数据（单页）
+    优先使用HTTPS直接JSON请求，失败时依次尝试其他域名和JSONP方式
+    """
+    urls = [
+        "https://push2.eastmoney.com/api/qt/clist/get",
+        "http://push2.eastmoney.com/api/qt/clist/get",
+    ]
+
+    # 构建不带JSONP回调的参数（优先使用直接JSON）
+    clean_params = {k: v for k, v in params.items() if k not in ('cb', 'rt')}
+    clean_params['pn'] = page_current
+
+    # 最多重试3轮
+    for attempt in range(3):
+        if attempt > 0:
+            time.sleep(random.uniform(2, 4) * attempt)
+        for url in urls:
+            try:
+                r = fetcher.make_request(url, params=clean_params, retry=1, timeout=20)
+                data_json = r.json()
+                if data_json and data_json.get("data") is not None:
+                    return data_json
+            except Exception:
+                pass
+
+    return None
+
+
 def stock_sector_fund_flow_rank(
     indicator: str = "10日", sector_type: str = "行业资金流"
 ) -> pd.DataFrame:
@@ -269,11 +327,9 @@ def stock_sector_fund_flow_rank(
             "f12,f14,f2,f160,f174,f175,f176,f177,f178,f179,f180,f181,f182,f183,f260,f261,f124",
         ],
     }
-    url = "http://push2.eastmoney.com/api/qt/clist/get"
-    page_size = 50
-    page_current = 1
+    page_size = 100
     params = {
-        "pn": page_current,
+        "pn": 1,
         "pz": page_size,
         "po": "1",
         "np": "1",
@@ -284,30 +340,29 @@ def stock_sector_fund_flow_rank(
         "fs": f"m:90 t:{sector_type_map[sector_type]}",
         "stat": indicator_map[indicator][1],
         "fields": indicator_map[indicator][2],
-        "rt": "52975239",
-        "cb": "jQuery18308357908311220152_1589256588824",
-        "_": int(time.time() * 1000),
     }
-    r = fetcher.make_request(url, params=params)
-    text_data = r.text
-    data_json = json.loads(text_data[text_data.find("{") : -2])
-    data = data_json["data"]["diff"]
 
+    data_json = _sector_fund_flow_fetch_page(params, 1)
+    if data_json is None or data_json.get("data") is None:
+        return pd.DataFrame()
+
+    data = data_json["data"]["diff"]
     data_count = data_json["data"]["total"]
-    page_count = math.ceil(data_count/page_size)
+    page_count = math.ceil(data_count / page_size)
+    page_current = 1
     while page_count > 1:
         # 添加随机延迟，避免爬取过快
         time.sleep(random.uniform(1, 1.5))
         page_current = page_current + 1
-        params["pn"] = page_current
-        r = fetcher.make_request(url, params=params)
-        text_data = r.text
-        json_data = json.loads(text_data[text_data.find("{"): -2])
-        _data = json_data["data"]["diff"]
-        data.extend(_data)
-        page_count =page_count - 1
+        json_data = _sector_fund_flow_fetch_page(params, page_current)
+        if json_data is not None and json_data.get("data") is not None:
+            _data = json_data["data"]["diff"]
+            data.extend(_data)
+        page_count = page_count - 1
 
     temp_df = pd.DataFrame(data)
+    if temp_df.empty:
+        return temp_df
 
 
     temp_df = temp_df[~temp_df["f2"].isin(["-"])]
