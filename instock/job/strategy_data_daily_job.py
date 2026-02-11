@@ -56,7 +56,7 @@ def prepare(date, strategy):
         logging.error(f"strategy_data_daily_job.prepare处理异常：{strategy}策略{e}")
 
 
-def run_check(strategy_fun, table_name, stocks, date, workers=40):
+def run_check(strategy_fun, table_name, stocks, date, workers=4):
     is_check_high_tight = False
     if strategy_fun.__name__ == 'check_high_tight':
         stock_tops = fetch_stock_top_entity_data(date)
@@ -85,8 +85,8 @@ def run_check(strategy_fun, table_name, stocks, date, workers=40):
 
 
 def main():
-    # 使用方法传递。
-    with concurrent.futures.ThreadPoolExecutor() as executor:
+    # 使用方法传递。限制并发数以控制内存占用（适配2GB服务器）
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         for strategy in tbs.TABLE_CN_STOCK_STRATEGIES:
             executor.submit(runt.run_with_args, prepare, strategy)
 

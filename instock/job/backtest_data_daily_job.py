@@ -38,8 +38,8 @@ def prepare():
     for k in stocks_data:
         date = k[0]
         break
-    # 回归测试表
-    with concurrent.futures.ThreadPoolExecutor() as executor:
+    # 回归测试表，限制并发数以控制内存占用（适配2GB服务器）
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         for table in tables:
             executor.submit(process, table, stocks_data, date, backtest_column)
 
@@ -73,7 +73,7 @@ def process(table, data_all, date, backtest_column):
         logging.error(f"backtest_data_daily_job.process处理异常：{table}表{e}")
 
 
-def run_check(stocks, data_all, date, backtest_column, workers=40):
+def run_check(stocks, data_all, date, backtest_column, workers=4):
     data = {}
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:

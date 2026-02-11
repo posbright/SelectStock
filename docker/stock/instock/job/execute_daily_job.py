@@ -43,24 +43,37 @@ def main():
     hdj.main()
     # 第2.2步创建综合股票数据表
     sddj.main()
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        # # 第3.1步创建股票其它基础数据表
-        futures = []
-        futures.append(executor.submit(hdtj.main))
-        # # 第3.2步创建股票指标数据表
-        futures.append(executor.submit(gdj.main))
-        # # # # 第4步创建股票k线形态表
-        futures.append(executor.submit(kdj.main))
-        # # # # 第5步创建股票策略数据表
-        futures.append(executor.submit(sdj.main))
-        # # # # 第5.1步执行GPT综合选股
-        futures.append(executor.submit(gptj.main))
-        # 等待所有并行任务完成，捕获异常
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                future.result()
-            except Exception as e:
-                logging.error(f"execute_daily_job并行任务异常：{e}")
+    # 低内存模式：顺序执行，避免多个重量级Job同时运行导致OOM（适配2GB服务器）
+    # indicators/klinepattern/strategy 各自内部已有多线程处理，无需外层再并行
+    try:
+        # 第3.1步创建股票其它基础数据表（I/O密集，内存占用低）
+        hdtj.main()
+    except Exception as e:
+        logging.error(f"execute_daily_job basic_data_other异常：{e}")
+
+    try:
+        # 第3.2步执行GPT综合选股（轻量级，仅读DB+筛选）
+        gptj.main()
+    except Exception as e:
+        logging.error(f"execute_daily_job gpt_value异常：{e}")
+
+    try:
+        # 第4步创建股票指标数据表（重量级：加载stock_hist_data + 计算指标）
+        gdj.main()
+    except Exception as e:
+        logging.error(f"execute_daily_job indicators异常：{e}")
+
+    try:
+        # 第5步创建股票k线形态表（重量级：复用stock_hist_data + 形态识别）
+        kdj.main()
+    except Exception as e:
+        logging.error(f"execute_daily_job klinepattern异常：{e}")
+
+    try:
+        # 第6步创建股票策略数据表（重量级：复用stock_hist_data + 策略计算）
+        sdj.main()
+    except Exception as e:
+        logging.error(f"execute_daily_job strategy异常：{e}")
 
     # # # # 第6步创建股票回测
     bdj.main()
