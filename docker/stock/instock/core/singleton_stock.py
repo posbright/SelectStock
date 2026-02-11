@@ -15,6 +15,7 @@ __date__ = '2023/3/10 '
 # 读取当天股票数据
 class stock_data(metaclass=singleton_type):
     def __init__(self, date):
+        self.data = None
         try:
             self.data = stf.fetch_stocks(date)
         except Exception as e:
@@ -39,9 +40,13 @@ class stock_hist_data(metaclass=singleton_type):
             date_end: 自定义结束日期 YYYYMMDD
         """
         if stocks is None:
-            _subset = stock_data(date).get_data()[list(tbs.TABLE_CN_STOCK_FOREIGN_KEY['columns'])]
+            _spot = stock_data(date).get_data()
+            if _spot is None:
+                self.data = None
+                return
+            _subset = _spot[list(tbs.TABLE_CN_STOCK_FOREIGN_KEY['columns'])]
             stocks = [tuple(x) for x in _subset.values]
-        if stocks is None:
+        if stocks is None or len(stocks) == 0:
             self.data = None
             return
         

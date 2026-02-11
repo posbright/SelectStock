@@ -658,8 +658,8 @@ def _fetch_from_sources(code, fetch_start, date_end, adjust=''):
             try:
                 new_data = fetch_func()
                 if new_data is not None and len(new_data) > 0:
-                    if source_name == '东方财富':
-                        new_data.columns = tuple(tbs.CN_STOCK_HIST_DATA['columns'])
+                    # 统一列名为 CN_STOCK_HIST_DATA 标准
+                    new_data.columns = tuple(tbs.CN_STOCK_HIST_DATA['columns'])
                     logging.debug(f"从{source_name}成功获取数据: {code} ({fetch_start}-{date_end})")
                     return new_data
             except Exception as e:

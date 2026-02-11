@@ -124,7 +124,7 @@ def stock_zh_a_hist_sina(
         # 新浪返回的是JSON数据
         try:
             data = response.json()
-        except:
+        except (ValueError, Exception):
             # 尝试处理JS变量格式
             text = response.text
             if text.startswith('['):
@@ -166,13 +166,13 @@ def stock_zh_a_hist_sina(
             # 计算振幅
             df['amplitude'] = ((df['high'] - df['low']) / df['close'].shift(1) * 100).round(4)
         
-        if 'pct_chg' not in df.columns:
+        if 'quote_change' not in df.columns:
             # 计算涨跌幅
-            df['pct_chg'] = ((df['close'] - df['close'].shift(1)) / df['close'].shift(1) * 100).round(4)
+            df['quote_change'] = ((df['close'] - df['close'].shift(1)) / df['close'].shift(1) * 100).round(4)
         
-        if 'change' not in df.columns:
+        if 'ups_downs' not in df.columns:
             # 计算涨跌额
-            df['change'] = (df['close'] - df['close'].shift(1)).round(4)
+            df['ups_downs'] = (df['close'] - df['close'].shift(1)).round(4)
         
         if 'turnover' not in df.columns:
             # 换手率需要流通股数据，这里设为0
@@ -189,8 +189,8 @@ def stock_zh_a_hist_sina(
         # 转换日期格式为字符串
         df['date'] = df['date'].dt.strftime('%Y-%m-%d')
         
-        # 按照标准顺序排列列
-        standard_columns = ['date', 'open', 'close', 'high', 'low', 'volume', 'amount', 'amplitude', 'pct_chg', 'change', 'turnover']
+        # 按照标准顺序排列列（与 CN_STOCK_HIST_DATA 一致）
+        standard_columns = ['date', 'open', 'close', 'high', 'low', 'volume', 'amount', 'amplitude', 'quote_change', 'ups_downs', 'turnover']
         
         # 确保所有标准列都存在
         for col in standard_columns:
@@ -202,7 +202,9 @@ def stock_zh_a_hist_sina(
         # 排序并重置索引
         df = df.sort_values(by='date').reset_index(drop=True)
         
-        # 填充NaN
+        # 替换inf值并填充NaN
+        import numpy as np
+        df = df.replace([np.inf, -np.inf], np.nan)
         df = df.fillna(0)
         
         return df
@@ -277,11 +279,11 @@ def stock_zh_a_hist_sina_v2(
         if 'amplitude' not in df.columns:
             df['amplitude'] = ((df['high'] - df['low']) / df['close'].shift(1) * 100).round(4)
         
-        if 'pct_chg' not in df.columns:
-            df['pct_chg'] = ((df['close'] - df['close'].shift(1)) / df['close'].shift(1) * 100).round(4)
+        if 'quote_change' not in df.columns:
+            df['quote_change'] = ((df['close'] - df['close'].shift(1)) / df['close'].shift(1) * 100).round(4)
         
-        if 'change' not in df.columns:
-            df['change'] = (df['close'] - df['close'].shift(1)).round(4)
+        if 'ups_downs' not in df.columns:
+            df['ups_downs'] = (df['close'] - df['close'].shift(1)).round(4)
         
         if 'turnover' not in df.columns:
             df['turnover'] = 0.0
@@ -294,7 +296,7 @@ def stock_zh_a_hist_sina_v2(
         
         df['date'] = df['date'].dt.strftime('%Y-%m-%d')
         
-        standard_columns = ['date', 'open', 'close', 'high', 'low', 'volume', 'amount', 'amplitude', 'pct_chg', 'change', 'turnover']
+        standard_columns = ['date', 'open', 'close', 'high', 'low', 'volume', 'amount', 'amplitude', 'quote_change', 'ups_downs', 'turnover']
         for col in standard_columns:
             if col not in df.columns:
                 df[col] = 0.0

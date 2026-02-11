@@ -179,6 +179,7 @@ def checkTableIsExist(tableName):
                     return True
     except Exception as e:
         logging.error(f"database.checkTableIsExist处理异常：{e}")
+    return False
 
 # 增删改数据
 def executeSql(sql, params=()):

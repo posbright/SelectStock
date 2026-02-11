@@ -33,7 +33,7 @@ def prepare():
     backtest_column = backtest_columns
 
     stocks_data = stock_hist_data().get_data()
-    if stocks_data is None:
+    if not stocks_data:
         return
     for k in stocks_data:
         date = k[0]

@@ -78,7 +78,7 @@ class eastmoney_fetcher:
         
         for i in range(retry):
             try:
-                response = requests.get(
+                response = self.session.get(
                     url,
                     headers=headers,
                     proxies=proxys().get_proxies(),

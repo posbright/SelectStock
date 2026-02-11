@@ -23,31 +23,43 @@ def run_with_args(run_fun, *args):
         end_date = datetime.datetime(int(tmp_year), int(tmp_month), int(tmp_day)).date()
         run_date = start_date
         try:
-            with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = []
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
                 while run_date <= end_date:
                     if trd.is_trade_date(run_date):
                         if run_fun.__name__.startswith('save_nph'):
-                            executor.submit(run_fun, run_date, False, *args)
+                            futures.append(executor.submit(run_fun, run_date, False, *args))
                         else:
-                            executor.submit(run_fun, run_date, *args)
+                            futures.append(executor.submit(run_fun, run_date, *args))
                         time.sleep(2)
                     run_date += datetime.timedelta(days=1)
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        logging.error(f"run_template批量任务异常：{run_fun}{e}")
         except Exception as e:
             logging.error(f"run_template.run_with_args处理异常：{run_fun}{sys.argv}{e}")
     elif len(sys.argv) == 2:
         # N个时间作业 python xxx.py 2023-03-01,2023-03-02
         dates = sys.argv[1].split(',')
         try:
-            with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = []
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
                 for date in dates:
                     tmp_year, tmp_month, tmp_day = date.split("-")
                     run_date = datetime.datetime(int(tmp_year), int(tmp_month), int(tmp_day)).date()
                     if trd.is_trade_date(run_date):
                         if run_fun.__name__.startswith('save_nph'):
-                            executor.submit(run_fun, run_date, False, *args)
+                            futures.append(executor.submit(run_fun, run_date, False, *args))
                         else:
-                            executor.submit(run_fun, run_date, *args)
+                            futures.append(executor.submit(run_fun, run_date, *args))
                         time.sleep(2)
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        logging.error(f"run_template批量任务异常：{run_fun}{e}")
         except Exception as e:
             logging.error(f"run_template.run_with_args处理异常：{run_fun}{sys.argv}{e}")
     else:

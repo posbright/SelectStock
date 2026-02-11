@@ -997,14 +997,15 @@ def _():
 
 
 # ============================================================
-# 汇总
-# ============================================================
-print(f"\n{'='*60}")
-print(f"分页测试完成: ✅ {passed} 通过, ❌ {failed} 失败")
-if errors:
-    print(f"\n失败详情:")
-    for err in errors:
-        print(f"  - {err}")
-print(f"{'='*60}")
+if __name__ == "__main__":
+    # 汇总
+    # ============================================================
+    print(f"\n{'='*60}")
+    print(f"分页测试完成: ✅ {passed} 通过, ❌ {failed} 失败")
+    if errors:
+        print(f"\n失败详情:")
+        for err in errors:
+            print(f"  - {err}")
+    print(f"{'='*60}")
 
-sys.exit(0 if failed == 0 else 1)
+    sys.exit(0 if failed == 0 else 1)

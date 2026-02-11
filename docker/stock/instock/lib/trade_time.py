@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import datetime
+import logging
 from instock.core.singleton_trade_date import stock_trade_date
 
 __author__ = 'myh '
@@ -31,11 +32,12 @@ def get_one_previous_trade_date(date):
     if trade_date is None:
         return date
     tmp_date = date
-    while True:
+    for _ in range(365):  # 最多向前找1年
         tmp_date += datetime.timedelta(days=-1)
         if tmp_date in trade_date:
-            break
-    return tmp_date
+            return tmp_date
+    logging.warning(f"get_one_previous_trade_date: 未找到{date}之前的交易日")
+    return date
 
 
 def get_next_trade_date(date):
@@ -43,11 +45,12 @@ def get_next_trade_date(date):
     if trade_date is None:
         return date
     tmp_date = date
-    while True:
+    for _ in range(365):  # 最多向后找1年
         tmp_date += datetime.timedelta(days=1)
         if tmp_date in trade_date:
-            break
-    return tmp_date
+            return tmp_date
+    logging.warning(f"get_next_trade_date: 未找到{date}之后的交易日")
+    return date
 
 
 OPEN_TIME = (
@@ -183,6 +186,7 @@ def get_quarterly_report_date():
     year = now_time.year
     month = now_time.month
     if 1 <= month <= 3:
+        year -= 1  # Q1查的是上一年Q4的报告
         month_day = '1231'
     elif 4 <= month <= 6:
         month_day = '0331'

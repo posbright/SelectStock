@@ -55,8 +55,9 @@ def stock_zh_a_spot_em() -> pd.DataFrame:
         params["pn"] = page_current
         r =  fetcher.make_request(url, params=params)
         data_json = r.json()
-        _data = data_json["data"]["diff"]
-        data.extend(_data)
+        _data = data_json.get("data", {}).get("diff")
+        if _data:
+            data.extend(_data)
         page_count =page_count - 1
 
     temp_df = pd.DataFrame(data)

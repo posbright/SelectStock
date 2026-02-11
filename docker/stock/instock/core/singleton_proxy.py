@@ -19,6 +19,7 @@ __date__ = '2025/1/6 '
 # 读取代理
 class proxys(metaclass=singleton_type):
     def __init__(self):
+        self.data = None
         try:
             with open(proxy_filename, "r") as file:
                 self.data = list(set(line.strip() for line in file.readlines() if line.strip()))
