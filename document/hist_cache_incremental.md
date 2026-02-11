@@ -5,7 +5,7 @@
 本功能实现了股票历史K线数据的增量更新缓存机制，主要特点：
 
 1. **增量更新**：以天为单位追加更新历史数据，避免每次全量获取
-2. **多数据源**：优先使用新浪财经，备选东方财富
+1. **多数据源**：优先使用东方财富，备选新浪财经
 3. **自定义范围**：用户可以指定历史数据的获取年数或日期范围
 4. **自动清理**：支持定期清理过期缓存数据
 
@@ -30,8 +30,8 @@
 5. 保存更新后的缓存
 
 **数据源优先级：**
-1. 新浪财经 (`stock_hist_sina.py`)
-2. 东方财富 (`stock_hist_em.py`)
+1. 东方财富 (`stock_hist_em.py`)
+2. 新浪财经 (`stock_hist_sina.py`)
 
 ### 2. `fetch_stock_hist(data_base, date_start=None, date_end=None, is_cache=True, years=None)`
 
@@ -58,11 +58,11 @@
 ```python
 # 数据源重试配置
 DATA_SOURCE_MAX_RETRIES = 2      # 最大重试次数
-DATA_SOURCE_RETRY_INTERVAL = 30  # 重试间隔（秒）
+DATA_SOURCE_RETRY_INTERVAL = 90  # 基础重试间隔（秒），实际使用指数退避（Docker默认30秒）
 
 # 历史数据配置
-HIST_DATA_DEFAULT_YEARS = 3      # 默认获取历史数据年数
-HIST_DATA_CACHE_EXPIRE_DAYS = 7  # 缓存过期天数
+HIST_DATA_DEFAULT_YEARS = 20     # 默认获取历史数据年数（Docker默认3年）
+# 缓存清理由 clean_expired_cache() 智能管理（清理已退市股票、除权除息股票缓存）
 ```
 
 ## 缓存目录结构

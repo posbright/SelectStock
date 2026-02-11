@@ -123,7 +123,7 @@ docker-compose -f docker-compose.remote-db.yml up -d
 
 ### Q: 数据获取失败？
 
-A: 系统已配置多数据源（新浪→腾讯→东方财富），会自动切换。如果仍失败：
+A: 系统已配置多数据源（东方财富→腾讯财经→新浪财经），会自动切换。如果仍失败：
 1. 检查网络连接
 2. 配置代理：编辑 `instock/config/proxy.txt`
 
@@ -146,6 +146,8 @@ python execute_daily_job.py
 ## 📖 更多文档
 
 - [完整项目文档](PROJECT_DOCUMENTATION.md)
+- [API接口文档](document/API_REFERENCE.md)
 - [数据库设计文档](document/database_schema.md)
 - [Docker部署说明](docker/DOCKER_DEPLOY.md)
+- [定时任务说明](cron/README.md)
 - [历史数据缓存说明](document/hist_cache_incremental.md)

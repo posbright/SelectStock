@@ -9,7 +9,6 @@ import time
 
 import pandas as pd
 import math
-from functools import lru_cache
 from instock.core.eastmoney_fetcher import eastmoney_fetcher
 
 __author__ = 'myh '
@@ -188,126 +187,57 @@ def stock_zh_a_spot_em() -> pd.DataFrame:
     return temp_df
 
 
-@lru_cache()
 def code_id_map_em() -> dict:
     """
-    东方财富-股票和市场代码
-    http://quote.eastmoney.com/center/gridlist.html#hs_a_board
-    :return: 股票和市场代码
+    东方财富-股票和市场代码映射
+    
+    使用代码前缀规则推断市场ID（无需网络请求，秒级完成）:
+    - 6xx: 上交所 (market_id=1)
+    - 0xx, 3xx: 深交所 (market_id=0)
+    - 4xx, 8xx: 北交所 (market_id=0)
+    
+    :return: 股票代码 -> 市场ID 的映射字典
     :rtype: dict
     """
-    url = "http://80.push2.eastmoney.com/api/qt/clist/get"
-    page_size = 50
-    page_current = 1
-    params = {
-        "pn": page_current,
-        "pz": page_size,
-        "po": "1",
-        "np": "1",
-        "ut": "bd1d9ddb04089700cf9c27f6f7426281",
-        "fltt": "2",
-        "invt": "2",
-        "fid": "f12",
-        "fs": "m:1 t:2,m:1 t:23",
-        "fields": "f12",
-        "_": "1623833739532",
-    }
-    r =  fetcher.make_request(url, params=params)
-    data_json = r.json()
-    data = data_json["data"]["diff"]
-    if not data:
-        return dict()
+    return _CodeIdMapProxy()
 
-    data_count = data_json["data"]["total"]
-    page_count = math.ceil(data_count/page_size)
-    while page_count > 1:
-        # 添加随机延迟，避免爬取过快
-        time.sleep(random.uniform(2, 3))
-        page_current = page_current + 1
-        params["pn"] = page_current
-        r =  fetcher.make_request(url, params=params)
-        data_json = r.json()
-        _data = data_json["data"]["diff"]
-        data.extend(_data)
-        page_count =page_count - 1
 
-    temp_df = pd.DataFrame(data)
-    temp_df["market_id"] = 1
-    temp_df.columns = ["sh_code", "sh_id"]
-    code_id_dict = dict(zip(temp_df["sh_code"], temp_df["sh_id"]))
-    page_current = 1
-    params = {
-        "pn": page_current,
-        "pz": page_size,
-        "po": "1",
-        "np": "1",
-        "ut": "bd1d9ddb04089700cf9c27f6f7426281",
-        "fltt": "2",
-        "invt": "2",
-        "fid": "f12",
-        "fs": "m:0 t:6,m:0 t:80",
-        "fields": "f12",
-        "_": "1623833739532",
-    }
-    r =  fetcher.make_request(url, params=params)
-    data_json = r.json()
-    data = data_json["data"]["diff"]
-    if not data:
-        return dict()
-
-    data_count = data_json["data"]["total"]
-    page_count = math.ceil(data_count/page_size)
-    while page_count > 1:
-        # 添加随机延迟，避免爬取过快
-        time.sleep(random.uniform(2, 3))
-        page_current = page_current + 1
-        params["pn"] = page_current
-        r =  fetcher.make_request(url, params=params)
-        data_json = r.json()
-        _data = data_json["data"]["diff"]
-        data.extend(_data)
-        page_count =page_count - 1
-
-    temp_df_sz = pd.DataFrame(data)
-    temp_df_sz["sz_id"] = 0
-    code_id_dict.update(dict(zip(temp_df_sz["f12"], temp_df_sz["sz_id"])))
-    page_current = 1
-    params = {
-        "pn": page_current,
-        "pz": page_size,
-        "po": "1",
-        "np": "1",
-        "ut": "bd1d9ddb04089700cf9c27f6f7426281",
-        "fltt": "2",
-        "invt": "2",
-        "fid": "f12",
-        "fs": "m:0 t:81 s:2048",
-        "fields": "f12",
-        "_": "1623833739532",
-    }
-    r =  fetcher.make_request(url, params=params)
-    data_json = r.json()
-    data = data_json["data"]["diff"]
-    if not data:
-        return dict()
-
-    data_count = data_json["data"]["total"]
-    page_count = math.ceil(data_count/page_size)
-    while page_count > 1:
-        # 添加随机延迟，避免爬取过快
-        time.sleep(random.uniform(2, 3))
-        page_current = page_current + 1
-        params["pn"] = page_current
-        r =  fetcher.make_request(url, params=params)
-        data_json = r.json()
-        _data = data_json["data"]["diff"]
-        data.extend(_data)
-        page_count =page_count - 1
-
-    temp_df_sz = pd.DataFrame(data)
-    temp_df_sz["bj_id"] = 0
-    code_id_dict.update(dict(zip(temp_df_sz["f12"], temp_df_sz["bj_id"])))
-    return code_id_dict
+class _CodeIdMapProxy(dict):
+    """
+    通过代码前缀规则推断市场ID的代理字典。
+    避免向东方财富API发送数百次分页请求来构建完整映射表。
+    
+    规则：
+    - 6开头 → 上交所 (1)
+    - 0、3开头 → 深交所 (0)
+    - 4、8开头 → 北交所 (0)
+    """
+    
+    def __getitem__(self, symbol):
+        return self._get_market_id(symbol)
+    
+    def __contains__(self, symbol):
+        # 所有6位数字代码都视为有效
+        return isinstance(symbol, str) and len(symbol) == 6 and symbol.isdigit()
+    
+    def get(self, symbol, default=None):
+        try:
+            return self._get_market_id(symbol)
+        except KeyError:
+            return default
+    
+    @staticmethod
+    def _get_market_id(symbol):
+        """根据股票代码前缀推断市场ID"""
+        if not symbol or len(symbol) < 1:
+            raise KeyError(symbol)
+        prefix = symbol[0]
+        if prefix == '6':
+            return 1  # 上交所
+        elif prefix in ('0', '3', '4', '8'):
+            return 0  # 深交所/北交所
+        else:
+            raise KeyError(f"未知股票代码前缀: {symbol}")
 
 
 def stock_zh_a_hist(

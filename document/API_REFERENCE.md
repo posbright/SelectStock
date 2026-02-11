@@ -79,6 +79,11 @@ GET /instock/api_data
 | cn_stock_strategy_gpt_value | GPT综合选股 |
 | cn_stock_kline_pattern_* | K线形态识别 |
 | cn_stock_backtest | 回测验证汇总 |
+| cn_stock_selection | 综合选股 |
+| cn_stock_chip_race_open | 早盘抢筹数据 |
+| cn_stock_chip_race_end | 尾盘抢筹数据 |
+| cn_stock_limitup_reason | 涨停原因揭密 |
+| cn_strategy_params | 策略参数配置 |
 
 #### 响应示例
 
@@ -187,6 +192,100 @@ POST /instock/control/attention
     "message": "关注添加成功"
 }
 ```
+
+---
+
+### 6. 获取策略参数
+
+#### 请求
+
+```
+GET /instock/api/strategy/params
+```
+
+#### 参数
+
+| 参数 | 类型 | 必填 | 说明 |
+|-----|------|-----|------|
+| strategy | string | 是 | 策略类型: gpt_value / moat_scoring / ai_model |
+
+#### 响应示例
+
+```json
+{
+    "status": "success",
+    "data": {
+        "strategy": "gpt_value",
+        "params": {
+            "debt_asset_ratio": {"value": 60, "label": "资产负债率上限(%)"},
+            "roe_weight": {"value": 15, "label": "ROE下限(%)"},
+            "sale_gpr": {"value": 30, "label": "毛利率下限(%)"}
+        }
+    }
+}
+```
+
+---
+
+### 7. 保存策略参数
+
+#### 请求
+
+```
+POST /instock/api/strategy/params/save
+```
+
+#### 请求体
+
+```json
+{
+    "strategy": "gpt_value",
+    "params": {
+        "debt_asset_ratio": 60,
+        "roe_weight": 15,
+        "sale_gpr": 30
+    }
+}
+```
+
+---
+
+### 8. 重置策略参数
+
+#### 请求
+
+```
+POST /instock/api/strategy/params/reset
+```
+
+#### 请求体
+
+```json
+{
+    "strategy": "gpt_value"
+}
+```
+
+---
+
+### 9. 动态筛选股票
+
+#### 请求
+
+```
+GET /instock/api/strategy/filter
+```
+
+#### 参数
+
+| 参数 | 类型 | 必填 | 说明 |
+|-----|------|-----|------|
+| strategy | string | 是 | 策略类型 |
+| date | string | 否 | 日期 (YYYY-MM-DD) |
+
+#### 说明
+
+根据用户配置的策略参数，从 `cn_stock_selection` 表动态执行SQL查询，返回满足条件的股票列表。结果有10分钟LRU缓存。
 
 ---
 

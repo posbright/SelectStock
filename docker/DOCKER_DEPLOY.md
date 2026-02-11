@@ -76,21 +76,23 @@ docker-compose -f docker-compose.remote-db.yml up -d
 | `WEB_PORT` | 9988 | Web服务端口 |
 | `SUPERVISOR_PORT` | 9001 | Supervisor管理端口 |
 | `DATA_SOURCE_MAX_RETRIES` | 2 | 数据源最大重试次数 |
-| `DATA_SOURCE_RETRY_INTERVAL` | 30 | 数据源重试间隔（秒） |
-| `HIST_DATA_DEFAULT_YEARS` | 3 | 默认获取历史数据年数 |
-| `HIST_DATA_CACHE_EXPIRE_DAYS` | 7 | 缓存过期天数 |
+| `DATA_SOURCE_RETRY_INTERVAL` | 30 | 数据源基础重试间隔（秒，指数退避） |
+| `HIST_DATA_DEFAULT_YEARS` | 3 | 默认获取历史数据年数（裸机部署默认20年） |
+
+> 注意：Docker 环境默认获取3年历史数据以加快首次启动，裸机部署默认20年。可通过环境变量自行调整。
+> `HIST_DATA_CACHE_EXPIRE_DAYS` 已废弃，缓存清理现由 `clean_expired_cache()` 智能管理（清理已退市股票、除权除息股票缓存）。
 
 ### 数据源配置
 
 系统支持三个数据源，优先级顺序为：
-1. **新浪财经** - 首选数据源
+1. **东方财富** - 首选数据源（更稳定）
 2. **腾讯财经** - 备选数据源
-3. **东方财富** - 最后备选
+3. **新浪财经** - 最后备选
 
 当某个数据源获取失败时，会自动切换到下一个数据源。
 
 - 最大重试次数：2次
-- 重试间隔：30秒
+- 重试间隔：30秒（Docker默认，指数退避；裸机部署默认90秒）
 
 ## 端口说明
 
@@ -153,16 +155,13 @@ docker-compose ps
 
 ### 缓存机制
 - **增量更新**: 以天为单位追加数据，避免全量获取
-- **自动清理**: 超过 `HIST_DATA_CACHE_EXPIRE_DAYS` 天未更新的缓存自动清理
-- **多数据源**: 优先使用新浪财经，失败时自动切换东方财富
+- **智能清理**: 自动清理已退市股票、除权除息后需重算的前复权缓存、损坏文件
+- **多数据源**: 优先使用东方财富，失败时自动切换腾讯财经/新浪财经
 
 ### 配置建议
 ```bash
-# 获取更长历史数据（10年）
-HIST_DATA_DEFAULT_YEARS=10
-
-# 延长缓存有效期（30天）
-HIST_DATA_CACHE_EXPIRE_DAYS=30
+# 获取更长历史数据（20年为默认值，可根据需要调整）
+HIST_DATA_DEFAULT_YEARS=20
 ```
 
 ### 存储空间估算

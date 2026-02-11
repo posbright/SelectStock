@@ -764,6 +764,22 @@ CREATE TABLE IF NOT EXISTS `cn_stock_backtest_data` (
 | 28 | cn_stock_selection | 综合选股 | 多条件综合筛选结果 |
 | 29 | cn_stock_backtest_data | 股票回测数据 | 策略回测收益率数据 |
 | 30 | cn_stock_backtest | 回测验证汇总 | 策略回测汇总统计 |
+| 31 | cn_stock_chip_race_open | 早盘抢筹数据 | 早盘集合竞价抢筹数据 |
+| 32 | cn_stock_chip_race_end | 尾盘抢筹数据 | 尾盘集合竞价抢筹数据 |
+| 33 | cn_stock_limitup_reason | 涨停原因揭密 | 涨停原因分析数据 |
+| 34 | cn_strategy_params | 策略参数配置 | 可配置策略筛选参数 |
+
+---
+
+## 六、策略参数配置表 (cn_strategy_params)
+
+存储用户可配置的策略筛选参数，支持三类策略参数集：
+
+| 参数集 | 说明 |
+|--------|------|
+| `gpt_value` | GPT选股筛选条件（财务安全、盈利能力、成长能力、估值指标） |
+| `moat_scoring` | 护城河评分模型权重和阈值 |
+| `ai_model` | AI/LLM API配置（接口地址、密钥、模型、温度、token数） |
 
 ---
 

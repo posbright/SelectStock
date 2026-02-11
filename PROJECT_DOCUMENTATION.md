@@ -35,7 +35,7 @@
 
 ### 技术特点
 
-- **多数据源支持**：新浪财经 → 腾讯财经 → 东方财富，自动容错切换
+- **多数据源支持**：东方财富 → 腾讯财经 → 新浪财经，自动容错切换
 - **增量缓存**：历史数据以天为单位增量更新，提高效率
 - **多线程处理**：采用并发处理，提高数据抓取和计算效率
 - **Web可视化**：Tornado + Bootstrap实现的Web界面
@@ -136,19 +136,30 @@ SelectStock/
 │   │   │   └── pattern_recognitions.py # 61种K线形态
 │   │   │
 │   │   ├── strategy/           # 💡 选股策略
-│   │   │   ├── enter.py              # 策略入口/工具
+│   │   │   ├── base.py               # 策略基类（ABC）及注册框架
+│   │   │   ├── enter.py              # 放量上涨
+│   │   │   ├── keep_increasing.py    # 均线多头
+│   │   │   ├── parking_apron.py      # 停机坪
 │   │   │   ├── backtrace_ma250.py    # 回踩年线
 │   │   │   ├── breakthrough_platform.py # 突破平台
-│   │   │   ├── keep_increasing.py    # 放量上涨
-│   │   │   ├── parking_apron.py      # 停机坪
+│   │   │   ├── low_backtrace_increase.py # 无大幅回撤
 │   │   │   ├── turtle_trade.py       # 海龟交易法则
 │   │   │   ├── high_tight_flag.py    # 高而窄的旗形
 │   │   │   ├── climax_limitdown.py   # 放量跌停
 │   │   │   ├── low_atr.py            # 低ATR成长
-│   │   │   ├── low_backtrace_increase.py # 无大幅回撤
 │   │   │   ├── gpt_value_strategy.py # GPT综合选股（基本面）
-│   │   │   └── technical/            # 技术策略扩展
-│   │   │       └── value_invest_strategies.py # 趋势回调/超跌反弹/突破确认
+│   │   │   ├── technical/            # 技术策略扩展
+│   │   │   │   ├── ma_strategies.py           # MA均线策略
+│   │   │   │   └── value_invest_strategies.py # 趋势回调/超跌反弹/突破确认
+│   │   │   ├── fundamental/          # 基本面策略
+│   │   │   │   ├── fundamental_strategies.py  # 价值/成长/护城河/股息策略
+│   │   │   │   ├── fundamental_filter.py      # 基本面过滤器
+│   │   │   │   ├── moat_model.py              # 护城河评分模型
+│   │   │   │   └── moat_ai_service.py         # AI护城河分析服务
+│   │   │   ├── volume/               # 成交量策略
+│   │   │   │   └── volume_strategies.py       # 放量上涨/放量跌停策略类
+│   │   │   └── pattern/              # 形态策略
+│   │   │       └── pattern_strategies.py      # 突破平台/停机坪等策略类
 │   │   │
 │   │   ├── kline/              # 📉 K线可视化
 │   │   │   ├── cyq.py          # 筹码分布计算
@@ -172,11 +183,13 @@ SelectStock/
 │   │   ├── gpt_value_data_job.py   # GPT综合选股作业
 │   │   └── backtest_data_daily_job.py # 回测数据作业
 │   │
+│   │   
 │   ├── web/                     # 🌐 Web服务
-│   │   ├── web_service.py      # Tornado主服务
-│   │   ├── base.py             # 基础Handler
-│   │   ├── dataTableHandler.py # 数据表Handler
-│   │   ├── dataIndicatorsHandler.py # 指标Handler
+│   │   ├── web_service.py      # Tornado主服务（路由注册）
+│   │   ├── base.py             # 基础Handler（CORS、左侧菜单）
+│   │   ├── dataTableHandler.py # 数据表Handler（分页、搜索）
+│   │   ├── dataIndicatorsHandler.py # 指标/K线图Handler
+│   │   ├── strategyParamsHandler.py # 策略参数配置Handler
 │   │   ├── templates/          # HTML模板
 │   │   └── static/             # 静态资源
 │   │
@@ -187,13 +200,14 @@ SelectStock/
 │   │   └── strategies/         # 交易策略
 │   │
 │   ├── lib/                     # 📚 公共库
-│   │   ├── database.py         # 数据库连接
+│   │   ├── database.py         # 数据库连接（SQLAlchemy引擎）
 │   │   ├── torndb.py           # Tornado数据库封装
-│   │   ├── trade_time.py       # 交易时间工具
-│   │   ├── run_template.py     # 运行模板
+│   │   ├── trade_time.py       # 交易时间/日历工具
+│   │   ├── query_cache.py      # 线程安全LRU查询缓存
+│   │   ├── run_template.py     # 运行模板（支持日期参数解析）
 │   │   ├── singleton_type.py   # 单例类型
 │   │   ├── crypto_aes.py       # AES加密
-│   │   └── version.py          # 版本信息
+│   │   └── version.py          # 版本信息（v4.0.0）
 │   │
 │   ├── fontWeb/                 # 🎨 Vue前端（新版）
 │   │   ├── package.json        # 前端依赖
@@ -247,12 +261,12 @@ SelectStock/
 
 | 数据类型 | 优先数据源 | 备选数据源 | 说明 |
 |---------|-----------|-----------|------|
-| 股票实时行情 | 新浪财经 | 腾讯财经 → 东方财富 | 包含40+字段 |
-| ETF实时行情 | 新浪财经 | 腾讯财经 → 东方财富 | 含规模、换手率等 |
-| 历史K线 | 新浪财经 | 东方财富 | 支持增量更新 |
-| 资金流向 | 新浪财经 | 东方财富 | 主力/散户资金 |
-| 龙虎榜 | 新浪财经 | 东方财富 | 机构买卖数据 |
-| 综合选股 | 东方财富 | - | 200+筛选条件 |
+| 股票实时行情 | 东方财富 | 腾讯财经 → 新浪财经 | 包含40+字段 |
+| ETF实时行情 | 东方财富 | 腾讯财经 → 新浪财经 | 含规模、换手率等 |
+| 历史K线 | 东方财富 | 新浪财经 | 支持增量更新 |
+| 资金流向 | 东方财富 | 新浪财经 | 主力/散户资金 |
+| 龙虎榜 | 东方财富 | 新浪财经 | 机构买卖数据 |
+| 综合选股 | 东方财富 | 新浪财经 | 200+筛选条件 |
 
 ### 2. 技术指标模块 (indicator/)
 
@@ -311,6 +325,40 @@ SelectStock/
 - **页面渲染**: `/instock/data`
 - **指标图表**: `/instock/data/indicators`
 - **关注管理**: `/instock/control/attention`
+- **策略参数查询**: `/instock/api/strategy/params`
+- **策略参数保存**: `/instock/api/strategy/params/save`
+- **策略参数重置**: `/instock/api/strategy/params/reset`
+- **动态筛选**: `/instock/api/strategy/filter`
+
+### 6. 策略参数配置模块 (web/strategyParamsHandler.py)
+
+支持三类可配置策略参数，存储在 `cn_strategy_params` 表中：
+
+| 参数集 | 说明 |
+|--------|------|
+| `gpt_value` | GPT选股筛选条件（财务安全、盈利能力、成长能力、估值指标） |
+| `moat_scoring` | 护城河评分模型权重和阈值 |
+| `ai_model` | AI/LLM API配置（接口地址、密钥、模型、温度、token数） |
+
+### 7. 基本面策略框架 (strategy/fundamental/)
+
+提供完整的基本面投资策略框架：
+
+| 模块 | 说明 |
+|------|------|
+| `fundamental_strategies.py` | 价值投资、成长投资、护城河、股息增长策略 |
+| `fundamental_filter.py` | 基本面过滤器、护城河评分 |
+| `moat_model.py` | 护城河类别、风险等级、定量指标模型 |
+| `moat_ai_service.py` | AI护城河分析服务 |
+
+### 8. 查询缓存 (lib/query_cache.py)
+
+线程安全的LRU缓存，带TTL过期机制：
+
+| 缓存实例 | 容量 | TTL | 用途 |
+|----------|------|-----|------|
+| `stock_data_cache` | 512条 | 5分钟 | Web数据页面查询缓存 |
+| `filter_result_cache` | 128条 | 10分钟 | 策略筛选结果缓存 |
 
 ---
 
@@ -476,9 +524,9 @@ user:pass@192.168.1.100:8080
 
 ```python
 DATA_SOURCE_MAX_RETRIES = 2      # 最大重试次数
-DATA_SOURCE_RETRY_INTERVAL = 30  # 重试间隔(秒)
-HIST_DATA_DEFAULT_YEARS = 3      # 历史数据年数
-HIST_DATA_CACHE_EXPIRE_DAYS = 7  # 缓存过期天数
+DATA_SOURCE_RETRY_INTERVAL = 90  # 基础重试间隔(秒)，实际使用指数退避（Docker默认30秒）
+HIST_DATA_DEFAULT_YEARS = 20     # 默认获取历史数据年数（Docker默认3年）
+# 注：缓存清理由 clean_expired_cache() 智能管理
 ```
 
 ---
@@ -548,6 +596,8 @@ Body: {"code": "000001", "action": "add"}
 | 前端(新) | Vue 3, TypeScript, Vite, Element Plus |
 | 前端(旧) | Bootstrap, jQuery, DataTables |
 | 可视化 | Bokeh, ECharts |
+| 加密 | PyCryptodome (AES) |
+| 交易 | easytrader, backtrader |
 | 部署 | Docker, Supervisor |
 
 ---
