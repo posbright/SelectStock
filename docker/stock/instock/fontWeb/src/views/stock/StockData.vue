@@ -217,8 +217,12 @@ const getCellClass = (value: any, fieldName: string) => {
   return ''
 }
 
-// 获取列宽
+// 获取列最小宽度（用于自适应撑满表格）
 const getColumnWidth = (col: ColumnDef) => {
+  // 文本类型列（如详因、原因等 VARCHAR 大字段）给予更大的最小宽度
+  if (col.dataType === 'string' && col.width && col.width >= 120) {
+    return Math.max(col.width, 200)
+  }
   if (col.width && col.width > 0) return col.width
   // 默认宽度
   return 100
@@ -334,14 +338,15 @@ onMounted(() => {
         <!-- 固定列：名称 -->
         <el-table-column prop="name" label="名称" width="100" fixed="left" />
         
-        <!-- 动态列：根据后端返回的列定义动态生成 -->
+        <!-- 动态列：根据后端返回的列定义动态生成，使用 min-width 自适应撑满表格 -->
         <el-table-column
           v-for="col in dynamicColumns"
           :key="col.value"
           :prop="col.value"
           :label="col.caption"
-          :width="getColumnWidth(col)"
-          align="right"
+          :min-width="getColumnWidth(col)"
+          :align="col.dataType === 'string' ? 'left' : 'right'"
+          :show-overflow-tooltip="true"
         >
           <template #default="{ row }">
             <span :class="getCellClass(row[col.value], col.value)">
