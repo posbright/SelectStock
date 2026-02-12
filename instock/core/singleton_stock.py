@@ -30,8 +30,10 @@ class stock_data(metaclass=singleton_type):
     @classmethod
     def release(cls):
         """释放单例实例，回收内存"""
-        if hasattr(cls, '_instance'):
-            del cls._instance
+        from instock.lib.singleton_type import singleton_type
+        with singleton_type.single_lock:
+            if hasattr(cls, '_instance'):
+                del cls._instance
 
 
 # 读取股票历史数据（支持增量更新和自定义时间范围）
@@ -105,5 +107,7 @@ class stock_hist_data(metaclass=singleton_type):
     @classmethod
     def release(cls):
         """释放单例实例，回收内存（可释放数百MB历史数据）"""
-        if hasattr(cls, '_instance'):
-            del cls._instance
+        from instock.lib.singleton_type import singleton_type
+        with singleton_type.single_lock:
+            if hasattr(cls, '_instance'):
+                del cls._instance

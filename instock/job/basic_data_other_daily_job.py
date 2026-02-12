@@ -76,16 +76,18 @@ def save_nph_stock_fund_flow_data(date, before=True):
         if results is None:
             return
 
-        for t in times:
-            if t == 0:
-                data = results.get(t)
-            else:
-                r = results.get(t)
-                if r is not None:
-                    r.drop(columns=['name', 'new_price'], inplace=True)
-                    data = pd.merge(data, r, on=['code'], how='left')
+        data = results.get(0)
+        if data is None:
+            logging.warning("资金流向基础数据(t=0)获取失败，跳过")
+            return
 
-        if data is None or len(data.index) == 0:
+        for t in range(1, 4):
+            r = results.get(t)
+            if r is not None:
+                r.drop(columns=['name', 'new_price'], inplace=True)
+                data = pd.merge(data, r, on=['code'], how='left')
+
+        if len(data.index) == 0:
             return
 
         data.insert(0, 'date', date.strftime("%Y-%m-%d"))

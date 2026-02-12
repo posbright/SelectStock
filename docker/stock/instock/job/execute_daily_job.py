@@ -51,8 +51,15 @@ def main():
     # ================================================================
     # Phase 2: 基础数据入库（读取已加载的单例/少量API调用）
     # ================================================================
-    hdj.main()   # 股票/ETF实时行情入库（从 stock_data 单例读取）
-    sddj.main()  # 综合选股数据入库（需要API获取选股器数据）
+    try:
+        hdj.main()   # 股票/ETF实时行情入库（从 stock_data 单例读取）
+    except Exception as e:
+        logging.error(f"execute_daily_job basic_data_daily异常：{e}")
+
+    try:
+        sddj.main()  # 综合选股数据入库（需要API获取选股器数据）
+    except Exception as e:
+        logging.error(f"execute_daily_job selection_data异常：{e}")
 
     # ================================================================
     # Phase 3: 扩展数据获取与入库（独立API：资金流向、龙虎榜等）

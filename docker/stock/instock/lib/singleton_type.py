@@ -16,5 +16,4 @@ class singleton_type(type):
         with singleton_type.single_lock:
             if not hasattr(cls, "_instance"):
                 cls._instance = super(singleton_type, cls).__call__(*args, **kwargs)  # 创建cls的对象
-
-        return cls._instance
+            return cls._instance

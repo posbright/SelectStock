@@ -10,11 +10,11 @@ __date__ = '2023/3/10 '
 
 
 def get_rates(code_name, data, stock_column, threshold=101):
-    try:
-        # 增加空判断，如果是空返回 0 数据。
-        if data is None:
-            return None
+    # 增加空判断，如果是空返回 0 数据。
+    if data is None:
+        return None
 
+    try:
         start_date = code_name[0]
         code = code_name[1]
         # 设置返回数组。
@@ -44,7 +44,7 @@ def get_rates(code_name, data, stock_column, threshold=101):
         for i in range(0, _l):
             stock_data_list.append(None)
 
+        return pd.Series(stock_data_list, index=stock_column)
     except Exception as e:
-        logging.error(f"rate_stats.get_rates处理异常：{code}代码{e}")
-
-    return pd.Series(stock_data_list, index=stock_column)
+        logging.error(f"rate_stats.get_rates处理异常：{code_name}代码{e}")
+        return None

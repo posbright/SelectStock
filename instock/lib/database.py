@@ -114,9 +114,15 @@ def insert_other_db_from_df(to_db, data, table_name, cols_type, write_index, pri
                         dtype=cols_type, index=write_index, )
     except Exception as e:
         logging.error(f"database.insert_other_db_from_df处理异常：{table_name}表{e}")
+        return
 
     # 判断是否存在主键
-    if not ipt.get_pk_constraint(table_name)['constrained_columns']:
+    try:
+        pk_exists = ipt.get_pk_constraint(table_name)['constrained_columns']
+    except Exception as e:
+        logging.error(f"database.insert_other_db_from_df检查主键异常：{table_name}表{e}")
+        return
+    if not pk_exists:
         try:
             # 执行数据库插入数据。
             with get_connection() as conn:
@@ -148,8 +154,11 @@ def update_db_from_df(data, table_name, where):
                         # 检测 None 和 NaN（NaN != NaN）
                         is_null = val is None or (val != val)
                         if col in where:
-                            where_parts.append(f'`{col}` = %s')
-                            where_params.append(val)
+                            if is_null:
+                                where_parts.append(f'`{col}` IS NULL')
+                            else:
+                                where_parts.append(f'`{col}` = %s')
+                                where_params.append(val)
                         else:
                             if is_null:
                                 set_parts.append(f'`{col}` = NULL')
