@@ -31,11 +31,11 @@
 1. **init_job** - 创建/初始化数据库
 2. **basic_data_daily_job** - 股票基础数据
 3. **selection_data_daily_job** - 综合选股数据
-4. **basic_data_other_daily_job** - 分红、龙虎榜、大宗交易等（并行）
-5. **indicators_data_daily_job** - 技术指标数据（并行）
-6. **klinepattern_data_daily_job** - K线形态识别（并行）
-7. **strategy_data_daily_job** - 策略选股数据（并行）
-8. **gpt_value_data_job** - GPT综合选股（并行）
+4. **basic_data_other_daily_job** - 分红、龙虎榜、大宗交易等
+5. **gpt_value_data_job** - GPT综合选股
+6. **indicators_data_daily_job** - 技术指标数据
+7. **klinepattern_data_daily_job** - K线形态识别
+8. **strategy_data_daily_job** - 策略选股数据
 9. **backtest_data_daily_job** - 策略回测数据
 10. **basic_data_after_close_daily_job** - 收盘后数据
 
@@ -85,15 +85,28 @@ crontab -e
 
 # 添加以下内容（假设项目在 /root/SelectStock）：
 
-# 每小时执行（交易日9:30-15:00）
-#30 9-15 * * 1-5 /root/SelectStock/cron/cron.hourly/run_hourly
+# ── 收盘后采集基础行情数据（轻量级，可多次执行）──
+# 16:00 收盘后第一次采集
+0 16 * * 1-5 /root/SelectStock/cron/cron.hourly/run_hourly
+# 17:00 补采（如16:00数据源延迟）
+0 17 * * 1-5 /root/SelectStock/cron/cron.hourly/run_hourly
 
-# 每个工作日18:00执行完整任务
-0 18 * * 1-5 /root/SelectStock/cron/cron.workdayly/run_workdayly
+# ── 每日完整任务（重量级，使用 flock 防止重叠）──
+# 18:30 首次执行完整任务
+30 18 * * 1-5 flock -xn /tmp/instock_workdayly.lock /root/SelectStock/cron/cron.workdayly/run_workdayly
+# 22:30 重试（如果18:30仍在运行则自动跳过）
+30 22 * * 1-5 flock -xn /tmp/instock_workdayly.lock /root/SelectStock/cron/cron.workdayly/run_workdayly
 
-# 每月1日凌晨2点清理缓存
-0 2 1 * * /root/SelectStock/cron/cron.monthly/run_monthly
+# ── 月度缓存清理 ──
+# 每月1日凌晨4点清理退市/除权缓存
+0 4 1 * * /root/SelectStock/cron/cron.monthly/run_monthly
 ```
+
+> **说明**：
+> - `flock -xn` 参数：`-x` 排他锁，`-n` 非阻塞（如果锁被占用则立即退出，不等待）
+> - 这样即使 18:30 的任务跑了超过 4 小时，22:30 的任务也不会重复启动导致 OOM
+> - 18:00 的 run_hourly 已移除，避免与 18:30 的 run_workdayly 写同一张表冲突
+> - 凌晨 1:00 的重复执行已移除（22:30 已是充分的重试保障）
 
 ---
 

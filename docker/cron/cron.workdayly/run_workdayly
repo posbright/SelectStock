@@ -1,7 +1,18 @@
 #!/bin/sh
 
-/usr/local/bin/python3 /data/InStock/instock/job/execute_daily_job.py
+export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH
+export PYTHONPATH=/data/InStock
+export PYTHONIOENCODING=utf-8
 
-#mkdir -p /data/logs
-#DATE=`date +%Y-%m-%d:%H:%M:%S`
-#echo $DATE >> /data/logs/workdayly.log
+LOG_DIR=/data/InStock/instock/log
+mkdir -p $LOG_DIR
+LOG_FILE=$LOG_DIR/workdayly.log
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始执行 execute_daily_job" >> $LOG_FILE
+/usr/local/bin/python3 /data/InStock/instock/job/execute_daily_job.py >> $LOG_FILE 2>&1
+EXIT_CODE=$?
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 执行完成 (成功)" >> $LOG_FILE
+else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 执行完成 (失败, 退出码: $EXIT_CODE)" >> $LOG_FILE
+fi

@@ -4,13 +4,22 @@
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PROJECT_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 
+# cron环境PATH极其有限，必须显式设置
+export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH
 export PYTHONIOENCODING=utf-8
 export LANG=zh_CN.UTF-8
 export PYTHONPATH=$PROJECT_ROOT
 export LC_CTYPE=zh_CN.UTF-8
 
-python3 $PROJECT_ROOT/instock/job/execute_daily_job.py
+LOG_DIR=$PROJECT_ROOT/instock/log
+mkdir -p $LOG_DIR
+LOG_FILE=$LOG_DIR/workdayly.log
 
-mkdir -p $PROJECT_ROOT/instock/log
-DATE=`date +%Y-%m-%d:%H:%M:%S`
-echo $DATE >> $PROJECT_ROOT/instock/log/workdayly.log
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始执行 execute_daily_job" >> $LOG_FILE
+python3 $PROJECT_ROOT/instock/job/execute_daily_job.py >> $LOG_FILE 2>&1
+EXIT_CODE=$?
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 执行完成 (成功)" >> $LOG_FILE
+else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 执行完成 (失败, 退出码: $EXIT_CODE)" >> $LOG_FILE
+fi
