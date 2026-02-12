@@ -26,6 +26,7 @@ import instock.core.crawling.etf_tencent as etc  # ETF腾讯财经备选
 import instock.core.crawling.etf_sina as esa  # ETF新浪财经备选
 import instock.core.crawling.stock_fund_sina as sfs  # 新浪财经资金流向
 import instock.core.crawling.stock_hist_sina as shs  # 新浪财经历史K线
+import instock.core.crawling.stock_hist_tencent as sht  # 腾讯财经历史K线
 import time
 import random
 
@@ -557,6 +558,10 @@ def fetch_etf_hist(data_base, date_start=None, date_end=None, adjust='qfq'):
 #   date_end: 结束日期，格式 YYYYMMDD，默认为当前日期
 #   is_cache: 是否使用缓存
 #   years: 历史数据年数，默认20年
+# 数据单位说明：
+#   缓存中的 volume = 手（100股），各数据源已统一
+#   本函数返回的 volume = 股（手 × 100）
+#   amount = 元
 def fetch_stock_hist(data_base, date_start=None, date_end=None, is_cache=True, years=None):
     date = data_base[0]
     code = data_base[1]
@@ -633,7 +638,13 @@ def _write_cache_meta(code, last_date, adjust=''):
 
 def _fetch_from_sources(code, fetch_start, date_end, adjust=''):
     """
-    从多个数据源获取K线数据（东方财富 → 新浪财经）
+    从多个数据源获取K线数据（东方财富 → 腾讯财经 → 新浪财经）
+    
+    所有数据源返回的数据格式已统一：
+    - 列顺序：[date, open, close, high, low, volume, amount, amplitude, quote_change, ups_downs, turnover]
+    - volume 单位：手（100股）
+    - amount 单位：元
+    - date 格式：YYYY-MM-DD
     
     参数：
         code: 股票代码
@@ -645,6 +656,10 @@ def _fetch_from_sources(code, fetch_start, date_end, adjust=''):
     """
     data_sources = [
         ('东方财富', lambda: she.stock_zh_a_hist(
+            symbol=code, period="daily",
+            start_date=fetch_start, end_date=date_end, adjust=adjust
+        )),
+        ('腾讯财经', lambda: sht.stock_zh_a_hist_tencent(
             symbol=code, period="daily",
             start_date=fetch_start, end_date=date_end, adjust=adjust
         )),
@@ -693,7 +708,7 @@ def stock_hist_cache_incremental(code, date_start, date_end, is_cache=True, adju
     2. 向前补数据：date_start < 缓存最早日期，从 date_start 到缓存起始拉取
     3. 无缓存：全量拉取 date_start ~ date_end
     
-    数据源优先级：东方财富 → 新浪财经（东方财富更稳定）
+    数据源优先级：东方财富 → 腾讯财经 → 新浪财经
     
     参数：
         code: 股票代码

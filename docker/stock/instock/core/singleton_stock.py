@@ -11,6 +11,9 @@ from instock.lib.singleton_type import singleton_type
 __author__ = 'myh '
 __date__ = '2023/3/10 '
 
+# 历史数据默认年数（与 stockfetch.py 保持一致，支持环境变量覆盖）
+_DEFAULT_HIST_YEARS = stf.HIST_DATA_DEFAULT_YEARS
+
 
 # 读取当天股票数据
 class stock_data(metaclass=singleton_type):
@@ -33,7 +36,7 @@ class stock_data(metaclass=singleton_type):
 
 # 读取股票历史数据（支持增量更新和自定义时间范围）
 class stock_hist_data(metaclass=singleton_type):
-    def __init__(self, date=None, stocks=None, workers=8, years=3, date_start=None, date_end=None):
+    def __init__(self, date=None, stocks=None, workers=8, years=None, date_start=None, date_end=None):
         """
         初始化股票历史数据
         
@@ -41,10 +44,12 @@ class stock_hist_data(metaclass=singleton_type):
             date: 基准日期
             stocks: 股票列表，格式 [(date, code), ...]
             workers: 并发线程数
-            years: 历史数据年数，默认3年
+            years: 历史数据年数，默认读取环境变量 HIST_DATA_DEFAULT_YEARS（默认20年）
             date_start: 自定义起始日期 YYYYMMDD
             date_end: 自定义结束日期 YYYYMMDD
         """
+        if years is None:
+            years = _DEFAULT_HIST_YEARS
         if stocks is None:
             _spot = stock_data(date).get_data()
             if _spot is None:

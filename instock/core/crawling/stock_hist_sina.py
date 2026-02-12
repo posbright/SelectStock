@@ -157,10 +157,15 @@ def stock_zh_a_hist_sina(
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
         
-        # 添加缺失的列
+        # 新浪API返回的volume单位是 股（已实测验证：000001返回43104098，对应431041手）
+        # 1. 先用原始volume（股）计算成交额（元）：amount = 股数 × 均价
+        # 2. 再将volume从 股 转换为 手（除以100），与东方财富/腾讯保持一致
         if 'amount' not in df.columns:
-            # 估算成交额 = 成交量 * 平均价格
+            # 估算成交额(元) = 成交量(股) × 平均价格(元/股)
             df['amount'] = df['volume'] * (df['open'] + df['close']) / 2
+        
+        # 将volume从 股 转为 手（与东方财富/腾讯统一，fetch_stock_hist 会再 *100 转回股）
+        df['volume'] = df['volume'] / 100
         
         if 'amplitude' not in df.columns:
             # 计算振幅
@@ -273,8 +278,12 @@ def stock_zh_a_hist_sina_v2(
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
         
+        # 新浪API返回的volume单位是 股，先用原始值计算成交额，再转换为 手
         if 'amount' not in df.columns:
             df['amount'] = df['volume'] * (df['open'] + df['close']) / 2
+        
+        # 将volume从 股 转为 手（与东方财富/腾讯统一）
+        df['volume'] = df['volume'] / 100
         
         if 'amplitude' not in df.columns:
             df['amplitude'] = ((df['high'] - df['low']) / df['close'].shift(1) * 100).round(4)

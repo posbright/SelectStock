@@ -20,6 +20,7 @@ if not os.path.exists(log_path):
 logging.basicConfig(format='%(asctime)s %(message)s', filename=os.path.join(log_path, 'stock_execute_job.log'))
 logging.getLogger().setLevel(logging.INFO)
 import init_job as bj
+import fetch_data_job as fdj
 import basic_data_daily_job as hdj
 import basic_data_other_daily_job as hdtj
 import basic_data_after_close_daily_job as acdj
@@ -38,44 +39,56 @@ def main():
     start = time.time()
     _start = datetime.datetime.now()
     logging.info("######## 任务执行时间: %s #######" % _start.strftime("%Y-%m-%d %H:%M:%S.%f"))
-    # 第1步创建数据库
-    bj.main()
-    # 第2.1步创建股票基础数据表
-    hdj.main()
-    # 第2.2步创建综合股票数据表
-    sddj.main()
-    # 低内存模式：顺序执行，避免多个重量级Job同时运行导致OOM（适配2GB服务器）
-    # indicators/klinepattern/strategy 各自内部已有多线程处理，无需外层再并行
+
+    # ================================================================
+    # Phase 1: 数据获取（外部API调用 — 唯一的API密集阶段）
+    # 预加载 stock_data + stock_hist_data 单例，填充本地缓存
+    # 后续所有分析任务直接读取内存单例，不再发起API请求
+    # ================================================================
+    bj.main()   # 初始化数据库
+    fdj.main()  # 集中获取数据：实时行情 + 历史K线 + 缓存清理
+
+    # ================================================================
+    # Phase 2: 基础数据入库（读取已加载的单例/少量API调用）
+    # ================================================================
+    hdj.main()   # 股票/ETF实时行情入库（从 stock_data 单例读取）
+    sddj.main()  # 综合选股数据入库（需要API获取选股器数据）
+
+    # ================================================================
+    # Phase 3: 扩展数据获取与入库（独立API：资金流向、龙虎榜等）
+    # ================================================================
     try:
-        # 第3.1步创建股票其它基础数据表（I/O密集，内存占用低）
-        hdtj.main()
+        hdtj.main()  # 资金流向、龙虎榜、筹码等（I/O密集，内存占用低）
     except Exception as e:
         logging.error(f"execute_daily_job basic_data_other异常：{e}")
 
     try:
-        # 第3.2步执行GPT综合选股（轻量级，仅读DB+筛选）
-        gptj.main()
+        gptj.main()  # GPT综合选股（纯DB读取+筛选，无API调用）
     except Exception as e:
         logging.error(f"execute_daily_job gpt_value异常：{e}")
 
+    # ================================================================
+    # Phase 4: 数据分析（纯计算 — 仅读取 stock_hist_data 单例）
+    # 无任何外部API调用，数据来源：Phase 1 已加载的内存单例
+    # ================================================================
     try:
-        # 第4步创建股票指标数据表（重量级：加载stock_hist_data + 计算指标）
-        gdj.main()
+        gdj.main()   # 股票指标计算（MACD/KDJ/RSI等）
     except Exception as e:
         logging.error(f"execute_daily_job indicators异常：{e}")
 
     try:
-        # 第5步创建股票k线形态表（重量级：复用stock_hist_data + 形态识别）
-        kdj.main()
+        kdj.main()   # K线形态识别（锤子线/十字星等）
     except Exception as e:
         logging.error(f"execute_daily_job klinepattern异常：{e}")
 
     try:
-        # 第6步创建股票策略数据表（重量级：复用stock_hist_data + 策略计算）
-        sdj.main()
+        sdj.main()   # 策略选股（放量突破/均线金叉等）
     except Exception as e:
         logging.error(f"execute_daily_job strategy异常：{e}")
 
+    # ================================================================
+    # Phase 5: 回测与收尾
+    # ================================================================
     # 释放历史数据单例，回收内存（约300-500MB）
     # indicators/klinepattern/strategy 已全部完成，后续任务不需要这些内存数据
     try:
@@ -87,11 +100,8 @@ def main():
     except Exception as e:
         logging.warning(f"释放单例异常（不影响后续执行）：{e}")
 
-    # # # # 第6步创建股票回测
-    bdj.main()
-
-    # # # # 第7步创建股票闭盘后才有的数据
-    acdj.main()
+    bdj.main()   # 策略回测（重新加载stock_hist_data，但此时缓存已热，无API调用）
+    acdj.main()  # 闭盘后数据（大宗交易等，需要API）
 
     logging.info("######## 完成任务, 使用时间: %s 秒 #######" % (time.time() - start))
 

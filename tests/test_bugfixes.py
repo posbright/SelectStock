@@ -572,8 +572,11 @@ def _():
         ('instock/core/singleton_trade_date.py', 'docker/stock/instock/core/singleton_trade_date.py'),
         ('instock/core/eastmoney_fetcher.py', 'docker/stock/instock/core/eastmoney_fetcher.py'),
         ('instock/core/crawling/stock_hist_sina.py', 'docker/stock/instock/core/crawling/stock_hist_sina.py'),
+        ('instock/core/crawling/stock_hist_tencent.py', 'docker/stock/instock/core/crawling/stock_hist_tencent.py'),
         ('instock/web/dataIndicatorsHandler.py', 'docker/stock/instock/web/dataIndicatorsHandler.py'),
         ('instock/web/web_service.py', 'docker/stock/instock/web/web_service.py'),
+        ('instock/job/execute_daily_job.py', 'docker/stock/instock/job/execute_daily_job.py'),
+        ('instock/job/fetch_data_job.py', 'docker/stock/instock/job/fetch_data_job.py'),
     ]
     
     mismatches = []
