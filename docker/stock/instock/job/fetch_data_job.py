@@ -35,7 +35,7 @@ __author__ = 'InStock'
 __date__ = '2026/2/10'
 
 
-def fetch_all_data(date, before=True):
+def fetch_all_data(date):
     """
     集中获取所有股票数据
     
@@ -46,10 +46,10 @@ def fetch_all_data(date, before=True):
     
     参数：
         date: 交易日期
-        before: 是否收盘前运行（收盘前不执行）
+    
+    注意：本函数不使用 before 参数，因为它是数据预加载步骤（不写入数据库），
+    应始终执行。run_with_args 对非 save_nph_ 前缀的函数不传递 before 参数。
     """
-    if before:
-        return
 
     start_time = time.time()
     logging.info(f"===== Phase 1: 数据获取开始 [{date}] =====")

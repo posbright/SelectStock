@@ -122,7 +122,7 @@ def is_open(now_time):
     return False
 
 
-def get_trade_hist_interval(date, years=20):
+def get_trade_hist_interval(date, years=10):
     """
     获取历史数据的时间区间
     
