@@ -44,7 +44,7 @@ class stock_hist_data(metaclass=singleton_type):
             date: 基准日期
             stocks: 股票列表，格式 [(date, code), ...]
             workers: 并发线程数
-            years: 历史数据年数，默认读取环境变量 HIST_DATA_DEFAULT_YEARS（默认20年）
+            years: 历史数据年数，默认读取环境变量 HIST_DATA_DEFAULT_YEARS（默认10年）
             date_start: 自定义起始日期 YYYYMMDD
             date_end: 自定义结束日期 YYYYMMDD
         """

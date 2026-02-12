@@ -5,9 +5,10 @@
 本功能实现了股票历史K线数据的增量更新缓存机制，主要特点：
 
 1. **增量更新**：以天为单位追加更新历史数据，避免每次全量获取
-1. **多数据源**：优先使用东方财富，备选新浪财经
+1. **多数据源**：优先使用东方财富，备选腾讯财经、新浪财经，自动容错切换
 3. **自定义范围**：用户可以指定历史数据的获取年数或日期范围
-4. **自动清理**：支持定期清理过期缓存数据
+4. **自动清理**：支持定期清理过期缓存数据（退市股票、除权除息数据）
+5. **数据格式统一**：所有数据源输出统一为：volume=手、amount=元、date=YYYY-MM-DD
 
 ## 核心函数
 
@@ -31,7 +32,14 @@
 
 **数据源优先级：**
 1. 东方财富 (`stock_hist_em.py`)
-2. 新浪财经 (`stock_hist_sina.py`)
+2. 腾讯财经 (`stock_hist_tencent.py`)
+3. 新浪财经 (`stock_hist_sina.py`)
+
+**数据格式统一标准：**
+- 列顺序：[date, open, close, high, low, volume, amount, amplitude, quote_change, ups_downs, turnover]
+- volume 单位：手（100股）
+- amount 单位：元
+- date 格式：YYYY-MM-DD
 
 ### 2. `fetch_stock_hist(data_base, date_start=None, date_end=None, is_cache=True, years=None)`
 
@@ -42,7 +50,7 @@
 - `date_start`: 起始日期，默认根据 years 计算
 - `date_end`: 结束日期，默认当前日期
 - `is_cache`: 是否使用缓存
-- `years`: 历史数据年数，默认 3 年
+- `years`: 历史数据年数，默认 10 年（通过环境变量 `HIST_DATA_DEFAULT_YEARS` 调整）
 
 ### 3. `clean_expired_cache(expire_days=None)`
 
@@ -61,7 +69,7 @@ DATA_SOURCE_MAX_RETRIES = 2      # 最大重试次数
 DATA_SOURCE_RETRY_INTERVAL = 90  # 基础重试间隔（秒），实际使用指数退避（Docker默认30秒）
 
 # 历史数据配置
-HIST_DATA_DEFAULT_YEARS = 20     # 默认获取历史数据年数（Docker默认3年）
+HIST_DATA_DEFAULT_YEARS = 10     # 默认获取历史数据年数（Docker默认3年）
 # 缓存清理由 clean_expired_cache() 智能管理（清理已退市股票、除权除息股票缓存）
 ```
 
@@ -106,6 +114,34 @@ print(f'清理了 {cleaned} 个过期缓存文件')
 
 ## 数据源模块
 
+### 东方财富历史数据 (`stock_hist_em.py`)
+
+```python
+from instock.core.crawling.stock_hist_em import stock_zh_a_hist
+
+df = stock_zh_a_hist(
+    symbol="000001",
+    period="daily",      # daily, weekly, monthly
+    start_date="20240101",
+    end_date="20240630",
+    adjust=""            # "", "qfq", "hfq"
+)
+```
+
+### 腾讯财经历史数据 (`stock_hist_tencent.py`)
+
+```python
+from instock.core.crawling.stock_hist_tencent import stock_zh_a_hist_tencent
+
+df = stock_zh_a_hist_tencent(
+    symbol="000001",
+    period="daily",      # daily, weekly, monthly
+    start_date="20240101",
+    end_date="20240630",
+    adjust=""            # "", "qfq", "hfq"
+)
+```
+
 ### 新浪财经历史数据 (`stock_hist_sina.py`)
 
 ```python
@@ -118,6 +154,58 @@ df = stock_zh_a_hist_sina(
     end_date="20240630",
     adjust=""            # "", "qfq", "hfq"
 )
+```
+
+## 手动拉取历史数据
+
+### 方式一：使用 fetch_data_job.py（推荐）
+
+```bash
+cd instock/job
+
+# 拉取当前交易日的最新数据（增量更新）
+python fetch_data_job.py
+
+# 指定日期拉取
+python fetch_data_job.py 2024-06-15
+```
+
+### 方式二：通过环境变量调整获取年数
+
+```bash
+# 默认10年，Docker默认3年
+# Windows:
+set HIST_DATA_DEFAULT_YEARS=10
+python fetch_data_job.py
+
+# Linux/Mac:
+export HIST_DATA_DEFAULT_YEARS=10
+python fetch_data_job.py
+```
+
+### 方式三：强制重建全部缓存
+
+```bash
+# ⚠️ 清空缓存后重新获取（耗时较长）
+# Windows:
+rd /s /q instock\cache\hist
+# Linux/Mac:
+rm -rf instock/cache/hist
+
+cd instock/job && python fetch_data_job.py
+```
+
+### 方式四：Docker 环境手动拉取
+
+```bash
+docker exec -it InStock bash
+cd /data/InStock/instock/job
+
+# 拉取最新数据
+python fetch_data_job.py
+
+# 调整历史年数
+HIST_DATA_DEFAULT_YEARS=5 python fetch_data_job.py
 ```
 
 ## 性能优势

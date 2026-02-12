@@ -77,9 +77,9 @@ docker-compose -f docker-compose.remote-db.yml up -d
 | `SUPERVISOR_PORT` | 9001 | Supervisor管理端口 |
 | `DATA_SOURCE_MAX_RETRIES` | 2 | 数据源最大重试次数 |
 | `DATA_SOURCE_RETRY_INTERVAL` | 30 | 数据源基础重试间隔（秒，指数退避） |
-| `HIST_DATA_DEFAULT_YEARS` | 3 | 默认获取历史数据年数（裸机部署默认20年） |
+| `HIST_DATA_DEFAULT_YEARS` | 3 | 默认获取历史数据年数（裸机部署默认10年） |
 
-> 注意：Docker 环境默认获取3年历史数据以加快首次启动，裸机部署默认20年。可通过环境变量自行调整。
+> 注意：Docker 环境默认获取3年历史数据以加快首次启动，裸机部署默认10年。可通过环境变量自行调整。
 > `HIST_DATA_CACHE_EXPIRE_DAYS` 已废弃，缓存清理现由 `clean_expired_cache()` 智能管理（清理已退市股票、除权除息股票缓存）。
 
 ### 数据源配置

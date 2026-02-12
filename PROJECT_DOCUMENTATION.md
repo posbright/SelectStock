@@ -114,6 +114,7 @@ SelectStock/
 │   │   │   ├── stock_sina.py       # 新浪财经-股票实时行情
 │   │   │   ├── stock_tencent.py    # 腾讯财经-股票实时行情
 │   │   │   ├── stock_hist_em.py    # 东方财富-历史K线
+│   │   │   ├── stock_hist_tencent.py # 腾讯财经-历史K线（新增）
 │   │   │   ├── stock_hist_sina.py  # 新浪财经-历史K线
 │   │   │   ├── stock_fund_em.py    # 东方财富-资金流向
 │   │   │   ├── stock_fund_sina.py  # 新浪财经-资金流向
@@ -171,7 +172,8 @@ SelectStock/
 │   │       └── rate_stats.py   # 收益率统计
 │   │
 │   ├── job/                     # ⏰ 定时作业
-│   │   ├── execute_daily_job.py    # 整体作业调度
+│   │   ├── execute_daily_job.py    # 整体作业调度（5阶段流水线）
+│   │   ├── fetch_data_job.py       # 数据获取作业（Phase 1，支持独立运行）
 │   │   ├── init_job.py             # 初始化（创建数据库）
 │   │   ├── basic_data_daily_job.py # 基础数据实时作业
 │   │   ├── basic_data_other_daily_job.py # 其他基础数据
@@ -263,7 +265,7 @@ SelectStock/
 |---------|-----------|-----------|------|
 | 股票实时行情 | 东方财富 | 腾讯财经 → 新浪财经 | 包含40+字段 |
 | ETF实时行情 | 东方财富 | 腾讯财经 → 新浪财经 | 含规模、换手率等 |
-| 历史K线 | 东方财富 | 新浪财经 | 支持增量更新 |
+| 历史K线 | 东方财富 | 腾讯财经 → 新浪财经 | 支持增量更新，3源自动容错 |
 | 资金流向 | 东方财富 | 新浪财经 | 主力/散户资金 |
 | 龙虎榜 | 东方财富 | 新浪财经 | 机构买卖数据 |
 | 综合选股 | 东方财富 | 新浪财经 | 200+筛选条件 |
@@ -428,10 +430,20 @@ docker-compose -f docker-compose.remote-db.yml up -d
 
 ### 1. 运行数据作业
 
+系统采用 **5阶段流水线架构**，数据获取与分析彻底分离：
+
+| 阶段 | 说明 | 脚本 |
+|------|------|------|
+| Phase 1 | 数据获取（API调用集中在此阶段） | `fetch_data_job.py` |
+| Phase 2 | 基础数据入库 | `basic_data_daily_job.py` + `selection_data_daily_job.py` |
+| Phase 3 | 扩展数据入库 | `basic_data_other_daily_job.py` + `gpt_value_data_job.py` |
+| Phase 4 | 数据分析（纯计算，无API调用） | `indicators` + `klinepattern` + `strategy` |
+| Phase 5 | 回测与收尾 | `backtest_data_daily_job.py` + `basic_data_after_close_daily_job.py` |
+
 ```bash
 cd instock/job
 
-# 整体作业（包含所有数据处理）
+# 整体作业（包含所有数据处理，自动执行5个阶段）
 python execute_daily_job.py
 
 # 指定日期
@@ -447,6 +459,9 @@ python execute_daily_job.py 2024-01-01,2024-01-15,2024-01-31
 ### 2. 单独运行模块
 
 ```bash
+# 数据获取（Phase 1，预加载实时行情 + 历史K线 + 缓存清理）
+python fetch_data_job.py
+
 # 基础数据（实时行情）
 python basic_data_daily_job.py
 
@@ -469,11 +484,93 @@ python gpt_value_data_job.py
 python backtest_data_daily_job.py
 ```
 
-### 3. 访问Web界面
+### 3. 手动拉取历史数据
+
+当需要手动拉取或更新历史K线数据时，有以下几种方式：
+
+#### 方式一：使用 fetch_data_job.py（推荐）
+
+```bash
+cd instock/job
+
+# 拉取当前交易日的最新数据（增量更新，自动补缺）
+python fetch_data_job.py
+
+# 指定日期拉取
+python fetch_data_job.py 2024-06-15
+```
+
+该脚本会自动执行：
+1. 清理过期/退市/除权缓存
+2. 预加载全部股票的实时行情数据
+3. 预加载全部股票的历史K线数据（首次全量获取，后续增量更新）
+
+#### 方式二：使用 Python 脚本自定义获取
+
+```python
+import datetime
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import instock.core.stockfetch as stf
+
+# 获取单只股票历史K线（默认10年历史）
+data_base = (datetime.datetime.now(), '000001')
+df = stf.fetch_stock_hist(data_base)
+print(f"获取到 {len(df)} 条记录") if df is not None else print("获取失败")
+
+# 自定义年数（如获取5年历史）
+df = stf.fetch_stock_hist(data_base, years=5)
+
+# 指定日期范围
+df = stf.fetch_stock_hist(data_base, date_start='20230101', date_end='20231231')
+
+# 不使用缓存，强制从API获取最新数据
+df = stf.fetch_stock_hist(data_base, is_cache=False)
+
+# 清理过期缓存（退市股票、除权除息数据）
+cleaned = stf.clean_expired_cache()
+print(f"清理了 {cleaned} 个缓存文件")
+```
+
+#### 方式三：通过环境变量调整默认获取年数
+
+```bash
+# 设置获取的历史数据年数（默认10年，Docker默认3年）
+# Windows:
+set HIST_DATA_DEFAULT_YEARS=10
+python fetch_data_job.py
+
+# Linux/Mac:
+export HIST_DATA_DEFAULT_YEARS=10
+python fetch_data_job.py
+```
+
+#### 方式四：强制重建全部缓存
+
+如果缓存数据出现问题，可以清空缓存目录后重新获取：
+
+```bash
+# ⚠️ 注意：此操作会删除所有历史数据缓存，重新获取耗时较长
+# Windows:
+rd /s /q instock\cache\hist
+# Linux/Mac:
+rm -rf instock/cache/hist
+
+# 然后重新拉取数据
+cd instock/job
+python fetch_data_job.py
+```
+
+> **增量更新说明**：系统采用增量缓存机制，首次运行需从API获取全部历史数据（耗时较长），
+> 后续运行只需补缺新增交易日数据（快速完成）。数据源优先级：东方财富 → 腾讯财经 → 新浪财经，
+> 自动容错切换。详见 [历史数据缓存说明](document/hist_cache_incremental.md)。
+
+### 4. 访问Web界面
 
 启动Web服务后访问: http://localhost:9988
 
-### 4. 自动交易
+### 5. 自动交易
 
 ```bash
 cd instock/bin
@@ -525,8 +622,21 @@ user:pass@192.168.1.100:8080
 ```python
 DATA_SOURCE_MAX_RETRIES = 2      # 最大重试次数
 DATA_SOURCE_RETRY_INTERVAL = 90  # 基础重试间隔(秒)，实际使用指数退避（Docker默认30秒）
-HIST_DATA_DEFAULT_YEARS = 20     # 默认获取历史数据年数（Docker默认3年）
+HIST_DATA_DEFAULT_YEARS = 10     # 默认获取历史数据年数（Docker默认3年）
 # 注：缓存清理由 clean_expired_cache() 智能管理
+```
+
+### 历史数据获取配置
+
+通过环境变量控制历史数据获取年数：
+
+```bash
+# Windows:
+set HIST_DATA_DEFAULT_YEARS=10
+# Linux/Mac:
+export HIST_DATA_DEFAULT_YEARS=10
+# Docker:
+docker run -e HIST_DATA_DEFAULT_YEARS=5 ...
 ```
 
 ---

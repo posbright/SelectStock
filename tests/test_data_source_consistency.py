@@ -208,7 +208,7 @@ def _():
     # 默认值应该是20
     assert hasattr(stf, 'HIST_DATA_DEFAULT_YEARS'), "缺少 HIST_DATA_DEFAULT_YEARS 常量"
     # 检查可以从环境变量读取
-    assert stf.HIST_DATA_DEFAULT_YEARS == int(os.environ.get('HIST_DATA_DEFAULT_YEARS', 20))
+    assert stf.HIST_DATA_DEFAULT_YEARS == int(os.environ.get('HIST_DATA_DEFAULT_YEARS', 10))
 
 @test("singleton_stock 默认年数与 stockfetch 一致")
 def _():

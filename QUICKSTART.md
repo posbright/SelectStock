@@ -62,6 +62,21 @@ run_web.bat
 
 ## 📊 常用操作
 
+### 手动拉取历史数据
+
+```bash
+cd instock/job
+
+# 拉取当前交易日的最新数据（实时行情 + 历史K线，增量更新）
+python fetch_data_job.py
+
+# 指定日期拉取
+python fetch_data_job.py 2024-06-15
+```
+
+> 首次运行需从API获取全量历史数据（耗时较长），后续运行只需补缺新增交易日数据（快速完成）。
+> 数据源优先级：东方财富 → 腾讯财经 → 新浪财经，自动容错切换。
+
 ### 获取今日股票数据
 
 ```bash
@@ -89,6 +104,31 @@ python execute_daily_job.py 2024-01-15
 
 # 日期范围
 python execute_daily_job.py 2024-01-01 2024-01-31
+```
+
+### 调整历史数据获取年数
+
+```bash
+# 默认10年，Docker默认3年，可通过环境变量调整
+# Windows:
+set HIST_DATA_DEFAULT_YEARS=10
+python fetch_data_job.py
+
+# Linux/Mac:
+export HIST_DATA_DEFAULT_YEARS=10
+python fetch_data_job.py
+```
+
+### 强制重建缓存
+
+```bash
+# 清空缓存目录后重新获取（耗时较长）
+# Windows:
+rd /s /q instock\cache\hist
+# Linux/Mac:
+rm -rf instock/cache/hist
+
+python fetch_data_job.py
 ```
 
 ---
@@ -137,6 +177,11 @@ mysql -u root -p -e "SELECT 1"
 ### Q: 如何更新历史数据？
 
 A: 历史数据采用增量更新机制，只需运行：
+```bash
+cd instock/job
+python fetch_data_job.py
+```
+或使用整体作业：
 ```bash
 python execute_daily_job.py
 ```

@@ -327,10 +327,10 @@ def _():
     from instock.core.stockfetch import DATA_SOURCE_RETRY_INTERVAL
     assert DATA_SOURCE_RETRY_INTERVAL == 90, f"应为 90，实际 {DATA_SOURCE_RETRY_INTERVAL}"
 
-@test("HIST_DATA_DEFAULT_YEARS = 20")
+@test("HIST_DATA_DEFAULT_YEARS = 10")
 def _():
     from instock.core.stockfetch import HIST_DATA_DEFAULT_YEARS
-    assert HIST_DATA_DEFAULT_YEARS == 20, f"应为 20，实际 {HIST_DATA_DEFAULT_YEARS}"
+    assert HIST_DATA_DEFAULT_YEARS == 10, f"应为 10，实际 {HIST_DATA_DEFAULT_YEARS}"
 
 @test("is_a_stock 过滤正确")
 def _():

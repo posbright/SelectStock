@@ -37,7 +37,7 @@ DATA_SOURCE_MAX_RETRIES = int(os.environ.get('DATA_SOURCE_MAX_RETRIES', 2))  # �
 DATA_SOURCE_RETRY_INTERVAL = int(os.environ.get('DATA_SOURCE_RETRY_INTERVAL', 90))  # 基础重试间隔（秒），实际使用指数退避
 
 # 历史数据配置（支持环境变量覆盖）
-HIST_DATA_DEFAULT_YEARS = int(os.environ.get('HIST_DATA_DEFAULT_YEARS', 20))  # 默认获取历史数据年数
+HIST_DATA_DEFAULT_YEARS = int(os.environ.get('HIST_DATA_DEFAULT_YEARS', 10))  # 默认获取历史数据年数
 
 
 def _retry_sleep(retry_count, base_interval=None):
@@ -557,7 +557,7 @@ def fetch_etf_hist(data_base, date_start=None, date_end=None, adjust='qfq'):
 #   date_start: 起始日期，格式 YYYYMMDD，默认为20年前
 #   date_end: 结束日期，格式 YYYYMMDD，默认为当前日期
 #   is_cache: 是否使用缓存
-#   years: 历史数据年数，默认20年
+#   years: 历史数据年数，默认10年
 # 数据单位说明：
 #   缓存中的 volume = 手（100股），各数据源已统一
 #   本函数返回的 volume = 股（手 × 100）
@@ -717,6 +717,13 @@ def stock_hist_cache_incremental(code, date_start, date_end, is_cache=True, adju
         is_cache: 是否使用缓存
         adjust: 复权类型 qfq/hfq/''
     """
+    # 标准列名（用于缓存统一）
+    _standard_columns = tuple(tbs.CN_STOCK_HIST_DATA['columns'])
+    # 旧列名 → 新列名映射（兼容旧缓存数据）
+    _column_rename_map = {
+        'pct_chg': 'quote_change',
+        'change': 'ups_downs',
+    }
     cache_file = _get_cache_file_path(code, adjust)
     
     try:
@@ -729,6 +736,19 @@ def stock_hist_cache_incremental(code, date_start, date_end, is_cache=True, adju
             try:
                 cached_data = pd.read_pickle(cache_file, compression="gzip")
                 if cached_data is not None and len(cached_data) > 0 and 'date' in cached_data.columns:
+                    # 统一旧缓存列名（兼容 EastMoney 旧列名 pct_chg/change）
+                    cached_data = cached_data.rename(columns=_column_rename_map)
+                    # 合并重复列（旧缓存可能已含新旧两套列名，用 fillna 合并）
+                    dup_mask = cached_data.columns.duplicated(keep=False)
+                    if dup_mask.any():
+                        for col_name in cached_data.columns[dup_mask].unique():
+                            dup_cols = cached_data.loc[:, cached_data.columns == col_name]
+                            merged = dup_cols.iloc[:, 0].fillna(dup_cols.iloc[:, 1])
+                            cached_data = cached_data.loc[:, cached_data.columns != col_name]
+                            cached_data[col_name] = merged
+                    # 确保只保留标准列，丢弃多余列
+                    valid_cols = [c for c in _standard_columns if c in cached_data.columns]
+                    cached_data = cached_data[valid_cols]
                     cache_first_date = _to_date_str(cached_data['date'].min())
                     cache_last_date = _to_date_str(cached_data['date'].max())
                 else:

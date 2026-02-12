@@ -218,6 +218,7 @@ VR:
 区间时间作业 python execute_daily_job.py 2022-01-01 2022-03-01
 
 ------单功能作业，支持批量作业，回测数据自动填补到当前
+数据获取作业 python fetch_data_job.py  (实时行情+历史K线+缓存清理)
 基础数据实时作业 python basic_data_daily_job.py
 基础数据非实时作业 python basic_data_other_daily_job.py
 指标数据作业 python indicators_data_daily_job.py
@@ -226,27 +227,89 @@ K线形态作业 python klinepattern_data_daily_job.py
 GPT综合选股作业 python gpt_value_data_job.py
 回测数据 python backtest_data_daily_job.py
 ```
-## 十二：支持代理及Cookie
+
+## 十二’：手动拉取历史数据
+
+当需要手动拉取或更新历史K线数据时，可以通过以下方式获取：
+
+### 方式一：使用 fetch_data_job.py（推荐）
+```
+cd instock/job
+
+# 拉取当前交易日的最新数据（增量更新）
+python fetch_data_job.py
+
+# 指定日期拉取
+python fetch_data_job.py 2024-06-15
+```
+该脚本会自动清理过期缓存、拉取实时行情、增量更新历史K线。
+
+数据源优先级：东方财富 → 腾讯财经 → 新浪财经，自动容错切换。
+
+### 方式二：使用 Python 脚本自定义获取
+```python
+import datetime, os, sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import instock.core.stockfetch as stf
+
+# 获取单只股票历史K线（默认10年）
+df = stf.fetch_stock_hist((datetime.datetime.now(), '000001'))
+
+# 自定义获取5年历史
+df = stf.fetch_stock_hist((datetime.datetime.now(), '000001'), years=5)
+
+# 指定日期范围
+df = stf.fetch_stock_hist((datetime.datetime.now(), '000001'),
+                          date_start='20230101', date_end='20231231')
+
+# 不使用缓存，强制从API获取最新数据
+df = stf.fetch_stock_hist((datetime.datetime.now(), '000001'), is_cache=False)
+```
+
+### 方式三：通过环境变量调整获取年数
+```
+# 默认10年，Docker默认3年，可自行调整
+# Windows:
+set HIST_DATA_DEFAULT_YEARS=10
+# Linux/Mac:
+export HIST_DATA_DEFAULT_YEARS=10
+
+python fetch_data_job.py
+```
+
+### 方式四：强制重建全部缓存
+```
+# 先清空缓存目录（重新获取耗时较长）
+# Windows:
+rd /s /q instock\cache\hist
+# Linux/Mac:
+rm -rf instock/cache/hist
+
+cd instock/job && python fetch_data_job.py
+```
+
+增量更新说明：首次运行需从API获取全量历史数据（耗时较长），后续运行只需补缺新增交易日数据（快速完成）。
+## 十三：支持代理及Cookie
 
 支持多代理获取数据。由于很多网站对大量请求有防护机制，使用单一IP地址频繁访问可能导致被封禁或限制访问。代理IP能够帮助分散请求来源，避免单一IP被封锁，从而保证爬虫程序的稳定运行。
 支持注入Cookie，解决数据获取频率过高，限制数据获取。
-## 十三：存储采用数据库设计
+## 十四：存储采用数据库设计
 
 数据存储采用数据库设计，能保存历史数据，以及对数据进行扩展分析、统计、挖掘。系统实现自动创建数据库、数据表，封装了批量更新、插入数据，方便业务扩展。
 
 ![](img/07.jpg)
 
-## 十四：展示采用web设计
+## 十五：展示采用web设计
 
 采用web设计，可视化展示结果。对展示进行封装，添加新的业务表单，只需要配置视图字典就可自动出现业务可视化界面，方便业务功能扩展。
 
-## 十五：运行高效
+## 十六：运行高效
 
 
 采用多线程、单例共享资源有效提高运算效率。1天数据的抓取、计算指标、形态识别、策略选股、回测等全部任务运行时间大概4分钟（普通笔记本），计算天数越多效率越高。
 
 
-## 十六：方便调试
+## 十七：方便调试
 
 系统运行的重要日志记录在stock_execute_job.log(数据抓取、处理、分析)、stock_web.log(web服务)、stock_trade.log(交易服务)，方便调试发现问题。
 
@@ -580,6 +643,7 @@ cat InStock/instock/bin/run_job.sh
 枚举时间作业 python execute_daily_job.py 2022-01-01,2021-02-08,2022-03-12
 区间时间作业 python execute_daily_job.py 2022-01-01 2022-03-01
 ------单功能作业，支持批量作业，回测数据自动填补到当前
+数据获取作业 python fetch_data_job.py  (实时行情+历史K线+缓存清理)
 综合选股作业 python selection_data_daily_job.py
 基础数据实时作业 python basic_data_daily_job.py
 基础数据收盘2小时后作业 python basic_data_after_close_daily_job.py
