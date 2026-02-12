@@ -6,6 +6,7 @@ import time
 import datetime
 import concurrent.futures
 import logging
+import gc
 import os.path
 import sys
 
@@ -74,6 +75,17 @@ def main():
         sdj.main()
     except Exception as e:
         logging.error(f"execute_daily_job strategy异常：{e}")
+
+    # 释放历史数据单例，回收内存（约300-500MB）
+    # indicators/klinepattern/strategy 已全部完成，后续任务不需要这些内存数据
+    try:
+        from instock.core.singleton_stock import stock_hist_data, stock_data
+        stock_hist_data.release()
+        stock_data.release()
+        gc.collect()
+        logging.info("已释放 stock_hist_data/stock_data 单例，回收内存")
+    except Exception as e:
+        logging.warning(f"释放单例异常（不影响后续执行）：{e}")
 
     # # # # 第6步创建股票回测
     bdj.main()
