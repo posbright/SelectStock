@@ -38,7 +38,7 @@ class stock_data(metaclass=singleton_type):
 
 # 读取股票历史数据（支持增量更新和自定义时间范围）
 class stock_hist_data(metaclass=singleton_type):
-    def __init__(self, date=None, stocks=None, workers=8, years=None, date_start=None, date_end=None):
+    def __init__(self, date=None, stocks=None, workers=4, years=None, date_start=None, date_end=None):
         """
         初始化股票历史数据
         
@@ -66,6 +66,9 @@ class stock_hist_data(metaclass=singleton_type):
             return
         
         logging.info(f"stock_hist_data开始初始化：{len(stocks)}只股票，{workers}线程，{years}年历史数据")
+        
+        # 限制并发数，避免过多线程同时请求 API 导致限流/封禁
+        workers = min(workers, 6)
         
         # 获取时间区间
         if date_start is None:

@@ -279,6 +279,8 @@ def stock_zh_a_hist(
         "end": end_date,
         "_": "1623766962675",
     }
+    # 添加随机延迟，降低并发请求对东方财富API的瞬时压力
+    time.sleep(random.uniform(0.2, 0.5))
     r =  fetcher.make_request(url, params=params)
     data_json = r.json()
     if not (data_json["data"] and data_json["data"]["klines"]):

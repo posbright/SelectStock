@@ -3,6 +3,7 @@
 
 import os
 import requests
+import threading
 from pathlib import Path
 import time
 import random
@@ -21,6 +22,10 @@ class eastmoney_fetcher:
         """初始化获取器"""
         self.base_dir = os.path.dirname(os.path.dirname(__file__))
         self.session = self._create_session()
+        # 使用 threading.local 为每个线程提供独立的 Session
+        # requests.Session 不是线程安全的，多线程共享同一 Session 对象
+        # 会导致连接池损坏、cookie 混乱等问题
+        self._thread_local = threading.local()
 
     def _get_cookie(self):
         """
@@ -60,9 +65,15 @@ class eastmoney_fetcher:
         session.headers.update(headers)
         return session
 
+    def _get_thread_session(self):
+        """获取当前线程的 Session（线程安全）"""
+        if not hasattr(self._thread_local, 'session'):
+            self._thread_local.session = self._create_session()
+        return self._thread_local.session
+
     def make_request(self, url, params=None, retry=2, timeout=30):
         """
-        发送请求
+        发送请求（线程安全：每个线程使用独立的 Session）
         :param url: 请求URL
         :param params: 请求参数
         :param retry: 重试次数
@@ -76,9 +87,11 @@ class eastmoney_fetcher:
             'Accept-Language': 'zh-CN,zh;q=0.9',
         }
         
+        session = self._get_thread_session()
+        
         for i in range(retry):
             try:
-                response = self.session.get(
+                response = session.get(
                     url,
                     headers=headers,
                     proxies=proxys().get_proxies(),

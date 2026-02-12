@@ -415,12 +415,12 @@ def _():
 # ============================================================
 print("\n🔧 测试 9: singleton_stock.py workers")
 
-@test("默认 workers=8")
+@test("默认 workers=4")
 def _():
     import inspect
     from instock.core.singleton_stock import stock_hist_data
     sig = inspect.signature(stock_hist_data.__init__)
-    assert sig.parameters['workers'].default == 8, f"workers 默认值应为 8，实际 {sig.parameters['workers'].default}"
+    assert sig.parameters['workers'].default == 4, f"workers 默认值应为 4，实际 {sig.parameters['workers'].default}"
 
 
 # ============================================================
