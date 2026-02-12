@@ -415,12 +415,12 @@ def _():
 # ============================================================
 print("\n🔧 测试 9: singleton_stock.py workers")
 
-@test("默认 workers=4")
+@test("默认 workers=2")
 def _():
     import inspect
     from instock.core.singleton_stock import stock_hist_data
     sig = inspect.signature(stock_hist_data.__init__)
-    assert sig.parameters['workers'].default == 4, f"workers 默认值应为 4，实际 {sig.parameters['workers'].default}"
+    assert sig.parameters['workers'].default == 2, f"workers 默认值应为 2，实际 {sig.parameters['workers'].default}"
 
 
 # ============================================================
@@ -600,6 +600,76 @@ def _():
             mismatches.append(f"{main_file}")
     
     assert len(mismatches) == 0, f"以下文件不一致: {', '.join(mismatches)}"
+
+
+# ============================================================
+# 测试 15: update_all_caches 5层限流防护
+# ============================================================
+print("\n🔧 测试 15: update_all_caches 5层限流防护")
+
+@test("update_all_caches 默认 workers=2")
+def _():
+    import inspect
+    from instock.core.stockfetch import update_all_caches
+    sig = inspect.signature(update_all_caches)
+    assert sig.parameters['workers'].default == 2, f"workers 默认值应为 2，实际 {sig.parameters['workers'].default}"
+
+@test("update_all_caches 源码包含5层限流关键参数")
+def _():
+    import inspect
+    from instock.core.stockfetch import update_all_caches
+    source = inspect.getsource(update_all_caches)
+    # 第1层：并发限制
+    assert 'min(workers, 4)' in source, "应限制最大并发数为4"
+    # 第2层：自适应请求延迟
+    assert 'request_delay' in source, "应有自适应请求延迟机制"
+    # 第3层：批次冷却
+    assert 'BATCH_PAUSE_INTERVAL = 100' in source, "批次暂停间隔应为100"
+    # 第4层：限流检测
+    assert 'CONSECUTIVE_FAIL_THRESHOLD = 3' in source, "连续失败阈值应为3"
+    assert 'BASE_THROTTLE_PAUSE = 120' in source, "基础限流暂停应为120秒"
+    # 第5层：熔断保护
+    assert 'MAX_THROTTLE_COUNT = 3' in source, "最大限流次数应为3"
+    assert '_abort' in source, "应有熔断标志"
+
+@test("update_all_caches 限流后自动降速")
+def _():
+    import inspect
+    from instock.core.stockfetch import update_all_caches
+    source = inspect.getsource(update_all_caches)
+    assert 'request_delay[0] * 1.5' in source, "限流恢复后应将延迟加大50%"
+    assert 'request_delay[1] * 1.5' in source, "限流恢复后应将延迟加大50%"
+
+@test("update_all_caches 渐进退避（倍增暂停时间）")
+def _():
+    import inspect
+    from instock.core.stockfetch import update_all_caches
+    source = inspect.getsource(update_all_caches)
+    assert '2 ** (throttle_count - 1)' in source, "暂停时间应随限流次数指数增长"
+
+@test("update_all_caches 缓存预检跳过机制")
+def _():
+    import inspect
+    from instock.core.stockfetch import update_all_caches
+    source = inspect.getsource(update_all_caches)
+    assert '_read_cache_meta' in source, "应预检查缓存元数据"
+    assert "return 'skip'" in source, "缓存已最新时应跳过"
+
+@test("update_all_caches 无旧版过短延迟")
+def _():
+    import inspect
+    from instock.core.stockfetch import update_all_caches
+    source = inspect.getsource(update_all_caches)
+    assert 'random.uniform(0.3, 0.8)' not in source, "不应有旧版 0.3-0.8 秒延迟"
+    assert 'THROTTLE_PAUSE_SECONDS = 60' not in source, "不应有旧版固定 60 秒暂停"
+    assert 'CONSECUTIVE_FAIL_THRESHOLD = 10' not in source, "不应有旧版 10 次阈值"
+
+@test("fetch_data_job workers=2")
+def _():
+    import inspect
+    from instock.job import fetch_data_job
+    source = inspect.getsource(fetch_data_job.fetch_all_data)
+    assert 'workers=2' in source, "fetch_data_job 应使用 workers=2"
 
 
 # ============================================================

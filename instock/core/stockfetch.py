@@ -963,7 +963,7 @@ def stock_hist_cache(code, date_start, date_end=None, is_cache=True, adjust=''):
     return stock_hist_cache_incremental(code, date_start, date_end, is_cache, adjust)
 
 
-def update_all_caches(stocks, date_start, date_end, workers=4):
+def update_all_caches(stocks, date_start, date_end, workers=2):
     """
     批量更新所有股票的缓存文件（仅更新缓存，不保留在内存中）
     
@@ -971,17 +971,18 @@ def update_all_caches(stocks, date_start, date_end, workers=4):
     - stock_hist_data: 全部加载到内存的 dict 中（~1.6GB），供后续分析直接读取
     - update_all_caches: 仅触发增量缓存更新，处理完每只股票即释放内存
     
-    限流策略：
-    - 默认 4 并发线程（降低对数据源API的并发压力）
-    - 每只股票请求完成后添加随机延迟（0.3-0.8秒）
-    - 每 500 只股票后暂停 5-10 秒（让API连接池冷却）
-    - 连续失败超过阈值时自动降速（可能已被限流）
+    5层限流防护策略：
+    第1层 - 控制并发：默认 2 线程（最大 4），有效 QPS ≈ 1.0
+    第2层 - 请求间隔：每次 API 请求后等待 1.0-3.0 秒（缓存命中零延迟）
+    第3层 - 批次冷却：每 100 只股票暂停 8-15 秒，让连接池充分冷却
+    第4层 - 限流检测：连续 3 次失败即触发暂停，渐进退避（120s→240s→480s）
+    第5层 - 熔断保护：累计 3 次限流后终止任务，恢复后自动降速 50%
     
     参数：
         stocks: 股票列表 [(date, code), ...]
         date_start: 起始日期 YYYYMMDD
         date_end: 结束日期 YYYYMMDD
-        workers: 并发线程数（默认4，不建议超过6）
+        workers: 并发线程数（默认2，不建议超过4）
     返回：
         (success_count, fail_count)
     """
@@ -989,26 +990,45 @@ def update_all_caches(stocks, date_start, date_end, workers=4):
     
     success = 0
     fail = 0
-    consecutive_fails = 0     # 连续失败计数（检测限流）
-    _lock = threading.Lock()  # 保护计数器
+    skip = 0                           # 缓存已最新，无需请求API
+    consecutive_fails = 0              # 连续失败计数（用于检测限流）
+    throttle_count = 0                 # 限流暂停累计触发次数
+    _lock = threading.Lock()           # 保护所有共享计数器
     _throttle_event = threading.Event()  # 限流暂停信号
-    _throttle_event.set()     # 初始状态：不暂停
+    _throttle_event.set()              # 初始状态：不暂停
+    _abort = False                     # 熔断标志
     
-    # 限流阈值：连续失败超过此值时，所有线程暂停一段时间
-    CONSECUTIVE_FAIL_THRESHOLD = 10
-    THROTTLE_PAUSE_SECONDS = 60  # 触发限流后暂停秒数
-    BATCH_PAUSE_INTERVAL = 500   # 每处理 N 只股票后暂停
-    BATCH_PAUSE_SECONDS = (5, 10)  # 暂停时间范围
+    # ── 限流参数 ──
+    CONSECUTIVE_FAIL_THRESHOLD = 3     # 连续失败阈值（尽早检测限流，避免浪费请求）
+    BASE_THROTTLE_PAUSE = 120          # 首次限流暂停秒数（后续每次翻倍：120→240→480）
+    MAX_THROTTLE_COUNT = 3             # 最多触发限流次数，超过后终止任务（疑似IP被封）
+    BATCH_PAUSE_INTERVAL = 100         # 每处理 N 只股票后暂停
+    BATCH_PAUSE_SECONDS = (8, 15)      # 批次暂停时间范围
+
+    # 自适应请求延迟（每次限流恢复后自动加大 50%，上限 5-8 秒）
+    request_delay = [1.0, 3.0]         # [最小, 最大] 秒
     
     def _update_one(stock):
-        """更新单只股票的缓存，返回是否成功"""
+        """更新单只股票的缓存，返回 'skip'/True/False"""
         nonlocal consecutive_fails
+        code = stock[1]
         
-        # 检查是否处于限流暂停状态
+        # 熔断检查：任务已终止则立即返回
+        if _abort:
+            return False
+        
+        # 预检查：缓存已最新则跳过（零延迟，不发起任何API请求）
+        meta = _read_cache_meta(code, 'qfq')
+        if meta and meta.get('last_date') and meta['last_date'] >= date_end:
+            return 'skip'
+        
+        # 等待限流暂停恢复
         _throttle_event.wait()
         
+        if _abort:
+            return False
+        
         try:
-            code = stock[1]
             data = stock_hist_cache_incremental(code, date_start, date_end, is_cache=True, adjust='qfq')
             ok = data is not None and len(data) > 0
             if ok:
@@ -1016,57 +1036,101 @@ def update_all_caches(stocks, date_start, date_end, workers=4):
                     consecutive_fails = 0  # 成功时重置连续失败计数
             return ok
         except Exception as e:
-            logging.error(f"update_all_caches处理异常：{stock[1]} - {e}")
+            logging.error(f"update_all_caches处理异常：{code} - {e}")
             return False
         finally:
-            # 请求间随机延迟，降低对 API 的瞬时压力
-            time.sleep(random.uniform(0.3, 0.8))
+            # 仅在实际可能发起 API 请求时添加延迟
+            # （预检查跳过的股票通过 return 'skip' 提前返回，不经过此路径）
+            if not _abort:
+                time.sleep(random.uniform(request_delay[0], request_delay[1]))
     
     # 限制并发数，避免过多线程同时请求 API
-    workers = min(workers, 6)
+    workers = min(workers, 4)
     
     try:
         processed_total = 0
+        api_processed = 0  # 实际发起 API 请求的数量（用于批次暂停计数）
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             future_to_stock = {executor.submit(_update_one, stock): stock for stock in stocks}
             for future in concurrent.futures.as_completed(future_to_stock):
+                if _abort:
+                    break
+                
                 try:
-                    if future.result():
+                    result = future.result()
+                    if result == 'skip':
+                        skip += 1
+                    elif result:
                         success += 1
+                        api_processed += 1
                     else:
                         fail += 1
+                        api_processed += 1
+                        # 限流检测：连续失败达到阈值时触发暂停
+                        should_throttle = False
+                        pause_time = 0
                         with _lock:
                             consecutive_fails += 1
-                            if consecutive_fails >= CONSECUTIVE_FAIL_THRESHOLD:
-                                # 可能已被限流，暂停所有线程
-                                logging.warning(
-                                    f"连续 {consecutive_fails} 只股票获取失败，"
-                                    f"疑似被限流，暂停 {THROTTLE_PAUSE_SECONDS} 秒..."
-                                )
+                            # 仅当未处于限流暂停状态时才触发新的暂停
+                            if consecutive_fails >= CONSECUTIVE_FAIL_THRESHOLD and _throttle_event.is_set():
+                                throttle_count += 1
+                                pause_time = BASE_THROTTLE_PAUSE * (2 ** (throttle_count - 1))
+                                
+                                if throttle_count >= MAX_THROTTLE_COUNT:
+                                    logging.error(
+                                        f"限流已触发 {throttle_count} 次，疑似 IP 被封禁，"
+                                        f"终止任务以避免进一步封禁。"
+                                        f"当前进度：成功={success}, 失败={fail}, 跳过={skip}"
+                                    )
+                                    _abort = True
+                                    break
+                                
+                                should_throttle = True
                                 _throttle_event.clear()  # 阻塞所有工作线程
                         
-                        if not _throttle_event.is_set():
-                            time.sleep(THROTTLE_PAUSE_SECONDS)
+                        if should_throttle:
+                            logging.warning(
+                                f"连续 {CONSECUTIVE_FAIL_THRESHOLD} 次获取失败，"
+                                f"第{throttle_count}次触发限流保护，暂停 {pause_time} 秒..."
+                            )
+                            time.sleep(pause_time)
                             with _lock:
                                 consecutive_fails = 0
+                                # 恢复后自动降速：请求间隔加大 50%（上限 5-8 秒）
+                                request_delay[0] = min(request_delay[0] * 1.5, 5.0)
+                                request_delay[1] = min(request_delay[1] * 1.5, 8.0)
                             _throttle_event.set()  # 恢复所有工作线程
-                            logging.info("限流暂停结束，恢复请求")
+                            logging.info(
+                                f"限流暂停结束，恢复请求。"
+                                f"请求间隔已调整为 {request_delay[0]:.1f}-{request_delay[1]:.1f} 秒"
+                            )
                             
                 except Exception as e:
                     fail += 1
+                    api_processed += 1
                     stock = future_to_stock[future]
                     logging.error(f"update_all_caches处理异常：{stock[1]} - {e}")
                 
                 processed_total += 1
-                # 每 N 只股票后短暂暂停，让连接池冷却
-                if processed_total % BATCH_PAUSE_INTERVAL == 0:
+                # 每 N 次 API 请求后短暂暂停，让连接池冷却
+                if api_processed > 0 and api_processed % BATCH_PAUSE_INTERVAL == 0:
                     pause = random.uniform(*BATCH_PAUSE_SECONDS)
-                    logging.info(f"已处理 {processed_total}/{len(stocks)}，暂停 {pause:.0f} 秒...")
+                    remaining = len(stocks) - processed_total
+                    logging.info(
+                        f"已处理 {processed_total}/{len(stocks)}"
+                        f"（成功={success}, 跳过={skip}），"
+                        f"暂停 {pause:.0f} 秒，剩余 {remaining}"
+                    )
                     time.sleep(pause)
     except Exception as e:
         logging.error(f"update_all_caches处理异常：{e}")
     
-    return success, fail
+    logging.info(
+        f"缓存更新完成：成功={success}, 失败={fail}, "
+        f"缓存已最新={skip}, 限流触发={throttle_count}次"
+    )
+    
+    return success + skip, fail
 
 
 def read_stock_hist_from_cache(code, date_start, date_end):
