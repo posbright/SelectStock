@@ -26,18 +26,28 @@
 
 **调用**: `instock/job/execute_daily_job.py`
 
-**执行步骤**:
+**执行步骤**（采用 5 阶段流水线架构，数据获取与分析彻底分离）:
 
+**Phase 1: 数据获取**（API 调用集中在此阶段）
 1. **init_job** - 创建/初始化数据库
-2. **basic_data_daily_job** - 股票基础数据
-3. **selection_data_daily_job** - 综合选股数据
-4. **basic_data_other_daily_job** - 分红、龙虎榜、大宗交易等
-5. **gpt_value_data_job** - GPT综合选股
-6. **indicators_data_daily_job** - 技术指标数据
-7. **klinepattern_data_daily_job** - K线形态识别
-8. **strategy_data_daily_job** - 策略选股数据
-9. **backtest_data_daily_job** - 策略回测数据
-10. **basic_data_after_close_daily_job** - 收盘后数据
+2. **fetch_data_job** - 集中获取数据：缓存清理 + 实时行情 + 历史K线增量更新
+
+**Phase 2: 基础数据入库**
+3. **basic_data_daily_job** - 股票/ETF实时行情入库
+4. **selection_data_daily_job** - 综合选股数据入库
+
+**Phase 3: 扩展数据**
+5. **basic_data_other_daily_job** - 分红、龙虎榜、大宗交易等
+6. **gpt_value_data_job** - GPT综合选股
+
+**Phase 4: 数据分析**（纯计算，无 API 调用）
+7. **indicators_data_daily_job** - 技术指标计算
+8. **klinepattern_data_daily_job** - K线形态识别
+9. **strategy_data_daily_job** - 策略选股数据
+
+**Phase 5: 回测与收尾**
+10. **backtest_data_daily_job** - 策略回测数据
+11. **basic_data_after_close_daily_job** - 收盘后数据
 
 **适用场景**: 每个交易日收盘后运行（建议18:00后执行）
 
@@ -149,6 +159,7 @@ crontab -e
 
 | Job | 异常后重跑 | 可否补历史数据 | 说明 |
 |-----|-----------|--------------|------|
+| fetch_data_job | ✅ 恢复 | ✅ 增量更新 | 缓存机制，首次全量，后续补缺新增数据 |
 | basic_data_daily_job | ✅ 恢复 | ❌ 仅当天 | 实时行情快照，数据源不提供历史回查 |
 | selection_data_daily_job | ✅ 恢复 | ❌ 仅当天 | 同上，综合选股为实时快照 |
 | basic_data_other_daily_job | ✅ 恢复 | ⚠️ 部分可 | 龙虎榜/资金流为实时，早盘抢筹/涨停原因可补 |
@@ -180,6 +191,83 @@ python3 instock/job/indicators_data_daily_job.py 2026-02-03,2026-02-05
 
 ---
 
+## 获取历史K线数据
+
+系统默认获取 **10 年** 历史K线数据（可通过环境变量 `HIST_DATA_DEFAULT_YEARS` 调整）。
+数据源优先级：东方财富 → 腾讯财经 → 新浪财经，自动容错切换。
+
+### 方式一：使用 fetch_data_job.py（推荐）
+
+```bash
+cd /root/SelectStock/instock/job
+
+# 拉取当前交易日的最新数据（增量更新，自动补缺）
+python3 fetch_data_job.py
+
+# 指定日期拉取
+python3 fetch_data_job.py 2026-02-12
+```
+
+该脚本会自动执行：
+1. 清理过期缓存（退市股票、除权除息数据）
+2. 预加载全部股票的实时行情数据
+3. 预加载全部股票的历史K线数据（首次全量获取，后续增量更新）
+
+> 首次运行需从 API 获取全量 10 年历史数据，耗时较长；后续运行只需补缺新增交易日数据，快速完成。
+
+### 方式二：通过环境变量调整获取年数
+
+```bash
+# 默认 10 年，Docker 默认 3 年，可自行调整
+export HIST_DATA_DEFAULT_YEARS=5
+python3 fetch_data_job.py
+```
+
+### 方式三：使用 Python 脚本自定义获取
+
+```python
+import datetime, sys, os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import instock.core.stockfetch as stf
+
+# 获取单只股票历史K线（默认 10 年）
+df = stf.fetch_stock_hist((datetime.datetime.now(), '000001'))
+
+# 自定义年数
+df = stf.fetch_stock_hist((datetime.datetime.now(), '000001'), years=5)
+
+# 指定日期范围
+df = stf.fetch_stock_hist((datetime.datetime.now(), '000001'),
+                          date_start='20200101', date_end='20231231')
+
+# 不使用缓存，强制从 API 获取最新数据
+df = stf.fetch_stock_hist((datetime.datetime.now(), '000001'), is_cache=False)
+```
+
+### 方式四：强制重建全部缓存
+
+```bash
+# ⚠️ 清空缓存后重新获取（耗时较长）
+rm -rf /root/SelectStock/instock/cache/hist
+cd /root/SelectStock/instock/job
+python3 fetch_data_job.py
+```
+
+### Docker 环境手动拉取
+
+```bash
+docker exec -it InStock bash
+cd /data/InStock/instock/job
+
+# 拉取最新数据
+python3 fetch_data_job.py
+
+# 临时调整历史年数
+HIST_DATA_DEFAULT_YEARS=5 python3 fetch_data_job.py
+```
+
+---
+
 ## 单独执行各任务
 
 如果只需要执行特定任务，可以直接运行对应的 Python 脚本：
@@ -189,6 +277,9 @@ cd /root/SelectStock
 
 # 初始化数据库
 python3 instock/job/init_job.py
+
+# 数据获取（实时行情 + 历史K线 + 缓存清理）
+python3 instock/job/fetch_data_job.py
 
 # 基础数据采集
 python3 instock/job/basic_data_daily_job.py
