@@ -5,12 +5,12 @@
 
 职责：集中执行所有外部API数据获取，将获取与分析彻底分离。
 - 预加载 stock_data 单例（实时行情）
-- 预加载 stock_hist_data 单例（历史K线 + 缓存）
+- 批量更新历史K线缓存（低内存模式，不保留在内存中）
 - 清理过期/退市/除权缓存
 
 设计原则：
 1. 本脚本是唯一主动发起大量API请求的入口
-2. 后续分析脚本（indicators/klinepattern/strategy）只读取已加载的单例数据
+2. 后续分析脚本（indicators/klinepattern/strategy）从磁盘缓存按需读取单只股票数据
 3. 数据获取失败不影响后续分析（如缓存中有历史数据仍可使用）
 4. 支持独立运行（可单独 python fetch_data_job.py 手动触发数据预热）
 
@@ -29,7 +29,7 @@ cpath = os.path.abspath(os.path.join(cpath_current, os.pardir))
 sys.path.append(cpath)
 import instock.lib.run_template as runt
 import instock.core.stockfetch as stf
-from instock.core.singleton_stock import stock_data, stock_hist_data
+from instock.core.singleton_stock import stock_data
 
 __author__ = 'InStock'
 __date__ = '2026/2/10'
@@ -42,7 +42,7 @@ def fetch_all_data(date):
     执行顺序：
     1. 清理过期缓存（退市股票、除权除息数据）
     2. 预加载实时行情（stock_data 单例）
-    3. 预加载历史K线（stock_hist_data 单例，触发增量缓存更新）
+    3. 批量更新历史K线缓存（仅更新磁盘缓存，不保留在内存中）
     
     参数：
         date: 交易日期
@@ -71,22 +71,38 @@ def fetch_all_data(date):
             logging.info(f"实时行情加载成功：{len(spot)} 只股票，耗时 {time.time() - spot_start:.1f}秒")
         else:
             logging.error("实时行情加载失败：stock_data 返回 None")
+            return
     except Exception as e:
         logging.error(f"实时行情加载异常：{e}")
+        return
 
-    # Step 3: 预加载历史K线（stock_hist_data 单例）
-    # 这是最耗时的步骤：首次运行需要从API获取所有股票的历史数据
-    # 后续运行只需增量更新（从缓存末尾补新数据），速度快很多
+    # Step 3: 批量更新历史K线缓存（低内存模式）
+    # 仅触发缓存增量更新，每只股票处理完后即释放内存
+    # 后续 Phase 4 分析时从缓存按需读取，峰值内存 < 100MB
     try:
-        logging.info("Step 3/3: 预加载历史K线数据（增量更新）...")
+        logging.info("Step 3/3: 批量更新历史K线缓存（低内存模式）...")
         hist_start = time.time()
-        hist = stock_hist_data(date=date).get_data()
-        if hist is not None:
-            logging.info(f"历史K线加载成功：{len(hist)} 只股票，耗时 {time.time() - hist_start:.1f}秒")
+        
+        import instock.core.tablestructure as tbs
+        import instock.lib.trade_time as trd
+        
+        _subset = spot[list(tbs.TABLE_CN_STOCK_FOREIGN_KEY['columns'])]
+        stocks = [tuple(x) for x in _subset.values]
+        
+        years = stf.HIST_DATA_DEFAULT_YEARS
+        date_start, _ = trd.get_trade_hist_interval(stocks[0][0], years)
+        # 统一日期格式为 YYYYMMDD（兼容 str/datetime/date/Timestamp）
+        raw_date = stocks[0][0]
+        if hasattr(raw_date, 'strftime'):
+            date_end = raw_date.strftime("%Y%m%d")
         else:
-            logging.error("历史K线加载失败：stock_hist_data 返回 None")
+            date_end = str(raw_date).replace("-", "").replace("/", "")[:8]
+        
+        success, fail = stf.update_all_caches(stocks, date_start, date_end, workers=8)
+        elapsed_hist = time.time() - hist_start
+        logging.info(f"历史K线缓存更新完成：成功 {success}，失败 {fail}，耗时 {elapsed_hist:.1f}秒")
     except Exception as e:
-        logging.error(f"历史K线加载异常：{e}")
+        logging.error(f"历史K线缓存更新异常：{e}")
 
     elapsed = time.time() - start_time
     logging.info(f"===== Phase 1: 数据获取完成，总耗时 {elapsed:.1f}秒 =====")

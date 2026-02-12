@@ -24,10 +24,8 @@ import fetch_data_job as fdj
 import basic_data_daily_job as hdj
 import basic_data_other_daily_job as hdtj
 import basic_data_after_close_daily_job as acdj
-import indicators_data_daily_job as gdj
-import strategy_data_daily_job as sdj
+import streaming_analysis_job as saj
 import backtest_data_daily_job as bdj
-import klinepattern_data_daily_job as kdj
 import selection_data_daily_job as sddj
 import gpt_value_data_job as gptj
 
@@ -42,8 +40,8 @@ def main():
 
     # ================================================================
     # Phase 1: 数据获取（外部API调用 — 唯一的API密集阶段）
-    # 预加载 stock_data + stock_hist_data 单例，填充本地缓存
-    # 后续所有分析任务直接读取内存单例，不再发起API请求
+    # 批量更新本地缓存（低内存模式：仅更新磁盘文件，不保留在内存中）
+    # 后续所有分析任务从磁盘缓存按需读取，不再发起API请求
     # ================================================================
     bj.main()   # 初始化数据库
     fdj.main()  # 集中获取数据：实时行情 + 历史K线 + 缓存清理
@@ -75,35 +73,25 @@ def main():
         logging.error(f"execute_daily_job gpt_value异常：{e}")
 
     # ================================================================
-    # Phase 4: 数据分析（纯计算 — 仅读取 stock_hist_data 单例）
-    # 无任何外部API调用，数据来源：Phase 1 已加载的内存单例
+    # Phase 4: 数据分析（流式处理 — 低内存模式）
+    # 从磁盘缓存逐只读取股票历史数据，同时计算指标+K线形态+策略
+    # 峰值内存 < 100 MB（vs 原架构 ~1670 MB 全量加载）
+    # 无任何外部API调用，数据来源：Phase 1 已更新的本地缓存
     # ================================================================
     try:
-        gdj.main()   # 股票指标计算（MACD/KDJ/RSI等）
+        saj.main()   # 流式分析：指标计算 + K线形态识别 + 策略选股（单次遍历）
     except Exception as e:
-        logging.error(f"execute_daily_job indicators异常：{e}")
-
-    try:
-        kdj.main()   # K线形态识别（锤子线/十字星等）
-    except Exception as e:
-        logging.error(f"execute_daily_job klinepattern异常：{e}")
-
-    try:
-        sdj.main()   # 策略选股（放量突破/均线金叉等）
-    except Exception as e:
-        logging.error(f"execute_daily_job strategy异常：{e}")
+        logging.error(f"execute_daily_job streaming_analysis异常：{e}")
 
     # ================================================================
     # Phase 5: 回测与收尾
     # ================================================================
-    # 释放历史数据单例，回收内存（约300-500MB）
-    # indicators/klinepattern/strategy 已全部完成，后续任务不需要这些内存数据
+    # 释放 stock_data 单例（流式架构不再使用 stock_hist_data 单例）
     try:
-        from instock.core.singleton_stock import stock_hist_data, stock_data
-        stock_hist_data.release()
+        from instock.core.singleton_stock import stock_data
         stock_data.release()
         gc.collect()
-        logging.info("已释放 stock_hist_data/stock_data 单例，回收内存")
+        logging.info("已释放 stock_data 单例，回收内存")
     except Exception as e:
         logging.warning(f"释放单例异常（不影响后续执行）：{e}")
 

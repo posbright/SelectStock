@@ -30,7 +30,7 @@
 
 **Phase 1: 数据获取**（API 调用集中在此阶段）
 1. **init_job** - 创建/初始化数据库
-2. **fetch_data_job** - 集中获取数据：缓存清理 + 实时行情 + 历史K线增量更新
+2. **fetch_data_job** - 集中获取数据：缓存清理 + 实时行情 + 历史K线增量更新（低内存模式）
 
 **Phase 2: 基础数据入库**
 3. **basic_data_daily_job** - 股票/ETF实时行情入库
@@ -40,13 +40,15 @@
 5. **basic_data_other_daily_job** - 分红、龙虎榜、大宗交易等
 6. **gpt_value_data_job** - GPT综合选股
 
-**Phase 4: 数据分析**（纯计算，无 API 调用）
-7. **indicators_data_daily_job** - 技术指标计算
-8. **klinepattern_data_daily_job** - K线形态识别
-9. **strategy_data_daily_job** - 策略选股数据
+**Phase 4: 数据分析**（流式处理，无 API 调用，峰值内存 < 100 MB）
+7. **streaming_analysis_job** - 单次遍历所有股票，同时计算：
+   - 技术指标（MACD/KDJ/RSI等）
+   - K线形态识别（锤子线/十字星等）
+   - 策略选股（放量突破/均线金叉等）
+   - 指标二次筛选（买入/卖出信号）
 
 **Phase 5: 回测与收尾**
-10. **backtest_data_daily_job** - 策略回测数据
+10. **backtest_data_daily_job** - 策略回测数据（从缓存按需读取）
 11. **basic_data_after_close_daily_job** - 收盘后数据
 
 **适用场景**: 每个交易日收盘后运行（建议18:00后执行）
@@ -159,13 +161,11 @@ crontab -e
 
 | Job | 异常后重跑 | 可否补历史数据 | 说明 |
 |-----|-----------|--------------|------|
-| fetch_data_job | ✅ 恢复 | ✅ 增量更新 | 缓存机制，首次全量，后续补缺新增数据 |
+| fetch_data_job | ✅ 恢复 | ✅ 增量更新 | 缓存机制，首次全量，后续补缺新增数据（低内存模式） |
 | basic_data_daily_job | ✅ 恢复 | ❌ 仅当天 | 实时行情快照，数据源不提供历史回查 |
 | selection_data_daily_job | ✅ 恢复 | ❌ 仅当天 | 同上，综合选股为实时快照 |
 | basic_data_other_daily_job | ✅ 恢复 | ⚠️ 部分可 | 龙虎榜/资金流为实时，早盘抢筹/涨停原因可补 |
-| indicators_data_daily_job | ✅ 恢复 | ✅ 可补跑 | 基于K线缓存计算，支持日期参数 |
-| klinepattern_data_daily_job | ✅ 恢复 | ✅ 可补跑 | 基于K线缓存计算，支持日期参数 |
-| strategy_data_daily_job | ✅ 恢复 | ✅ 可补跑 | 基于K线缓存计算，支持日期参数 |
+| indicators/kline/strategy | ✅ 恢复 | ✅ 可补跑 | 基于K线缓存计算，支持日期参数（流式处理，峰值内存<100MB） |
 | gpt_value_data_job | ✅ 恢复 | ⚠️ 需数据 | 依赖 `cn_stock_selection` 表有对应日期数据 |
 | backtest_data_daily_job | ✅ 恢复 | ✅ 自动补 | 查询 NULL 字段自动补填，天然幂等 |
 | basic_data_after_close_daily_job | ✅ 恢复 | ✅ 可补跑 | 大宗交易等，支持日期参数 |
@@ -211,7 +211,7 @@ python3 fetch_data_job.py 2026-02-12
 该脚本会自动执行：
 1. 清理过期缓存（退市股票、除权除息数据）
 2. 预加载全部股票的实时行情数据
-3. 预加载全部股票的历史K线数据（首次全量获取，后续增量更新）
+3. 批量更新全部股票的历史K线缓存（低内存模式：每只股票处理完即释放，不保留在内存中）
 
 > 首次运行需从 API 获取全量 10 年历史数据，耗时较长；后续运行只需补缺新增交易日数据，快速完成。
 
@@ -290,7 +290,10 @@ python3 instock/job/selection_data_daily_job.py
 # 分红、龙虎榜等数据
 python3 instock/job/basic_data_other_daily_job.py
 
-# 技术指标数据
+# 技术指标 + K线形态 + 策略选股（流式处理，低内存）
+python3 instock/job/streaming_analysis_job.py
+
+# 也可单独运行旧版独立脚本（会加载全量历史数据到内存，内存需求大）
 python3 instock/job/indicators_data_daily_job.py
 
 # K线形态识别

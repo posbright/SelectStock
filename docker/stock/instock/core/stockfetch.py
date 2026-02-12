@@ -7,6 +7,7 @@ import datetime
 import numpy as np
 import pandas as pd
 import talib as tl
+import concurrent.futures
 import instock.core.tablestructure as tbs
 import instock.lib.trade_time as trd
 import instock.core.crawling.trade_date_hist as tdh
@@ -956,3 +957,111 @@ def stock_hist_cache(code, date_start, date_end=None, is_cache=True, adjust=''):
     if date_end is None:
         date_end = datetime.datetime.now().strftime("%Y%m%d")
     return stock_hist_cache_incremental(code, date_start, date_end, is_cache, adjust)
+
+
+def update_all_caches(stocks, date_start, date_end, workers=8):
+    """
+    批量更新所有股票的缓存文件（仅更新缓存，不保留在内存中）
+    
+    与 stock_hist_data 的区别：
+    - stock_hist_data: 全部加载到内存的 dict 中（~1.6GB），供后续分析直接读取
+    - update_all_caches: 仅触发增量缓存更新，处理完每只股票即释放内存
+    
+    参数：
+        stocks: 股票列表 [(date, code), ...]
+        date_start: 起始日期 YYYYMMDD
+        date_end: 结束日期 YYYYMMDD
+        workers: 并发线程数
+    返回：
+        (success_count, fail_count)
+    """
+    success = 0
+    fail = 0
+    
+    def _update_one(stock):
+        """更新单只股票的缓存，返回是否成功"""
+        try:
+            code = stock[1]
+            data = stock_hist_cache_incremental(code, date_start, date_end, is_cache=True, adjust='qfq')
+            return data is not None and len(data) > 0
+        except Exception as e:
+            logging.error(f"update_all_caches处理异常：{stock[1]} - {e}")
+            return False
+    
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_stock = {executor.submit(_update_one, stock): stock for stock in stocks}
+            for future in concurrent.futures.as_completed(future_to_stock):
+                try:
+                    if future.result():
+                        success += 1
+                    else:
+                        fail += 1
+                except Exception as e:
+                    fail += 1
+                    stock = future_to_stock[future]
+                    logging.error(f"update_all_caches处理异常：{stock[1]} - {e}")
+    except Exception as e:
+        logging.error(f"update_all_caches处理异常：{e}")
+    
+    return success, fail
+
+
+def read_stock_hist_from_cache(code, date_start, date_end):
+    """
+    从缓存文件读取单只股票的历史数据（流式处理用）
+    
+    与 fetch_stock_hist / stock_hist_cache_incremental 的区别：
+    - fetch_stock_hist: 触发缓存增量更新 + API 拉取
+    - stock_hist_cache_incremental: 读取缓存 + 按需发起 API 拉取
+    - read_stock_hist_from_cache: **仅从已有缓存读取，绝不发起 API 请求**
+    
+    如果缓存文件不存在或数据为空，返回 None（不会 fallback 到 API）。
+    返回的数据已包含 p_change 列和 volume 单位转换（股）。
+    """
+    try:
+        # 标准列名和兼容映射
+        _standard_columns = tuple(tbs.CN_STOCK_HIST_DATA['columns'])
+        _column_rename_map = {
+            'pct_chg': 'quote_change',
+            'change': 'ups_downs',
+        }
+        cache_file = _get_cache_file_path(code, 'qfq')
+        
+        if not os.path.isfile(cache_file):
+            return None
+        
+        data = pd.read_pickle(cache_file, compression="gzip")
+        if data is None or len(data) == 0 or 'date' not in data.columns:
+            return None
+        
+        # 统一旧缓存列名
+        data = data.rename(columns=_column_rename_map)
+        # 合并重复列
+        dup_mask = data.columns.duplicated(keep=False)
+        if dup_mask.any():
+            for col_name in data.columns[dup_mask].unique():
+                dup_cols = data.loc[:, data.columns == col_name]
+                merged = dup_cols.iloc[:, 0].fillna(dup_cols.iloc[:, 1])
+                data = data.loc[:, data.columns != col_name]
+                data[col_name] = merged
+        # 确保只保留标准列
+        valid_cols = [c for c in _standard_columns if c in data.columns]
+        data = data[valid_cols]
+        
+        # 按请求日期范围过滤
+        data_dates = data['date'].apply(_to_date_str)
+        mask = (data_dates >= date_start) & (data_dates <= date_end)
+        data = data.loc[mask].copy()
+        
+        if len(data) == 0:
+            return None
+        
+        # 添加 p_change 列和 volume 单位转换
+        data['p_change'] = tl.ROC(data['close'].values, 1)
+        data['p_change'] = data['p_change'].fillna(0.0)
+        data['volume'] = data['volume'].astype('double') * 100
+        return data
+    except Exception as e:
+        logging.error(f"read_stock_hist_from_cache处理异常：{code} - {e}")
+    return None
