@@ -3,7 +3,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getStockData, toggleAttention, getTradeDate } from '@/api/stock'
-import { getColumnTooltip } from '@/utils/columnTooltips'
+import { getColumnTooltip, strategyDescriptions } from '@/utils/columnTooltips'
 import dayjs from 'dayjs'
 
 // 列定义接口
@@ -33,6 +33,12 @@ const pageSize = ref(50)
 // 表名
 const tableName = computed(() => route.meta.tableName as string || 'cn_stock_spot')
 const pageTitle = computed(() => route.meta.title as string || '股票数据')
+
+// 策略说明（仅策略页面显示）
+const strategyDesc = computed(() => {
+  const tn = tableName.value
+  return strategyDescriptions[tn] || ''
+})
 
 // 动态列（排除 date, code, name, cdatetime 这些固定列，并隐藏全为空值的列）
 const dynamicColumns = computed(() => {
@@ -287,7 +293,16 @@ onMounted(async () => {
     <el-card class="toolbar-card" shadow="never">
       <div class="toolbar">
         <div class="toolbar-left">
-          <span class="page-title">{{ pageTitle }}</span>
+          <el-tooltip
+            v-if="strategyDesc"
+            :content="strategyDesc"
+            placement="bottom"
+            :show-after="200"
+            effect="dark"
+          >
+            <span class="page-title page-title-with-tip">{{ pageTitle }} ⓘ</span>
+          </el-tooltip>
+          <span v-else class="page-title">{{ pageTitle }}</span>
           <el-date-picker
             v-model="selectedDate"
             type="date"
@@ -449,6 +464,11 @@ onMounted(async () => {
     font-weight: 600;
     color: #303133;
     margin-right: 8px;
+  }
+  
+  .page-title-with-tip {
+    cursor: help;
+    border-bottom: 1px dashed #909399;
   }
 }
 

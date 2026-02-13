@@ -181,7 +181,7 @@ export const klinePatternDescriptions: Record<string, string> = {
   upside_downside_gap: '上升/下降跳空三法：延续形态',
 }
 
-// 策略说明
+// 策略说明（按页面标题显示，不是列头tooltip）
 export const strategyDescriptions: Record<string, string> = {
   cn_stock_strategy_enter: '放量上涨：最新交易日收阳线且涨幅>2%，成交量超过5日均量2倍以上，成交金额>2亿',
   cn_stock_strategy_keep_increasing: '均线多头：MA30在30个交易日内持续上升且涨幅超过20%，表示中期趋势向好',
@@ -198,15 +198,56 @@ export const strategyDescriptions: Record<string, string> = {
   cn_stock_strategy_breakout_confirm: '突破确认：关键阻力位突破后的确认买入',
 }
 
+// 通用股票数据列说明（综合选股、每日行情等通用列）
+export const commonColumnDescriptions: Record<string, string> = {
+  new_price: '最新成交价格',
+  change_rate: '涨跌幅(%)：(最新价-昨收)/昨收×100',
+  ups_downs: '涨跌额(元)：最新价-昨收',
+  volume: '成交量：当日成交的股票数量',
+  turnover: '成交额(元)：当日总成交金额',
+  amplitude: '振幅(%)：(最高-最低)/昨收×100，反映当日波动',
+  turnoverrate: '换手率(%)：成交量/流通股本×100，反映交易活跃度',
+  volume_ratio: '量比：当日成交/近5日均量，>1放量，<1缩量',
+  open: '今日开盘价',
+  high: '当日最高成交价',
+  low: '当日最低成交价',
+  pre_close: '昨日收盘价',
+  pe9: '市盈率(TTM)：股价/每股收益。<20低估值，>50高估值',
+  pbnewmrq: '市净率(MRQ)：股价/每股净资产。<1破净',
+  pettmdeducted: '市盈率(扣非TTM)：扣除非经常性损益后的PE',
+  ps9: '市销率(TTM)：总市值/营业收入',
+  pcfjyxjl9: '市现率(TTM)：总市值/经营现金流',
+  total_market_cap: '总市值：股价×总股本',
+  free_cap: '流通市值：股价×流通股本',
+  dtsyl: '动态市盈率：基于预测收益计算',
+  basic_eps: '每股收益(元)：净利润/总股本',
+  bvps: '每股净资产(元)：净资产/总股本',
+  roe_weight: '加权ROE(%)：净利润/平均净资产，衡量盈利能力',
+  sale_gpr: '毛利率(%)：(营收-成本)/营收×100',
+  sale_npr: '净利率(%)：净利润/营收×100',
+  // 资金流向
+  fund_amount: '主力净流入-净额',
+  fund_rate: '主力净流入-净占比(%)',
+  fund_amount_super: '超大单净流入-净额（>100万元/笔）',
+  fund_amount_large: '大单净流入-净额（20-100万元/笔）',
+  fund_amount_medium: '中单净流入-净额（4-20万元/笔）',
+  fund_amount_small: '小单净流入-净额（<4万元/笔）',
+  // 回测收益率
+  rate_1: '1日后收益率(%)',
+  rate_5: '5日后收益率(%)',
+  rate_10: '10日后收益率(%)',
+  rate_20: '20日后收益率(%)',
+}
+
 /**
  * 获取列的tooltip描述
  * @param fieldName 字段名
  * @param tableName 当前表名（用于区分指标/K线/策略）
  */
 export function getColumnTooltip(fieldName: string, tableName: string): string {
-  // 指标表
+  // 指标表（包括 indicators_buy / indicators_sell）
   if (tableName.includes('indicator')) {
-    return indicatorDescriptions[fieldName] || ''
+    return indicatorDescriptions[fieldName] || commonColumnDescriptions[fieldName] || ''
   }
   // K线形态表
   if (tableName.includes('kline_pattern')) {
@@ -216,10 +257,10 @@ export function getColumnTooltip(fieldName: string, tableName: string): string {
     }
     return ''
   }
-  // 策略表
+  // 策略表 — 列只有 date/code/name/rate_N，显示回测列说明
   if (tableName.includes('strategy')) {
-    return strategyDescriptions[tableName] || ''
+    return commonColumnDescriptions[fieldName] || ''
   }
-  // 其他表也尝试匹配指标
-  return indicatorDescriptions[fieldName] || ''
+  // 通用列（综合选股、股票行情、资金流向等）
+  return commonColumnDescriptions[fieldName] || indicatorDescriptions[fieldName] || ''
 }
