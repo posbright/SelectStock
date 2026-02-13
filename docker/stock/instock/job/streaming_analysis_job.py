@@ -100,12 +100,18 @@ def streaming_analysis(date):
                 logging.warning(f"获取龙虎榜数据异常（不影响其他策略）：{e}")
             break
 
-    # 4. 准备数据库表（记录需要清理的表，延迟到首次写入时清理）
+    # 4. 验证数据库表 schema（旧版表列数不足时自动重建）
+    _ensure_table_schema(tbs.TABLE_CN_STOCK_INDICATORS['name'], tbs.TABLE_CN_STOCK_INDICATORS['columns'])
+    _ensure_table_schema(tbs.TABLE_CN_STOCK_KLINE_PATTERN['name'], tbs.TABLE_CN_STOCK_KLINE_PATTERN['columns'])
+    for strategy in strategies:
+        _ensure_table_schema(strategy['name'], strategy['columns'])
+
+    # 5. 准备数据库表（记录需要清理的表，延迟到首次写入时清理）
     # 采用延迟删除策略：不在开头一次性 DELETE 所有表的当日数据，
     # 而是在每个表首次写入前才 DELETE，避免中途崩溃导致数据丢失
     tables_cleaned = set()  # 记录已经清理过的表
 
-    # 5. 初始化结果缓冲区
+    # 6. 初始化结果缓冲区
     indicator_results = {}      # {(date, code, name): pd.Series}
     kline_results = {}          # {(date, code, name): pd.Series}
     strategy_results = {s['name']: [] for s in strategies}  # {table_name: [(date, code, name)]}
@@ -223,6 +229,41 @@ def _clean_table_if_needed(table_name, date_str, tables_cleaned):
         tables_cleaned.add(table_name)
 
 
+def _ensure_table_schema(table_name, expected_columns):
+    """
+    检查表的列是否与代码定义一致，不一致则重建表。
+    解决旧版数据库 schema 与新版代码不兼容的问题。
+    例如：旧版 cn_stock_indicators 只有 26 列，新版有 77 列。
+    """
+    if not mdb.checkTableIsExist(table_name):
+        return  # 表不存在，后续 insert_db_from_df 会自动创建
+    
+    try:
+        import pymysql
+        with pymysql.connect(**mdb.MYSQL_CONN_DBAPI) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COLUMN_NAME FROM information_schema.columns "
+                    "WHERE table_schema=%s AND table_name=%s ORDER BY ordinal_position",
+                    (mdb.db_database, table_name)
+                )
+                db_columns = set(row[0] for row in cur.fetchall())
+        
+        code_columns = set(expected_columns.keys())
+        
+        # 检查是否有代码中定义但数据库缺失的列
+        missing = code_columns - db_columns
+        if missing:
+            logging.warning(
+                f"表 {table_name} schema 不兼容：缺少 {len(missing)} 列 "
+                f"(如 {list(missing)[:5]})，将删除重建"
+            )
+            mdb.executeSql(f"DROP TABLE `{table_name}`")
+            logging.info(f"已删除旧表 {table_name}，将在写入时自动重建")
+    except Exception as e:
+        logging.warning(f"检查表 {table_name} schema 异常：{e}")
+
+
 def _flush_results(indicator_results, kline_results, strategy_results, date_str, strategies, tables_cleaned):
     """将缓冲区中的分析结果批量写入数据库"""
 
@@ -314,7 +355,14 @@ def guess_indicators(date):
     指标二次筛选：买入/卖出信号
 
     从已写入的指标表中筛选符合条件的股票，与流式分析独立运行。
+    依赖 cn_stock_indicators 表已由 streaming_analysis 写入。
     """
+    # 先验证 indicators 表是否存在且有数据
+    _table_name = tbs.TABLE_CN_STOCK_INDICATORS['name']
+    if not mdb.checkTableIsExist(_table_name):
+        logging.info("guess_indicators: cn_stock_indicators 表不存在，跳过")
+        return
+    
     _guess_buy(date)
     _guess_sell(date)
 
