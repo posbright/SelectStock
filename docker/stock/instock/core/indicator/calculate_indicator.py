@@ -23,6 +23,14 @@ def get_indicators(data, end_date=None, threshold=120, calc_threshold=None):
 
         if isCopy:
             data = data.copy()
+        
+        # 确保所有列的 numpy 数组可写
+        # pandas 2.x 的 Copy-on-Write 模式下 .values 返回只读数组，
+        # 导致 data['col'].values[condition] = value 报 "assignment destination is read-only"
+        for col in data.columns:
+            arr = data[col].values
+            if hasattr(arr, 'flags') and not arr.flags.writeable:
+                data[col] = arr.copy()
 
         # import stockstats
         # test = data.copy()
@@ -277,6 +285,11 @@ def get_indicators(data, end_date=None, threshold=120, calc_threshold=None):
             data.loc[:, 'supertrend_lb'] = lb
             data.loc[:, 'supertrend'] = st
             data = data.copy()
+            # 再次确保数组可写（Supertrend循环后重新copy）
+            for col in data.columns:
+                arr = data[col].values
+                if hasattr(arr, 'flags') and not arr.flags.writeable:
+                    data[col] = arr.copy()
             # ----------stockstats没有以下指标-----------------
             # roc
             data.loc[:, 'roc'] = tl.ROC(data['close'].values, timeperiod=12)
