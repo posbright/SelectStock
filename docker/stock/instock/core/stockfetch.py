@@ -310,18 +310,28 @@ def fetch_stocks_fund_flow(index):
     return None
 
 
-# 读取板块资金流向
+# 读取板块资金流向（支持多数据源：东方财富 → 新浪财经）
 def fetch_stocks_sector_fund_flow(index_sector, index_indicator):
-    try:
-        cn_flow = tbs.CN_STOCK_SECTOR_FUND_FLOW[1][index_indicator]
-        data = sff.stock_sector_fund_flow_rank(indicator=cn_flow['cn'], sector_type=tbs.CN_STOCK_SECTOR_FUND_FLOW[0][index_sector])
-        if data is None or data.empty:
-            logging.warning(f"板块资金流向数据为空：sector={index_sector}, indicator={cn_flow['cn']}")
-            return None
-        data.columns = list(cn_flow['columns'])
-        return data
-    except Exception as e:
-        logging.error(f"stockfetch.fetch_stocks_sector_fund_flow处理异常：{e}")
+    cn_flow = tbs.CN_STOCK_SECTOR_FUND_FLOW[1][index_indicator]
+    sector_type = tbs.CN_STOCK_SECTOR_FUND_FLOW[0][index_sector]
+    
+    data_sources = [
+        ("东方财富", lambda: sff.stock_sector_fund_flow_rank(indicator=cn_flow['cn'], sector_type=sector_type)),
+        ("新浪财经", lambda: sfs.stock_sector_fund_flow_rank_sina(indicator=cn_flow['cn'], sector_type=sector_type)),
+    ]
+    
+    for source_name, fetch_func in data_sources:
+        try:
+            logging.info(f"尝试从{source_name}获取板块资金流向数据...")
+            data = fetch_func()
+            if data is not None and not data.empty:
+                logging.info(f"成功从{source_name}获取 {len(data)} 条板块资金流向数据")
+                data.columns = list(cn_flow['columns'])
+                return data
+        except Exception as e:
+            logging.warning(f"{source_name}板块资金流向数据获取失败：{e}，切换下一个数据源")
+    
+    logging.error(f"所有板块资金流向数据源均获取失败：sector={index_sector}, indicator={cn_flow['cn']}")
     return None
 
 

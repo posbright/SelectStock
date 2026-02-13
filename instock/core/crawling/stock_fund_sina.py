@@ -7,6 +7,7 @@ Desc: 新浪财经-个股资金流向数据
 """
 import time
 import random
+import logging
 import requests
 import pandas as pd
 from io import StringIO
@@ -25,27 +26,17 @@ def stock_individual_fund_flow_rank_sina(indicator: str = "5日") -> pd.DataFram
     :type indicator: str
     :return: 指定 indicator 资金流向排行
     :rtype: pandas.DataFrame
+    
+    注意: 新浪个股资金流向接口只返回"今日"数据(不区分3日/5日/10日)
+    且不提供超大单/大单/中单/小单的分类明细，这些字段用0填充
     """
-    # 新浪资金流向页面
-    indicator_map = {
-        "今日": "1",
-        "3日": "3", 
-        "5日": "5",
-        "10日": "10",
-    }
-    
-    day = indicator_map.get(indicator, "5")
-    all_stocks = []
-    
     try:
-        # 使用新浪资金流向接口
-        url = f"http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_zjlrqs"
+        url = "http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_ssggzj"
         params = {
             "page": 1,
             "num": 5000,
             "sort": "netamount",
             "asc": 0,
-            "fenlei": 0,
         }
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -56,12 +47,10 @@ def stock_individual_fund_flow_rank_sina(indicator: str = "5日") -> pd.DataFram
         if response.status_code != 200:
             return pd.DataFrame()
         
-        # 解析新浪返回的数据
         text = response.text
         if not text or text == 'null':
             return pd.DataFrame()
         
-        # 新浪返回的是JSON格式
         import json
         data = json.loads(text)
         
@@ -71,8 +60,11 @@ def stock_individual_fund_flow_rank_sina(indicator: str = "5日") -> pd.DataFram
         stocks = []
         for item in data:
             try:
+                symbol = item.get('symbol', '')
+                # 去掉sh/sz前缀
+                code = symbol[2:] if len(symbol) > 2 else symbol
                 stock = {
-                    '代码': item.get('symbol', '')[2:],  # 去掉sh/sz前缀
+                    '代码': code,
                     '名称': item.get('name', ''),
                     '最新价': _safe_float(item.get('trade', 0)),
                     '涨跌幅': _safe_float(item.get('changeratio', 0)) * 100,
@@ -98,7 +90,7 @@ def stock_individual_fund_flow_rank_sina(indicator: str = "5日") -> pd.DataFram
         return temp_df
         
     except Exception as e:
-        print(f"新浪资金流向获取失败: {e}")
+        logging.warning(f"新浪个股资金流向获取失败: {e}")
         return pd.DataFrame()
 
 
@@ -120,3 +112,83 @@ def _safe_int(value):
         return int(float(value))
     except (ValueError, TypeError):
         return 0
+
+
+def stock_sector_fund_flow_rank_sina(
+    indicator: str = "今日", sector_type: str = "行业资金流"
+) -> pd.DataFrame:
+    """
+    新浪财经-板块资金流向排名（行业/概念）
+    http://vip.stock.finance.sina.com.cn/moneyflow/
+    
+    作为东方财富 stock_sector_fund_flow_rank 的备选数据源。
+    
+    注意：新浪只返回"今日"数据（不区分5日/10日），
+    且不提供超大单/大单/中单/小单分类明细。
+    
+    :param indicator: choice of {"今日", "5日", "10日"}（实际都返回今日数据）
+    :param sector_type: choice of {"行业资金流", "概念资金流"}
+    :return: 板块资金流向数据
+    """
+    sector_type_map = {"行业资金流": 1, "概念资金流": 2}
+    fenlei = sector_type_map.get(sector_type, 1)
+    
+    try:
+        url = "http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_bk"
+        params = {
+            "page": 1,
+            "num": 500,
+            "sort": "netamount",
+            "asc": 0,
+            "fenlei": fenlei,
+        }
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'http://vip.stock.finance.sina.com.cn/',
+        }
+        
+        response = requests.get(url, params=params, headers=headers, proxies=proxys().get_proxies(), timeout=30)
+        if response.status_code != 200:
+            return pd.DataFrame()
+        
+        text = response.text
+        if not text or text == 'null':
+            return pd.DataFrame()
+        
+        import json
+        data = json.loads(text)
+        
+        if not data:
+            return pd.DataFrame()
+        
+        rows = []
+        for item in data:
+            try:
+                # 新浪返回的 ts_name 是主力净流入最大股
+                row = {
+                    '名称': item.get('name', ''),
+                    '涨跌幅': _safe_float(item.get('avg_changeratio', 0)) * 100,
+                    '主力净流入-净额': _safe_float(item.get('netamount', 0)),
+                    '主力净流入-净占比': _safe_float(item.get('ratioamount', 0)) * 100,
+                    '超大单净流入-净额': 0,
+                    '超大单净流入-净占比': 0,
+                    '大单净流入-净额': 0,
+                    '大单净流入-净占比': 0,
+                    '中单净流入-净额': 0,
+                    '中单净流入-净占比': 0,
+                    '小单净流入-净额': 0,
+                    '小单净流入-净占比': 0,
+                    '主力净流入最大股': item.get('ts_name', ''),
+                }
+                rows.append(row)
+            except Exception:
+                continue
+        
+        if not rows:
+            return pd.DataFrame()
+        
+        return pd.DataFrame(rows)
+        
+    except Exception as e:
+        logging.warning(f"新浪板块资金流向获取失败: {e}")
+        return pd.DataFrame()
