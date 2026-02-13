@@ -261,7 +261,7 @@ def _ensure_table_schema(table_name, expected_columns):
             mdb.executeSql(f"DROP TABLE `{table_name}`")
             logging.info(f"已删除旧表 {table_name}，将在写入时自动重建")
     except Exception as e:
-        logging.warning(f"检查表 {table_name} schema 异常：{e}")
+        logging.error(f"检查表 {table_name} schema 异常（后续写入可能失败）：{e}")
 
 
 def _flush_results(indicator_results, kline_results, strategy_results, date_str, strategies, tables_cleaned):
@@ -343,8 +343,8 @@ def _write_strategy_results(matched_stocks, table_name, date_str, tables_cleaned
     data = pd.DataFrame(matched_stocks)
     columns = tuple(tbs.TABLE_CN_STOCK_FOREIGN_KEY['columns'])
     data.columns = columns
-    _columns_backtest = tuple(tbs.TABLE_CN_STOCK_BACKTEST_DATA['columns'])
-    data = pd.concat([data, pd.DataFrame(columns=_columns_backtest)])
+    _columns_backtest = list(tbs.TABLE_CN_STOCK_BACKTEST_DATA['columns'])
+    data = data.reindex(columns=list(columns) + _columns_backtest)
     if date_str != data.iloc[0]['date']:
         data['date'] = date_str
     mdb.insert_db_from_df(data, table_name, cols_type, False, "`date`,`code`")
@@ -362,6 +362,10 @@ def guess_indicators(date):
     if not mdb.checkTableIsExist(_table_name):
         logging.info("guess_indicators: cn_stock_indicators 表不存在，跳过")
         return
+    
+    # 验证 buy/sell 表 schema（旧表可能缺少 rate_21~rate_100 列）
+    _ensure_table_schema(tbs.TABLE_CN_STOCK_INDICATORS_BUY['name'], tbs.TABLE_CN_STOCK_INDICATORS_BUY['columns'])
+    _ensure_table_schema(tbs.TABLE_CN_STOCK_INDICATORS_SELL['name'], tbs.TABLE_CN_STOCK_INDICATORS_SELL['columns'])
     
     _guess_buy(date)
     _guess_sell(date)
@@ -393,8 +397,8 @@ def _guess_buy(date):
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_INDICATORS_BUY['columns'])
 
-        _columns_backtest = tuple(tbs.TABLE_CN_STOCK_BACKTEST_DATA['columns'])
-        data = pd.concat([data, pd.DataFrame(columns=_columns_backtest)])
+        _columns_backtest = list(tbs.TABLE_CN_STOCK_BACKTEST_DATA['columns'])
+        data = data.reindex(columns=list(data.columns) + _columns_backtest)
         mdb.insert_db_from_df(data, table_name, cols_type, False, "`date`,`code`")
     except Exception as e:
         logging.error(f"streaming_analysis_job._guess_buy处理异常：{e}")
@@ -425,8 +429,8 @@ def _guess_sell(date):
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_INDICATORS_SELL['columns'])
 
-        _columns_backtest = tuple(tbs.TABLE_CN_STOCK_BACKTEST_DATA['columns'])
-        data = pd.concat([data, pd.DataFrame(columns=_columns_backtest)])
+        _columns_backtest = list(tbs.TABLE_CN_STOCK_BACKTEST_DATA['columns'])
+        data = data.reindex(columns=list(data.columns) + _columns_backtest)
         mdb.insert_db_from_df(data, table_name, cols_type, False, "`date`,`code`")
     except Exception as e:
         logging.error(f"streaming_analysis_job._guess_sell处理异常：{e}")

@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getStockData, toggleAttention, getTradeDate } from '@/api/stock'
+import { getColumnTooltip } from '@/utils/columnTooltips'
 import dayjs from 'dayjs'
 
 // 列定义接口
@@ -358,8 +359,20 @@ onMounted(async () => {
           :min-width="getColumnWidth(col)"
           :align="col.dataType === 'string' ? 'left' : 'right'"
           :show-overflow-tooltip="true"
-        >
-          <template #default="{ row }">
+        >          <template #header>
+            <el-tooltip
+              v-if="getColumnTooltip(col.value, tableName)"
+              :content="getColumnTooltip(col.value, tableName)"
+              placement="top"
+              :show-after="300"
+              :hide-after="0"
+              effect="dark"
+              :popper-options="{ modifiers: [{ name: 'computeStyles', options: { adaptive: false } }] }"
+            >
+              <span class="header-with-tooltip">{{ col.caption }} ⓘ</span>
+            </el-tooltip>
+            <span v-else>{{ col.caption }}</span>
+          </template>          <template #default="{ row }">
             <span :class="getCellClass(row[col.value], col.value)">
               {{ formatCellValue(row[col.value], col.value) }}
             </span>
@@ -472,5 +485,10 @@ onMounted(async () => {
   td {
     font-weight: 500;
   }
+}
+
+.header-with-tooltip {
+  cursor: help;
+  border-bottom: 1px dashed #909399;
 }
 </style>
