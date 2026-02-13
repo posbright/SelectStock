@@ -27,6 +27,7 @@ import instock.lib.version as version
 import instock.web.dataTableHandler as dataTableHandler
 import instock.web.dataIndicatorsHandler as dataIndicatorsHandler
 import instock.web.strategyParamsHandler as strategyParamsHandler
+import instock.web.backtestHandler as backtestHandler
 import instock.web.base as webBase
 
 __author__ = 'myh '
@@ -52,6 +53,10 @@ class Application(tornado.web.Application):
             (r"/instock/api/strategy/params/save", strategyParamsHandler.SaveStrategyParamsHandler),
             (r"/instock/api/strategy/params/reset", strategyParamsHandler.ResetStrategyParamsHandler),
             (r"/instock/api/strategy/filter", strategyParamsHandler.FilterStocksHandler),
+            # 回测验证
+            (r"/instock/api/backtest/config", backtestHandler.GetBacktestConfigHandler),
+            (r"/instock/api/backtest/run", backtestHandler.RunBacktestHandler),
+            (r"/instock/api/backtest/batch", backtestHandler.RunBatchBacktestHandler),
         ]
         settings = dict(  # 配置
             template_path=os.path.join(os.path.dirname(__file__), "templates"),

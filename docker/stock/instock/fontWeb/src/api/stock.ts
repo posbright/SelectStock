@@ -67,3 +67,34 @@ export function getTradeDate() {
     method: 'get'
   })
 }
+
+// ============= 回测相关 API =============
+
+export interface BacktestParams {
+  code?: string
+  strategy?: string
+  period?: string
+  start_date?: string
+  end_date?: string
+}
+
+export interface BatchBacktestParams {
+  strategy: string
+  period?: string
+  limit?: number
+}
+
+/** 获取回测配置（可选周期、策略列表） */
+export function getBacktestConfig() {
+  return request({ url: '/api/backtest/config', method: 'get' })
+}
+
+/** 执行单只股票回测 */
+export function runBacktest(params: BacktestParams) {
+  return request({ url: '/api/backtest/run', method: 'get', params })
+}
+
+/** 批量回测（策略历史验证） */
+export function runBatchBacktest(params: BatchBacktestParams) {
+  return request({ url: '/api/backtest/batch', method: 'get', params })
+}

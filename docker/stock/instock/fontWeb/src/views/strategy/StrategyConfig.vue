@@ -151,11 +151,6 @@ const loadFilterResult = async () => {
 
 // ========== 执行筛选 ==========
 const handleFilter = async () => {
-  if (activeStrategy.value !== 'gpt_value') {
-    ElMessage.info('当前仅支持GPT综合选股的动态筛选')
-    return
-  }
-
   // 先保存当前参数
   filtering.value = true
   try {
@@ -373,7 +368,7 @@ onMounted(() => {
             恢复默认
           </el-button>
           <el-button
-            v-if="activeStrategy === 'gpt_value'"
+            v-if="!['moat_scoring', 'ai_model'].includes(activeStrategy)"
             type="success"
             @click="handleFilter"
             :loading="filtering"
@@ -383,7 +378,7 @@ onMounted(() => {
             应用筛选
           </el-button>
           <el-date-picker
-            v-if="activeStrategy === 'gpt_value'"
+            v-if="!['moat_scoring', 'ai_model'].includes(activeStrategy)"
             v-model="filterDate"
             type="date"
             placeholder="筛选日期"

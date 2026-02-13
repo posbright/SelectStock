@@ -612,6 +612,12 @@ class FilterStocksHandler(webBase.BaseHandler, ABC):
         
         if strategy_key == "gpt_value":
             self._filter_gpt_value(date, page, page_size)
+        elif strategy_key == "fundamental_buy":
+            self._filter_fundamental(date, page, page_size)
+        elif strategy_key in ("indicator_buy", "indicator_sell"):
+            self._filter_indicator(strategy_key, date, page, page_size)
+        elif strategy_key in TECHNICAL_STRATEGY_PARAMS and 'strategy_func' in TECHNICAL_STRATEGY_PARAMS[strategy_key]:
+            self._filter_kline_strategy(strategy_key, date, page, page_size)
         else:
             self.set_status(400)
             self.write(json.dumps({"error": f"策略 {strategy_key} 暂不支持动态筛选"}, ensure_ascii=False))
@@ -749,6 +755,176 @@ class FilterStocksHandler(webBase.BaseHandler, ABC):
                     "params_used": params,
                     "warning": "cn_stock_selection 表尚未创建，请先执行选股作业"
                 }, ensure_ascii=False))
+            else:
+                logging.error(f"FilterStocksHandler 查询异常: {e}")
+                self.set_status(500)
+                self.write(json.dumps({"error": f"查询异常: {error_msg}"}, ensure_ascii=False))
+
+    def _filter_fundamental(self, date, page, page_size):
+        """基本面选股筛选"""
+        params = self._get_strategy_values("fundamental_buy")
+        
+        limit_clause = self._build_limit(page, page_size)
+        conditions, sql_params = [], []
+        if date:
+            conditions.append("`date` = %s")
+            sql_params.append(date)
+        
+        conditions.append("`pe9` > 0")
+        conditions.append("`pe9` <= %s")
+        sql_params.append(params.get("pe_max", 20))
+        conditions.append("`pbnewmrq` <= %s")
+        sql_params.append(params.get("pb_max", 10))
+        conditions.append("`roe_weight` >= %s")
+        sql_params.append(params.get("roe_min", 15))
+        
+        where = " WHERE " + " AND ".join(conditions)
+        table = "cn_stock_spot"
+        
+        self._exec_filter_query(table, where, sql_params, limit_clause, params,
+            "`date`, `code`, `name`, `new_price`, `change_rate`, `pe9`, `pbnewmrq`, `roe_weight`",
+            [{"value": "date", "caption": "日期", "width": 110},
+             {"value": "code", "caption": "代码", "width": 90},
+             {"value": "name", "caption": "名称", "width": 100},
+             {"value": "new_price", "caption": "最新价", "width": 80},
+             {"value": "change_rate", "caption": "涨跌幅(%)", "width": 90},
+             {"value": "pe9", "caption": "PE(TTM)", "width": 80},
+             {"value": "pbnewmrq", "caption": "市净率", "width": 80},
+             {"value": "roe_weight", "caption": "ROE(%)", "width": 80}],
+            " ORDER BY `roe_weight` DESC")
+    
+    def _filter_indicator(self, strategy_key, date, page, page_size):
+        """指标买入/卖出信号筛选"""
+        params = self._get_strategy_values(strategy_key)
+        
+        limit_clause = self._build_limit(page, page_size)
+        conditions, sql_params = [], []
+        
+        table = "cn_stock_indicators"
+        if not mdb.checkTableIsExist(table):
+            self.write(json.dumps({"columns": [], "data": [], "total": 0, "warning": "指标表不存在"}, ensure_ascii=False))
+            return
+        
+        if date:
+            conditions.append("`date` = %s")
+            sql_params.append(date)
+        
+        if strategy_key == "indicator_buy":
+            indicator_map = {
+                "kdjk_min": ("kdjk", ">="), "kdjd_min": ("kdjd", ">="), "kdjj_min": ("kdjj", ">="),
+                "rsi6_min": ("rsi_6", ">="), "cci_min": ("cci", ">="),
+                "cr_min": ("cr", ">="), "wr6_min": ("wr_6", ">="), "vr_min": ("vr", ">="),
+            }
+        else:
+            indicator_map = {
+                "kdjk_max": ("kdjk", "<"), "kdjd_max": ("kdjd", "<"), "kdjj_max": ("kdjj", "<"),
+                "rsi6_max": ("rsi_6", "<"), "cci_max": ("cci", "<"),
+                "cr_max": ("cr", "<"), "wr6_max": ("wr_6", "<"), "vr_max": ("vr", "<"),
+            }
+        
+        for param_key, (col, op) in indicator_map.items():
+            if param_key in params:
+                conditions.append(f"`{col}` {op} %s")
+                sql_params.append(params[param_key])
+        
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        self._exec_filter_query(table, where, sql_params, limit_clause, params,
+            "`date`, `code`, `name`, `kdjk`, `kdjd`, `kdjj`, `rsi_6`, `cci`, `cr`, `wr_6`, `vr`",
+            [{"value": "date", "caption": "日期", "width": 110},
+             {"value": "code", "caption": "代码", "width": 90},
+             {"value": "name", "caption": "名称", "width": 100},
+             {"value": "kdjk", "caption": "KDJ-K", "width": 70},
+             {"value": "kdjd", "caption": "KDJ-D", "width": 70},
+             {"value": "kdjj", "caption": "KDJ-J", "width": 70},
+             {"value": "rsi_6", "caption": "RSI(6)", "width": 70},
+             {"value": "cci", "caption": "CCI", "width": 70},
+             {"value": "cr", "caption": "CR", "width": 70},
+             {"value": "wr_6", "caption": "WR(6)", "width": 70},
+             {"value": "vr", "caption": "VR", "width": 70}])
+    
+    def _filter_kline_strategy(self, strategy_key, date, page, page_size):
+        """K线技术策略 — 从已有策略表读取数据"""
+        strategy_config = TECHNICAL_STRATEGY_PARAMS.get(strategy_key, {})
+        table_name = strategy_config.get('strategy_func', '')
+        
+        if not table_name or not mdb.checkTableIsExist(table_name):
+            self.write(json.dumps({
+                "columns": [], "data": [], "total": 0,
+                "warning": f"策略表 {table_name} 不存在或无数据。请先在服务器运行流式分析任务。"
+            }, ensure_ascii=False))
+            return
+        
+        limit_clause = self._build_limit(page, page_size)
+        conditions, sql_params = [], []
+        if date:
+            conditions.append("`date` = %s")
+            sql_params.append(date)
+        
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        self._exec_filter_query(table_name, where, sql_params, limit_clause, {},
+            "`date`, `code`, `name`",
+            [{"value": "date", "caption": "日期", "width": 110},
+             {"value": "code", "caption": "代码", "width": 90},
+             {"value": "name", "caption": "名称", "width": 100}],
+            " ORDER BY `date` DESC")
+    
+    def _get_strategy_values(self, strategy_key):
+        """获取策略的参数值（合并默认+用户自定义）"""
+        _ensure_params_table()
+        saved = _load_saved_params(strategy_key)
+        result = {}
+        strategy_def = DEFAULT_STRATEGY_PARAMS.get(strategy_key, {})
+        for group in strategy_def.get('groups', []):
+            for param in group.get('params', []):
+                key = param['key']
+                result[key] = saved.get(key, param['value'])
+        return result
+    
+    def _build_limit(self, page, page_size):
+        """构建LIMIT子句"""
+        if page is not None and page_size is not None:
+            try:
+                page_int = max(1, int(page))
+                page_size_int = max(1, min(500, int(page_size)))
+                return f" LIMIT {page_size_int} OFFSET {(page_int - 1) * page_size_int}"
+            except (ValueError, TypeError):
+                pass
+        return ""
+    
+    def _exec_filter_query(self, table, where, sql_params, limit_clause, params_used, select_cols, columns, order_by=""):
+        """通用筛选查询执行"""
+        try:
+            from instock.web.dataTableHandler import MyEncoder
+            count_sql = f"SELECT COUNT(*) AS cnt FROM `{table}`{where}"
+            data_sql = f"SELECT {select_cols} FROM `{table}`{where}{order_by}{limit_clause}"
+            
+            cache_params = tuple(sql_params) if sql_params else None
+            hit, cached_total = filter_result_cache.get(count_sql, cache_params)
+            if hit:
+                total = cached_total
+            else:
+                total_result = self.db.query(count_sql, *sql_params) if sql_params else self.db.query(count_sql)
+                total = total_result[0]["cnt"] if total_result else 0
+                filter_result_cache.put(count_sql, cache_params, total)
+            
+            hit, cached_data = filter_result_cache.get(data_sql, cache_params)
+            if hit:
+                data = cached_data
+            else:
+                data = self.db.query(data_sql, *sql_params) if sql_params else self.db.query(data_sql)
+                filter_result_cache.put(data_sql, cache_params, data)
+            
+            result = json.loads(json.dumps({
+                "columns": columns,
+                "data": data if data else [],
+                "total": total,
+                "params_used": params_used
+            }, cls=MyEncoder))
+            self.write(json.dumps(result, ensure_ascii=False))
+        except Exception as e:
+            error_msg = str(e)
+            if "doesn't exist" in error_msg:
+                self.write(json.dumps({"columns": [], "data": [], "total": 0, "warning": f"表不存在"}, ensure_ascii=False))
             else:
                 logging.error(f"FilterStocksHandler 查询异常: {e}")
                 self.set_status(500)
