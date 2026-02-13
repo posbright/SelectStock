@@ -278,14 +278,20 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/backtest',
     component: Layout,
-    redirect: '/backtest/list',
+    redirect: '/backtest/custom',
     meta: { title: '选股验证', icon: 'DataAnalysis' },
     children: [
+      {
+        path: 'custom',
+        name: 'BacktestCustom',
+        component: () => import('@/views/backtest/index.vue'),
+        meta: { title: '自定义回测' }
+      },
       {
         path: 'list',
         name: 'BacktestList',
         component: () => import('@/views/stock/StockData.vue'),
-        meta: { title: '回测验证', tableName: 'cn_stock_backtest' }
+        meta: { title: '回测汇总', tableName: 'cn_stock_backtest', isRealtime: false }
       }
     ]
   }
