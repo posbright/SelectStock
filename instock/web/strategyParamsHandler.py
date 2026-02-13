@@ -13,6 +13,7 @@ from abc import ABC
 import instock.web.base as webBase
 import instock.lib.database as mdb
 from instock.lib.query_cache import filter_result_cache
+from instock.web.strategy_params_config import TECHNICAL_STRATEGY_PARAMS
 
 __author__ = 'InStock'
 __date__ = '2026/02/10'
@@ -379,6 +380,9 @@ DEFAULT_STRATEGY_PARAMS = {
         ]
     }
 }
+
+# 合并技术策略参数定义
+DEFAULT_STRATEGY_PARAMS.update(TECHNICAL_STRATEGY_PARAMS)
 
 
 # ========== 数据库操作 ==========
