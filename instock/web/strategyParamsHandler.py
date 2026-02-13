@@ -290,7 +290,7 @@ DEFAULT_STRATEGY_PARAMS = {
     },
     "ai_model": {
         "name": "AI模型配置",
-        "description": "配置AI大语言模型的接口参数，用于护城河分析和智能选股。支持OpenAI、DeepSeek等兼容API。",
+        "description": "配置AI大语言模型的接口参数,用于护城河分析和智能选股。支持OpenAI、DeepSeek等兼容API。",
         "groups": [
             {
                 "group_name": "API接口配置",
@@ -299,7 +299,7 @@ DEFAULT_STRATEGY_PARAMS = {
                     {
                         "key": "api_base",
                         "label": "API基础地址",
-                        "description": "AI服务的API地址。OpenAI: https://api.openai.com/v1，DeepSeek: https://api.deepseek.com/v1，本地: http://localhost:11434/v1",
+                        "description": "AI服务的API地址。OpenAI: https://api.openai.com/v1,DeepSeek: https://api.deepseek.com/v1,本地: http://localhost:11434/v1",
                         "type": "text",
                         "value": "https://api.openai.com/v1"
                     },
