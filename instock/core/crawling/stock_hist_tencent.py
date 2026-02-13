@@ -198,7 +198,11 @@ def stock_zh_a_hist_tencent(
 
         # 转换为DataFrame
         # 腾讯返回格式: [日期, 开盘, 收盘, 最高, 最低, 成交量]
-        df = pd.DataFrame(all_records, columns=['date', 'open', 'close', 'high', 'low', 'volume'])
+        # 注意：除权除息日的行会额外返回第7列（分红信息字典），需要截取前6列
+        # 例如: ['2025-05-30', '15.300', '14.890', '15.300', '14.860', '110448.000',
+        #        {'nd': '2024', 'fh_sh': '1.2', 'djr': '2025-05-29', ...}]
+        cleaned_records = [row[:6] for row in all_records]
+        df = pd.DataFrame(cleaned_records, columns=['date', 'open', 'close', 'high', 'low', 'volume'])
 
         # 确保数值类型
         for col in ['open', 'close', 'high', 'low', 'volume']:

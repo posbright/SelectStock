@@ -683,7 +683,16 @@ def _fetch_from_sources(code, fetch_start, date_end, adjust=''):
                     new_data.columns = tuple(tbs.CN_STOCK_HIST_DATA['columns'])
                     logging.debug(f"从{source_name}成功获取数据: {code} ({fetch_start}-{date_end})")
                     return new_data
+            except (ConnectionError, ConnectionResetError, ConnectionAbortedError) as e:
+                # 连接级错误（IP封禁/网络不可达）：立即跳到下一个数据源，不浪费时间重试
+                logging.warning(f"从{source_name}获取数据失败(连接错误，跳过重试): {code} - {e}")
+                break
             except Exception as e:
+                err_str = str(e)
+                # 检查是否为连接类错误（可能被包装在其他异常中）
+                if 'RemoteDisconnected' in err_str or 'Connection aborted' in err_str or 'ConnectionReset' in err_str:
+                    logging.warning(f"从{source_name}获取数据失败(连接错误，跳过重试): {code} - {e}")
+                    break
                 logging.warning(f"从{source_name}获取数据失败(尝试{retry+1}/{DATA_SOURCE_MAX_RETRIES}): {code} - {e}")
                 if retry < DATA_SOURCE_MAX_RETRIES - 1:
                     _retry_sleep(retry)
