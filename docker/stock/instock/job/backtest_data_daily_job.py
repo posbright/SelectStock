@@ -121,6 +121,85 @@ def run_check(stocks, date_start, date_end, backtest_column, workers=4):
 
 def main():
     prepare()
+    summarize_backtest()
+
+
+def summarize_backtest():
+    """
+    汇总各策略表的回测结果到 cn_stock_backtest 表
+    
+    从每个策略表中读取已完成回测的记录（rate_1 不为 NULL），
+    计算平均收益率和成功率，写入汇总表。
+    """
+    try:
+        tables = [tbs.TABLE_CN_STOCK_INDICATORS_BUY, tbs.TABLE_CN_STOCK_INDICATORS_SELL]
+        tables.extend(tbs.TABLE_CN_STOCK_STRATEGIES)
+        tables.append(tbs.TABLE_CN_STOCK_STRATEGY_GPT_VALUE)
+        
+        summary_table = tbs.TABLE_CN_STOCK_BACKTEST['name']
+        
+        # 清空旧的汇总数据
+        if mdb.checkTableIsExist(summary_table):
+            mdb.executeSql(f"DELETE FROM `{summary_table}`")
+        
+        all_rows = []
+        
+        for table in tables:
+            table_name = table['name']
+            if not mdb.checkTableIsExist(table_name):
+                continue
+            
+            try:
+                # 只统计有回测数据的记录（rate_1 不为 NULL）
+                sql = f"""SELECT `date`, 
+                    COUNT(*) as stock_count,
+                    SUM(CASE WHEN `rate_5` > 0 THEN 1 ELSE 0 END) as success_count,
+                    ROUND(AVG(`rate_1`), 4) as avg_rate_1,
+                    ROUND(AVG(`rate_3`), 4) as avg_rate_3,
+                    ROUND(AVG(`rate_5`), 4) as avg_rate_5,
+                    ROUND(AVG(`rate_10`), 4) as avg_rate_10,
+                    ROUND(AVG(`rate_20`), 4) as avg_rate_20
+                    FROM `{table_name}` 
+                    WHERE `rate_1` IS NOT NULL
+                    GROUP BY `date`
+                    ORDER BY `date` DESC
+                    LIMIT 30"""
+                
+                data = pd.read_sql(sql=sql, con=mdb.engine())
+                if data is None or len(data) == 0:
+                    continue
+                
+                # 添加策略名称和成功率
+                data['strategy_name'] = table.get('cn', table_name)
+                data['success_rate'] = (data['success_count'] / data['stock_count'] * 100).round(2)
+                
+                # 按 cn_stock_backtest 表的列顺序整理
+                cols = list(tbs.TABLE_CN_STOCK_BACKTEST['columns'].keys())
+                for col in cols:
+                    if col not in data.columns:
+                        data[col] = None
+                data = data[cols]
+                
+                all_rows.append(data)
+                
+            except Exception as e:
+                logging.warning(f"汇总策略 {table_name} 回测数据异常：{e}")
+        
+        if not all_rows:
+            logging.info("回测汇总：无可汇总的数据")
+            return
+        
+        result = pd.concat(all_rows, ignore_index=True)
+        
+        cols_type = None
+        if not mdb.checkTableIsExist(summary_table):
+            cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_BACKTEST['columns'])
+        
+        mdb.insert_db_from_df(result, summary_table, cols_type, False, "`date`,`strategy_name`")
+        logging.info(f"回测汇总完成：{len(result)} 条记录，覆盖 {len(all_rows)} 个策略")
+        
+    except Exception as e:
+        logging.error(f"backtest_data_daily_job.summarize_backtest处理异常：{e}")
 
 
 # main函数入口
