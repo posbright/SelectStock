@@ -269,8 +269,9 @@ onMounted(async () => {
   try {
     const dateRes: any = await getTradeDate()
     if (dateRes && dateRes.run_date) {
-      // 实时数据用 run_date_nph，非实时数据用 run_date
-      selectedDate.value = dateRes.run_date
+      // 实时数据表用 run_date_nph（含当日未收盘），非实时表用 run_date（仅已收盘）
+      const isRealtime = route.meta.isRealtime as boolean
+      selectedDate.value = isRealtime ? dateRes.run_date_nph : dateRes.run_date
     }
   } catch {
     // 获取失败时保持客户端日期作为回退

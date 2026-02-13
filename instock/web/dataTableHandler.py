@@ -180,7 +180,5 @@ class GetTradeDateHandler(webBase.BaseHandler, ABC):
             self.write(json.dumps(response))
         except Exception as e:
             logging.error(f"GetTradeDateHandler处理异常：{e}")
-            # 兜底返回今天日期
-            import datetime
             today = datetime.date.today().strftime("%Y-%m-%d")
             self.write(json.dumps({"run_date": today, "run_date_nph": today}))

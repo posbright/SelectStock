@@ -25,7 +25,7 @@ const routes: RouteRecordRaw[] = [
         path: 'selection',
         name: 'StockSelection',
         component: () => import('@/views/stock/StockData.vue'),
-        meta: { title: '综合选股', tableName: 'cn_stock_selection' }
+        meta: { title: '综合选股', tableName: 'cn_stock_selection', isRealtime: false }
       }
     ]
   },
@@ -39,67 +39,67 @@ const routes: RouteRecordRaw[] = [
         path: 'spot',
         name: 'StockSpot',
         component: () => import('@/views/stock/StockData.vue'),
-        meta: { title: '每日股票数据', tableName: 'cn_stock_spot' }
+        meta: { title: '每日股票数据', tableName: 'cn_stock_spot', isRealtime: true }
       },
       {
         path: 'fund-flow',
         name: 'FundFlow',
         component: () => import('@/views/stock/StockData.vue'),
-        meta: { title: '股票资金流向', tableName: 'cn_stock_fund_flow' }
+        meta: { title: '股票资金流向', tableName: 'cn_stock_fund_flow', isRealtime: true }
       },
       {
         path: 'bonus',
         name: 'StockBonus',
         component: () => import('@/views/stock/StockData.vue'),
-        meta: { title: '股票分红配送', tableName: 'cn_stock_bonus' }
+        meta: { title: '股票分红配送', tableName: 'cn_stock_bonus', isRealtime: true }
       },
       {
         path: 'lhb',
         name: 'StockLHB',
         component: () => import('@/views/stock/StockData.vue'),
-        meta: { title: '股票龙虎榜', tableName: 'cn_stock_lhb' }
+        meta: { title: '股票龙虎榜', tableName: 'cn_stock_lhb', isRealtime: true }
       },
       {
         path: 'blocktrade',
         name: 'BlockTrade',
         component: () => import('@/views/stock/StockData.vue'),
-        meta: { title: '股票大宗交易', tableName: 'cn_stock_blocktrade' }
+        meta: { title: '股票大宗交易', tableName: 'cn_stock_blocktrade', isRealtime: true }
       },
       {
         path: 'limitup-reason',
         name: 'LimitUpReason',
         component: () => import('@/views/stock/StockData.vue'),
-        meta: { title: '涨停原因揭密', tableName: 'cn_stock_limitup_reason' }
+        meta: { title: '涨停原因揭密', tableName: 'cn_stock_limitup_reason', isRealtime: true }
       },
       {
         path: 'chip-race-open',
         name: 'ChipRaceOpen',
         component: () => import('@/views/stock/StockData.vue'),
-        meta: { title: '早盘抢筹数据', tableName: 'cn_stock_chip_race_open' }
+        meta: { title: '早盘抢筹数据', tableName: 'cn_stock_chip_race_open', isRealtime: true }
       },
       {
         path: 'chip-race-end',
         name: 'ChipRaceEnd',
         component: () => import('@/views/stock/StockData.vue'),
-        meta: { title: '尾盘抢筹数据', tableName: 'cn_stock_chip_race_end' }
+        meta: { title: '尾盘抢筹数据', tableName: 'cn_stock_chip_race_end', isRealtime: false }
       },
       {
         path: 'fund-flow-industry',
         name: 'FundFlowIndustry',
         component: () => import('@/views/stock/StockData.vue'),
-        meta: { title: '行业资金流向', tableName: 'cn_stock_fund_flow_industry' }
+        meta: { title: '行业资金流向', tableName: 'cn_stock_fund_flow_industry', isRealtime: true }
       },
       {
         path: 'fund-flow-concept',
         name: 'FundFlowConcept',
         component: () => import('@/views/stock/StockData.vue'),
-        meta: { title: '概念资金流向', tableName: 'cn_stock_fund_flow_concept' }
+        meta: { title: '概念资金流向', tableName: 'cn_stock_fund_flow_concept', isRealtime: true }
       },
       {
         path: 'etf',
         name: 'ETFSpot',
         component: () => import('@/views/stock/StockData.vue'),
-        meta: { title: '每日ETF数据', tableName: 'cn_etf_spot' }
+        meta: { title: '每日ETF数据', tableName: 'cn_etf_spot', isRealtime: true }
       }
     ]
   },
