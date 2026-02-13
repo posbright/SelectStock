@@ -54,3 +54,16 @@ export function toggleAttention(params: AttentionParams) {
     params
   })
 }
+
+/**
+ * 获取最近交易日期
+ * 返回 { run_date: 'YYYY-MM-DD', run_date_nph: 'YYYY-MM-DD' }
+ * run_date: 最近已收盘的交易日
+ * run_date_nph: 当前交易日（含未收盘）
+ */
+export function getTradeDate() {
+  return request({
+    url: '/api/trade_date',
+    method: 'get'
+  })
+}

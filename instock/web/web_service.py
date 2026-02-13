@@ -41,6 +41,7 @@ class Application(tornado.web.Application):
             (r"/instock/", HomeHandler),
             # 使用datatable 展示报表数据模块。
             (r"/instock/api_data", dataTableHandler.GetStockDataHandler),
+            (r"/instock/api/trade_date", dataTableHandler.GetTradeDateHandler),
             (r"/instock/data", dataTableHandler.GetStockHtmlHandler),
             # 获得股票指标数据。
             (r"/instock/data/indicators", dataIndicatorsHandler.GetDataIndicatorsHandler),

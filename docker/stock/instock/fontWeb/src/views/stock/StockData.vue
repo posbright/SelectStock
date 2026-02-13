@@ -2,7 +2,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { getStockData, toggleAttention } from '@/api/stock'
+import { getStockData, toggleAttention, getTradeDate } from '@/api/stock'
 import dayjs from 'dayjs'
 
 // 列定义接口
@@ -264,7 +264,17 @@ watch(
   }
 )
 
-onMounted(() => {
+onMounted(async () => {
+  // 从服务端获取正确的交易日期，避免使用客户端本地日期导致日期不匹配
+  try {
+    const dateRes: any = await getTradeDate()
+    if (dateRes && dateRes.run_date) {
+      // 实时数据用 run_date_nph，非实时数据用 run_date
+      selectedDate.value = dateRes.run_date
+    }
+  } catch {
+    // 获取失败时保持客户端日期作为回退
+  }
   loadData()
 })
 </script>

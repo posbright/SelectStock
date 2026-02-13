@@ -165,3 +165,22 @@ class GetStockDataHandler(webBase.BaseHandler, ABC):
             "total": total
         }
         self.write(json.dumps(response, cls=MyEncoder))
+
+
+# 获取最近交易日期（供前端初始化使用）
+class GetTradeDateHandler(webBase.BaseHandler, ABC):
+    def get(self):
+        self.set_header('Content-Type', 'application/json;charset=UTF-8')
+        try:
+            run_date, run_date_nph = trd.get_trade_date_last()
+            response = {
+                "run_date": run_date.strftime("%Y-%m-%d"),
+                "run_date_nph": run_date_nph.strftime("%Y-%m-%d")
+            }
+            self.write(json.dumps(response))
+        except Exception as e:
+            logging.error(f"GetTradeDateHandler处理异常：{e}")
+            # 兜底返回今天日期
+            import datetime
+            today = datetime.date.today().strftime("%Y-%m-%d")
+            self.write(json.dumps({"run_date": today, "run_date_nph": today}))

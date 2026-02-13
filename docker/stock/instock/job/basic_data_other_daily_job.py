@@ -74,18 +74,40 @@ def save_nph_stock_fund_flow_data(date, before=True):
         times = tuple(range(4))
         results = run_check_stock_fund_flow(times)
         if results is None:
+            logging.warning("资金流向：所有时间段数据均获取失败")
             return
 
-        data = results.get(0)
+        # 使用第一个成功获取的时间段作为基础数据（不再强制要求 t=0"今日"）
+        # 原逻辑：t=0 失败则整体跳过 → 导致 cn_stock_fund_flow 始终为空
+        # 新逻辑：任何时间段均可作为基础（都包含 code, name, new_price 列）
+        data = None
+        base_t = None
+        for t in range(4):
+            if results.get(t) is not None and len(results[t]) > 0:
+                data = results[t]
+                base_t = t
+                break
+
         if data is None:
-            logging.warning("资金流向基础数据(t=0)获取失败，跳过")
+            logging.warning("资金流向：所有时间段返回数据为空")
             return
 
-        for t in range(1, 4):
+        logging.info(f"资金流向：使用 t={base_t} 作为基础数据（{len(data)} 条）")
+
+        # 合并其他时间段的数据
+        for t in range(4):
+            if t == base_t:
+                continue
             r = results.get(t)
-            if r is not None:
-                r.drop(columns=['name', 'new_price'], inplace=True)
+            if r is not None and len(r) > 0:
+                r = r.drop(columns=['name', 'new_price'], errors='ignore')
+                # 避免合并时 change_rate 冲突（不同时间段有各自的 change_rate_N）
+                if t > 0 and 'change_rate' in r.columns:
+                    r = r.drop(columns=['change_rate'], errors='ignore')
                 data = pd.merge(data, r, on=['code'], how='left')
+                logging.info(f"资金流向：合并 t={t} 数据成功")
+            else:
+                logging.warning(f"资金流向：t={t} 数据为空，跳过")
 
         if len(data.index) == 0:
             return
@@ -102,17 +124,25 @@ def save_nph_stock_fund_flow_data(date, before=True):
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_FUND_FLOW['columns'])
 
         mdb.insert_db_from_df(data, table_name, cols_type, False, "`date`,`code`")
+        logging.info(f"资金流向数据入库成功：{len(data)} 条")
     except Exception as e:
         logging.error(f"basic_data_other_daily_job.save_nph_stock_fund_flow_data处理异常：{e}")
 
 
 def run_check_stock_fund_flow(times):
     data = {}
+    indicator_names = {0: '今日', 1: '3日', 2: '5日', 3: '10日'}
     try:
-        for k in times :
-            _data = stf.fetch_stocks_fund_flow(k)
-            if _data is not None:
-                data[k] = _data
+        for k in times:
+            try:
+                _data = stf.fetch_stocks_fund_flow(k)
+                if _data is not None and len(_data) > 0:
+                    data[k] = _data
+                    logging.info(f"资金流向 t={k}({indicator_names.get(k, '?')}) 获取成功：{len(_data)} 条")
+                else:
+                    logging.warning(f"资金流向 t={k}({indicator_names.get(k, '?')}) 返回空数据")
+            except Exception as e:
+                logging.error(f"资金流向 t={k}({indicator_names.get(k, '?')}) 获取异常：{e}")
     except Exception as e:
         logging.error(f"basic_data_other_daily_job.run_check_stock_fund_flow处理异常：{e}")
     # try:
