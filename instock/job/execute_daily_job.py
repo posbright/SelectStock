@@ -95,8 +95,15 @@ def main():
     except Exception as e:
         logging.warning(f"释放单例异常（不影响后续执行）：{e}")
 
-    bdj.main()   # 策略回测（重新加载stock_hist_data，但此时缓存已热，无API调用）
-    acdj.main()  # 闭盘后数据（大宗交易等，需要API）
+    try:
+        bdj.main()   # 策略回测（重新加载stock_hist_data，但此时缓存已热，无API调用）
+    except Exception as e:
+        logging.error(f"execute_daily_job backtest异常：{e}")
+
+    try:
+        acdj.main()  # 闭盘后数据（大宗交易等，需要API）
+    except Exception as e:
+        logging.error(f"execute_daily_job after_close异常：{e}")
 
     logging.info("######## 完成任务, 使用时间: %s 秒 #######" % (time.time() - start))
 

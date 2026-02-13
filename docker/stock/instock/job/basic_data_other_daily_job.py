@@ -62,7 +62,6 @@ def save_nph_stock_top_data(date, before=True):
         mdb.insert_db_from_df(data, table_name, cols_type, False, "`date`,`code`")
     except Exception as e:
         logging.error(f"basic_data_other_daily_job.save_stock_top_data处理异常：{e}")
-    stock_spot_buy(date)
 
 
 # 每日股票资金流向

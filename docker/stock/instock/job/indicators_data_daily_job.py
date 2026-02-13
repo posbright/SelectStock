@@ -116,8 +116,8 @@ def guess_buy(date):
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_INDICATORS_BUY['columns'])
 
-        _columns_backtest = tuple(tbs.TABLE_CN_STOCK_BACKTEST_DATA['columns'])
-        data = pd.concat([data, pd.DataFrame(columns=_columns_backtest)])
+        _columns_backtest = list(tbs.TABLE_CN_STOCK_BACKTEST_DATA['columns'])
+        data = data.reindex(columns=list(data.columns) + _columns_backtest)
         mdb.insert_db_from_df(data, table_name, cols_type, False, "`date`,`code`")
     except Exception as e:
         logging.error(f"indicators_data_daily_job.guess_buy处理异常：{e}")
@@ -150,8 +150,8 @@ def guess_sell(date):
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_INDICATORS_SELL['columns'])
 
-        _columns_backtest = tuple(tbs.TABLE_CN_STOCK_BACKTEST_DATA['columns'])
-        data = pd.concat([data, pd.DataFrame(columns=_columns_backtest)])
+        _columns_backtest = list(tbs.TABLE_CN_STOCK_BACKTEST_DATA['columns'])
+        data = data.reindex(columns=list(data.columns) + _columns_backtest)
         mdb.insert_db_from_df(data, table_name, cols_type, False, "`date`,`code`")
     except Exception as e:
         logging.error(f"indicators_data_daily_job.guess_sell处理异常：{e}")

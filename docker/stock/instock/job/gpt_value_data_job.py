@@ -72,8 +72,8 @@ def prepare(date):
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_STRATEGY_GPT_VALUE['columns'])
         
         # 添加回测字段（空值）
-        _columns_backtest = tuple(tbs.TABLE_CN_STOCK_BACKTEST_DATA['columns'])
-        result_data = pd.concat([result_data, pd.DataFrame(columns=_columns_backtest)])
+        _columns_backtest = list(tbs.TABLE_CN_STOCK_BACKTEST_DATA['columns'])
+        result_data = result_data.reindex(columns=list(result_data.columns) + _columns_backtest)
         
         # 插入数据
         mdb.insert_db_from_df(result_data, table_name, cols_type, False, "`date`,`code`")

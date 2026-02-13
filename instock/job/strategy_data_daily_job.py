@@ -44,8 +44,8 @@ def prepare(date, strategy):
         data = pd.DataFrame(results)
         columns = tuple(tbs.TABLE_CN_STOCK_FOREIGN_KEY['columns'])
         data.columns = columns
-        _columns_backtest = tuple(tbs.TABLE_CN_STOCK_BACKTEST_DATA['columns'])
-        data = pd.concat([data, pd.DataFrame(columns=_columns_backtest)])
+        _columns_backtest = list(tbs.TABLE_CN_STOCK_BACKTEST_DATA['columns'])
+        data = data.reindex(columns=list(columns) + _columns_backtest)
         # 单例，时间段循环必须改时间
         date_str = date.strftime("%Y-%m-%d")
         if date.strftime("%Y-%m-%d") != data.iloc[0]['date']:
