@@ -381,7 +381,7 @@ def _get_stock_name(code):
         table = tbs.TABLE_CN_STOCK_SPOT['name']
         if mdb.checkTableIsExist(table):
             sql = f"SELECT `name` FROM `{table}` WHERE `code` = %s LIMIT 1"
-            result = pd.read_sql(sql, mdb.engine(), params=[code])
+            result = pd.read_sql(sql, mdb.engine(), params=(code,))
             if result is not None and len(result) > 0:
                 return result.iloc[0]['name']
     except Exception:

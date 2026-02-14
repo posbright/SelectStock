@@ -43,7 +43,7 @@ def prepare(date):
         
         # 从 cn_stock_selection 读取数据
         sql = f"SELECT * FROM `{source_table}` WHERE `date` = %s"
-        selection_data = pd.read_sql(sql, mdb.engine(), params=[date_str])
+        selection_data = pd.read_sql(sql, mdb.engine(), params=(date_str,))
         
         if selection_data is None or len(selection_data) == 0:
             logging.info(f"GPT综合选股：{date_str} 无选股数据")
