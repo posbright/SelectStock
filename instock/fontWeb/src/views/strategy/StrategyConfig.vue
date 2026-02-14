@@ -201,6 +201,17 @@ const viewIndicators = (row: any) => {
   })
 }
 
+// ========== 查看回测 ==========
+const goBacktest = (row: any) => {
+  router.push({
+    path: '/backtest/custom',
+    query: {
+      code: row.code,
+      name: row.name
+    }
+  })
+}
+
 // ========== 关注/取消关注 ==========
 const handleAttention = async (row: any) => {
   const isAttention = !!row.cdatetime
@@ -470,8 +481,16 @@ onMounted(() => {
         <el-table-column prop="per_netcash_operate" label="每股现金流" width="100" align="right">
           <template #default="{ row }"><span>{{ formatValue(row.per_netcash_operate) }}</span></template>
         </el-table-column>
-        <el-table-column label="操作" width="80" fixed="right" align="center">
+        <el-table-column label="操作" width="130" fixed="right" align="center">
           <template #default="{ row }">
+            <el-button
+              type="primary"
+              size="small"
+              text
+              @click="goBacktest(row)"
+            >
+              回测
+            </el-button>
             <el-button
               :type="row.cdatetime ? 'warning' : 'primary'"
               size="small"

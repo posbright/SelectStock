@@ -673,6 +673,139 @@ def _():
 
 
 # ============================================================
+# K线API相关测试
+# ============================================================
+@test("klineHandler 模块可导入")
+def _():
+    from instock.web import klineHandler
+    assert hasattr(klineHandler, 'GetKlineDataHandler'), "应有 GetKlineDataHandler"
+
+@test("klineHandler _compute_ma 正确性")
+def _():
+    from instock.web.klineHandler import _compute_ma
+    data = [1.0, 2.0, 3.0, 4.0, 5.0]
+    ma3 = _compute_ma(data, 3)
+    assert ma3[0] is None
+    assert ma3[1] is None
+    assert abs(ma3[2] - 2.0) < 0.001
+    assert abs(ma3[3] - 3.0) < 0.001
+    assert abs(ma3[4] - 4.0) < 0.001
+
+@test("klineHandler _compute_boll 正确性")
+def _():
+    from instock.web.klineHandler import _compute_boll
+    data = [10.0] * 20  # 20个相同值, std=0
+    upper, middle, lower = _compute_boll(data, 20, 2)
+    assert upper[-1] == 10.0, "std=0时上轨应等于均值"
+    assert middle[-1] == 10.0
+    assert lower[-1] == 10.0
+    assert upper[0] is None, "前19个应为None"
+
+@test("klineHandler _compute_rsi 正确性")
+def _():
+    from instock.web.klineHandler import _compute_rsi
+    # 连续上涨 → RSI接近100
+    data = list(range(1, 20))  # 1,2,...,19
+    rsi = _compute_rsi(data, 14)
+    assert rsi[-1] is not None
+    assert rsi[-1] > 90, f"持续上涨RSI应>90, got {rsi[-1]}"
+    assert rsi[0] is None
+
+@test("klineHandler _compute_macd 返回正确结构")
+def _():
+    from instock.web.klineHandler import _compute_macd
+    data = [float(i) for i in range(50)]
+    dif, dea, hist = _compute_macd(data)
+    assert len(dif) == 50
+    assert len(dea) == 50
+    assert len(hist) == 50
+
+@test("klineHandler _compute_ema 正确性")
+def _():
+    from instock.web.klineHandler import _compute_ema
+    data = [10.0, 10.0, 10.0, 10.0, 10.0]
+    ema = _compute_ema(data, 3)
+    # 常数序列的EMA应等于常数本身
+    assert all(abs(v - 10.0) < 0.01 for v in ema), f"常数EMA应为常数, got {ema}"
+
+@test("klineHandler _resample_to_period 周线聚合")
+def _():
+    import pandas as pd
+    from instock.web.klineHandler import _resample_to_period
+    dates = pd.date_range('2026-01-01', periods=20, freq='B')
+    df = pd.DataFrame({
+        'date': dates.strftime('%Y-%m-%d'),
+        'open': range(20),
+        'high': [x + 1 for x in range(20)],
+        'low': [max(x - 1, 0) for x in range(20)],
+        'close': range(20),
+        'volume': [100] * 20,
+    })
+    weekly = _resample_to_period(df, 'W')
+    assert len(weekly) < len(df), "周线聚合后行数应减少"
+    assert 'open' in weekly.columns
+
+@test("klineHandler _safe_float 处理异常值")
+def _():
+    import math
+    from instock.web.klineHandler import _safe_float
+    assert _safe_float(None) is None
+    assert _safe_float(float('nan')) is None
+    assert _safe_float(float('inf')) is None
+    assert _safe_float(3.14159) == 3.1416  # 4位小数
+
+@test("web_service 包含 kline API 路由")
+def _():
+    import inspect
+    from instock.web import web_service
+    source = inspect.getsource(web_service.Application.__init__)
+    assert '/instock/api/kline' in source, "应注册 /instock/api/kline 路由"
+    assert 'klineHandler' in source, "应使用 klineHandler"
+
+@test("gpt_value_strategy 参数包含新增字段")
+def _():
+    from instock.core.strategy.gpt_value_strategy import _DEFAULT_PARAMS
+    # v3.0 新增字段
+    assert 'current_ratio_min' in _DEFAULT_PARAMS
+    assert 'speed_ratio_min' in _DEFAULT_PARAMS
+    assert 'jroa_min' in _DEFAULT_PARAMS
+    assert 'deduct_netprofit_growthrate_min' in _DEFAULT_PARAMS
+    assert 'pbnewmrq_max' in _DEFAULT_PARAMS
+    # 值检查
+    assert _DEFAULT_PARAMS['sale_gpr_min'] == 25, "毛利率应为25%"
+    assert _DEFAULT_PARAMS['sale_npr_min'] == 8, "净利率应为8%"
+    assert _DEFAULT_PARAMS['income_growthrate_3y_min'] == 8, "营收CAGR应为8%"
+
+@test("stock.ts API 包含 getKlineData 函数定义")
+def _():
+    api_path = os.path.join(project_root, 'instock', 'fontWeb', 'src', 'api', 'stock.ts')
+    with open(api_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    assert 'getKlineData' in content, "stock.ts 应包含 getKlineData"
+    assert '/api/kline' in content, "stock.ts 应包含 /api/kline 路由"
+    assert 'KlineParams' in content, "stock.ts 应包含 KlineParams 接口"
+
+@test("indicator/index.vue 使用真实API而非mock数据")
+def _():
+    vue_path = os.path.join(project_root, 'instock', 'fontWeb', 'src', 'views', 'indicator', 'index.vue')
+    with open(vue_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    assert 'generateMockData' not in content, "不应包含 mock 数据函数"
+    assert 'getKlineData' in content, "应使用 getKlineData API"
+    assert 'goBacktest' in content, "应有查看回测功能"
+    assert 'BOLL' in content, "应支持 BOLL 指标"
+    assert 'currentPeriod' in content, "应支持周期切换"
+
+@test("StrategyConfig.vue 筛选结果包含回测按钮")
+def _():
+    vue_path = os.path.join(project_root, 'instock', 'fontWeb', 'src', 'views', 'strategy', 'StrategyConfig.vue')
+    with open(vue_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    assert 'goBacktest' in content, "应有 goBacktest 函数"
+    assert '/backtest/custom' in content, "应链接到回测页面"
+
+
+# ============================================================
 # 汇总
 # ============================================================
 if __name__ == "__main__":

@@ -98,3 +98,18 @@ export function runBacktest(params: BacktestParams) {
 export function runBatchBacktest(params: BatchBacktestParams) {
   return request({ url: '/api/backtest/batch', method: 'get', params })
 }
+
+// ============= K线数据 API =============
+
+export interface KlineParams {
+  code: string
+  date?: string
+  period?: string   // daily / weekly / monthly / quarterly / yearly
+  days?: number
+  name?: string
+}
+
+/** 获取K线数据（含技术指标：MA/BOLL/RSI/MACD） */
+export function getKlineData(params: KlineParams) {
+  return request({ url: '/api/kline', method: 'get', params })
+}

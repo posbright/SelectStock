@@ -28,6 +28,7 @@ import instock.web.dataTableHandler as dataTableHandler
 import instock.web.dataIndicatorsHandler as dataIndicatorsHandler
 import instock.web.strategyParamsHandler as strategyParamsHandler
 import instock.web.backtestHandler as backtestHandler
+import instock.web.klineHandler as klineHandler
 import instock.web.base as webBase
 
 __author__ = 'InStock'
@@ -53,6 +54,8 @@ class Application(tornado.web.Application):
             (r"/instock/api/strategy/params/save", strategyParamsHandler.SaveStrategyParamsHandler),
             (r"/instock/api/strategy/params/reset", strategyParamsHandler.ResetStrategyParamsHandler),
             (r"/instock/api/strategy/filter", strategyParamsHandler.FilterStocksHandler),
+            # K线数据JSON API
+            (r"/instock/api/kline", klineHandler.GetKlineDataHandler),
             # 回测验证
             (r"/instock/api/backtest/config", backtestHandler.GetBacktestConfigHandler),
             (r"/instock/api/backtest/run", backtestHandler.RunBacktestHandler),

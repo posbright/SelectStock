@@ -1,231 +1,210 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import * as echarts from 'echarts'
 import dayjs from 'dayjs'
+import { getKlineData } from '@/api/stock'
+import { ElMessage } from 'element-plus'
 
 const route = useRoute()
+const router = useRouter()
 
-// 图表实例引用，用于销毁时清理
 let chartInstance: echarts.ECharts | null = null
 
-// 从路由获取参数
 const code = computed(() => route.query.code as string)
 const date = computed(() => route.query.date as string || dayjs().format('YYYY-MM-DD'))
 const stockName = computed(() => route.query.name as string)
 
-// 图表容器
 const klineChartRef = ref<HTMLDivElement>()
+const loading = ref(false)
 
-// 当前选中的指标
+// 当前周期
+const currentPeriod = ref('daily')
+const periods = [
+  { label: '日K', value: 'daily' },
+  { label: '周K', value: 'weekly' },
+  { label: '月K', value: 'monthly' },
+  { label: '季K', value: 'quarterly' },
+  { label: '年K', value: 'yearly' },
+]
+
+// 当前副图指标
 const currentIndicator = ref('MACD')
-const indicators = ['MACD', 'KDJ', 'RSI', 'BOLL', 'CCI', 'WR', 'DMI', 'OBV']
+const indicatorOptions = ['MACD', 'RSI', 'BOLL']
 
-// 模拟 K线数据
-const generateMockData = () => {
-  const data = []
-  let basePrice = 10 + Math.random() * 20
-  const startDate = dayjs(date.value).subtract(60, 'day')
-  
-  for (let i = 0; i < 60; i++) {
-    const currentDate = startDate.add(i, 'day').format('YYYY-MM-DD')
-    const change = (Math.random() - 0.5) * 2
-    const open = basePrice
-    const close = basePrice + change
-    const high = Math.max(open, close) + Math.random() * 0.5
-    const low = Math.min(open, close) - Math.random() * 0.5
-    const volume = Math.floor(Math.random() * 1000000) + 500000
-    
-    data.push({
-      date: currentDate,
-      open: +open.toFixed(2),
-      close: +close.toFixed(2),
-      high: +high.toFixed(2),
-      low: +low.toFixed(2),
-      volume
+// K线数据
+const klineData = ref<any>(null)
+
+// 加载K线数据
+const loadKlineData = async () => {
+  if (!code.value) return
+  loading.value = true
+  try {
+    const res = await getKlineData({
+      code: code.value,
+      date: date.value,
+      period: currentPeriod.value,
+      name: stockName.value || '',
     })
-    
-    basePrice = close
+    if (res.data?.error) {
+      ElMessage.warning(res.data.error)
+      klineData.value = null
+    } else {
+      klineData.value = res.data
+    }
+  } catch (e: any) {
+    ElMessage.error('K线数据加载失败')
+    klineData.value = null
+  } finally {
+    loading.value = false
+    await nextTick()
+    renderChart()
   }
-  
-  return data
 }
 
-// 初始化 K线图
-const initKlineChart = () => {
-  if (!klineChartRef.value) return
-  
-  const chart = echarts.init(klineChartRef.value)
-  const data = generateMockData()
-  
-  const dates = data.map(item => item.date)
-  const klineData = data.map(item => [item.open, item.close, item.low, item.high])
-  const volumes = data.map((item) => ({
-    value: item.volume,
+// 渲染ECharts图表
+const renderChart = () => {
+  if (!klineChartRef.value || !klineData.value) return
+  const d = klineData.value
+
+  if (chartInstance) {
+    chartInstance.dispose()
+  }
+  chartInstance = echarts.init(klineChartRef.value)
+
+  const dates: string[] = d.dates
+  const ohlc: number[][] = d.ohlc
+  const volumes: number[] = d.volumes
+  const ma = d.ma || {}
+  const boll = d.boll || {}
+  const rsi: (number | null)[] = d.rsi || []
+  const macd = d.macd || {}
+
+  // 根据当前指标决定副图配置
+  const showBollOnMain = currentIndicator.value === 'BOLL'
+  const showMacdSub = currentIndicator.value === 'MACD'
+  const showRsiSub = currentIndicator.value === 'RSI'
+
+  // 成交量颜色
+  const volData = volumes.map((v, i) => ({
+    value: v,
     itemStyle: {
-      color: item.close >= item.open ? '#ec0000' : '#00da3c'
+      color: ohlc[i] && ohlc[i][1] >= ohlc[i][0] ? '#ec0000' : '#00da3c'
     }
   }))
-  
-  // 计算 MA
-  const calculateMA = (dayCount: number) => {
-    const result = []
-    for (let i = 0; i < data.length; i++) {
-      if (i < dayCount - 1) {
-        result.push('-')
-        continue
-      }
-      let sum = 0
-      for (let j = 0; j < dayCount; j++) {
-        sum += data[i - j].close
-      }
-      result.push((sum / dayCount).toFixed(2))
-    }
-    return result
+
+  // Grid 布局：主图 + 成交量 + 副图指标
+  const grids: any[] = [
+    { left: '8%', right: '4%', top: '8%', height: '42%' },   // 主图
+    { left: '8%', right: '4%', top: '55%', height: '12%' },   // 成交量
+  ]
+  const xAxes: any[] = [
+    { type: 'category', data: dates, boundaryGap: false, axisLine: { onZero: false }, splitLine: { show: false }, min: 'dataMin', max: 'dataMax' },
+    { type: 'category', gridIndex: 1, data: dates, axisLabel: { show: false } },
+  ]
+  const yAxes: any[] = [
+    { scale: true, splitArea: { show: true } },
+    { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } },
+  ]
+
+  if (showMacdSub || showRsiSub) {
+    grids.push({ left: '8%', right: '4%', top: '72%', height: '14%' })
+    xAxes.push({ type: 'category', gridIndex: 2, data: dates, axisLabel: { show: false } })
+    yAxes.push({ scale: true, gridIndex: 2, splitNumber: 2, axisLabel: { show: true, fontSize: 10 }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } })
   }
-  
+
+  const legendData = ['K线', 'MA5', 'MA10', 'MA20', 'MA60']
+  if (showBollOnMain) legendData.push('BOLL上轨', 'BOLL中轨', 'BOLL下轨')
+
+  const series: any[] = [
+    {
+      name: 'K线', type: 'candlestick', data: ohlc,
+      itemStyle: { color: '#ec0000', color0: '#00da3c', borderColor: '#ec0000', borderColor0: '#00da3c' }
+    },
+    { name: 'MA5', type: 'line', data: ma.ma5, smooth: true, lineStyle: { width: 1 }, symbol: 'none' },
+    { name: 'MA10', type: 'line', data: ma.ma10, smooth: true, lineStyle: { width: 1 }, symbol: 'none' },
+    { name: 'MA20', type: 'line', data: ma.ma20, smooth: true, lineStyle: { width: 1 }, symbol: 'none' },
+    { name: 'MA60', type: 'line', data: ma.ma60, smooth: true, lineStyle: { width: 1 }, symbol: 'none' },
+    { name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volData },
+  ]
+
+  // BOLL 叠加到主图
+  if (showBollOnMain && boll.upper) {
+    series.push(
+      { name: 'BOLL上轨', type: 'line', data: boll.upper, lineStyle: { width: 1, type: 'dashed', color: '#e6a23c' }, symbol: 'none' },
+      { name: 'BOLL中轨', type: 'line', data: boll.middle, lineStyle: { width: 1, color: '#909399' }, symbol: 'none' },
+      { name: 'BOLL下轨', type: 'line', data: boll.lower, lineStyle: { width: 1, type: 'dashed', color: '#67c23a' }, symbol: 'none' },
+    )
+  }
+
+  // MACD 副图
+  if (showMacdSub && macd.dif) {
+    legendData.push('DIF', 'DEA', 'MACD')
+    const macdBarData = (macd.histogram || []).map((v: number | null) => ({
+      value: v,
+      itemStyle: { color: v !== null && v >= 0 ? '#ec0000' : '#00da3c' }
+    }))
+    series.push(
+      { name: 'DIF', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macd.dif, lineStyle: { width: 1 }, symbol: 'none' },
+      { name: 'DEA', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macd.dea, lineStyle: { width: 1 }, symbol: 'none' },
+      { name: 'MACD', type: 'bar', xAxisIndex: 2, yAxisIndex: 2, data: macdBarData },
+    )
+  }
+
+  // RSI 副图
+  if (showRsiSub && rsi.length) {
+    legendData.push('RSI(14)')
+    series.push(
+      { name: 'RSI(14)', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: rsi, lineStyle: { width: 1, color: '#e6a23c' }, symbol: 'none' },
+    )
+  }
+
+  const zoomXIndices = [0, 1]
+  if (showMacdSub || showRsiSub) zoomXIndices.push(2)
+
   const option = {
-    tooltip: {
-      trigger: 'axis',
-      axisPointer: {
-        type: 'cross'
-      }
-    },
-    legend: {
-      data: ['K线', 'MA5', 'MA10', 'MA20', 'MA30']
-    },
-    grid: [
-      {
-        left: '10%',
-        right: '10%',
-        top: '10%',
-        height: '50%'
-      },
-      {
-        left: '10%',
-        right: '10%',
-        top: '68%',
-        height: '15%'
-      }
-    ],
-    xAxis: [
-      {
-        type: 'category',
-        data: dates,
-        scale: true,
-        boundaryGap: false,
-        axisLine: { onZero: false },
-        splitLine: { show: false },
-        min: 'dataMin',
-        max: 'dataMax'
-      },
-      {
-        type: 'category',
-        gridIndex: 1,
-        data: dates,
-        axisLabel: { show: false }
-      }
-    ],
-    yAxis: [
-      {
-        scale: true,
-        splitArea: {
-          show: true
-        }
-      },
-      {
-        scale: true,
-        gridIndex: 1,
-        splitNumber: 2,
-        axisLabel: { show: false },
-        axisLine: { show: false },
-        axisTick: { show: false },
-        splitLine: { show: false }
-      }
-    ],
+    animation: false,
+    tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+    legend: { data: legendData, top: 0, textStyle: { fontSize: 11 } },
+    grid: grids,
+    xAxis: xAxes,
+    yAxis: yAxes,
     dataZoom: [
-      {
-        type: 'inside',
-        xAxisIndex: [0, 1],
-        start: 50,
-        end: 100
-      },
-      {
-        show: true,
-        xAxisIndex: [0, 1],
-        type: 'slider',
-        top: '90%',
-        start: 50,
-        end: 100
-      }
+      { type: 'inside', xAxisIndex: zoomXIndices, start: 40, end: 100 },
+      { show: true, xAxisIndex: zoomXIndices, type: 'slider', top: '92%', start: 40, end: 100 },
     ],
-    series: [
-      {
-        name: 'K线',
-        type: 'candlestick',
-        data: klineData,
-        itemStyle: {
-          color: '#ec0000',
-          color0: '#00da3c',
-          borderColor: '#ec0000',
-          borderColor0: '#00da3c'
-        }
-      },
-      {
-        name: 'MA5',
-        type: 'line',
-        data: calculateMA(5),
-        smooth: true,
-        lineStyle: { opacity: 0.8, width: 1 }
-      },
-      {
-        name: 'MA10',
-        type: 'line',
-        data: calculateMA(10),
-        smooth: true,
-        lineStyle: { opacity: 0.8, width: 1 }
-      },
-      {
-        name: 'MA20',
-        type: 'line',
-        data: calculateMA(20),
-        smooth: true,
-        lineStyle: { opacity: 0.8, width: 1 }
-      },
-      {
-        name: 'MA30',
-        type: 'line',
-        data: calculateMA(30),
-        smooth: true,
-        lineStyle: { opacity: 0.8, width: 1 }
-      },
-      {
-        name: '成交量',
-        type: 'bar',
-        xAxisIndex: 1,
-        yAxisIndex: 1,
-        data: volumes
-      }
-    ]
+    series,
   }
-  
-  chart.setOption(option)
-  
-  // 保存图表实例
-  chartInstance = chart
+
+  chartInstance.setOption(option)
 }
 
-// 窗口 resize 处理函数
-const handleResize = () => {
-  chartInstance?.resize()
+// 切换周期
+const switchPeriod = (p: string) => {
+  currentPeriod.value = p
+  loadKlineData()
 }
+
+// 切换副图指标
+watch(currentIndicator, () => {
+  renderChart()
+})
+
+// 跳转回测
+const goBacktest = () => {
+  router.push({
+    path: '/backtest/custom',
+    query: { code: code.value, name: stockName.value }
+  })
+}
+
+const handleResize = () => { chartInstance?.resize() }
 
 onMounted(() => {
-  initKlineChart()
+  loadKlineData()
   window.addEventListener('resize', handleResize)
 })
 
-// 组件销毁时清理资源
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
   chartInstance?.dispose()
@@ -243,29 +222,30 @@ onUnmounted(() => {
           <span class="stock-name">{{ stockName }}</span>
           <el-tag size="small">{{ date }}</el-tag>
         </div>
-        <div class="indicator-tabs">
-          <el-radio-group v-model="currentIndicator" size="small">
-            <el-radio-button 
-              v-for="ind in indicators" 
-              :key="ind" 
-              :value="ind"
-            >
-              {{ ind }}
-            </el-radio-button>
-          </el-radio-group>
+        <div class="stock-actions">
+          <el-button type="primary" size="small" @click="goBacktest">
+            查看回测
+          </el-button>
         </div>
       </div>
     </el-card>
 
     <!-- K线图 -->
-    <el-card class="chart-card" shadow="never">
+    <el-card class="chart-card" shadow="never" v-loading="loading">
       <template #header>
         <div class="card-header">
-          <span>K线图 & 成交量</span>
+          <div class="header-left">
+            <span>K线图</span>
+            <el-radio-group v-model="currentIndicator" size="small" style="margin-left: 16px;">
+              <el-radio-button v-for="ind in indicatorOptions" :key="ind" :value="ind">{{ ind }}</el-radio-button>
+            </el-radio-group>
+          </div>
           <el-button-group size="small">
-            <el-button>日K</el-button>
-            <el-button>周K</el-button>
-            <el-button>月K</el-button>
+            <el-button
+              v-for="p in periods" :key="p.value"
+              :type="currentPeriod === p.value ? 'primary' : ''"
+              @click="switchPeriod(p.value)"
+            >{{ p.label }}</el-button>
           </el-button-group>
         </div>
       </template>
@@ -280,35 +260,29 @@ onUnmounted(() => {
       <div class="indicator-desc">
         <template v-if="currentIndicator === 'MACD'">
           <p><strong>MACD (指数平滑移动平均线)</strong></p>
-          <p>MACD是由快的指数移动平均线（EMA12）减去慢的指数移动平均线（EMA26）得到快线DIF，再用2×(快线DIF-DIF的9日加权移动均线DEA)得到MACD柱。</p>
+          <p>MACD由快线EMA12减慢线EMA26得到DIF，再对DIF做9日EMA得到DEA。MACD柱 = 2×(DIF-DEA)。</p>
           <ul>
-            <li>DIF线从下向上突破DEA线，为买入信号</li>
-            <li>DIF线从上向下跌破DEA线，为卖出信号</li>
-            <li>红色柱状线由短变长，表示上涨动力增强</li>
-            <li>绿色柱状线由短变长，表示下跌动力增强</li>
-          </ul>
-        </template>
-        <template v-else-if="currentIndicator === 'KDJ'">
-          <p><strong>KDJ (随机指标)</strong></p>
-          <p>KDJ指标是通过一个特定周期内出现过的最高价、最低价及最后一个收盘价这三者之间的比例关系来计算最后一个计算周期的未成熟随机值。</p>
-          <ul>
-            <li>K值在80以上，D值在70以上为超买区</li>
-            <li>K值在20以下，D值在30以下为超卖区</li>
-            <li>K线向上突破D线为买入信号</li>
-            <li>K线向下跌破D线为卖出信号</li>
+            <li>DIF 上穿 DEA → 金叉（买入参考）</li>
+            <li>DIF 下穿 DEA → 死叉（卖出参考）</li>
+            <li>红柱变长 → 上涨动力增强；绿柱变长 → 下跌动力增强</li>
           </ul>
         </template>
         <template v-else-if="currentIndicator === 'RSI'">
-          <p><strong>RSI (相对强弱指标)</strong></p>
-          <p>RSI是根据一定时期内上涨和下跌幅度之和的比率制作出的一种技术曲线，能够反映出市场在一定时期内的景气程度。</p>
+          <p><strong>RSI (相对强弱指标, 14日)</strong></p>
           <ul>
-            <li>RSI > 80 为超买状态</li>
-            <li>RSI &lt; 20 为超卖状态</li>
-            <li>RSI在50附近波动为盘整状态</li>
+            <li>RSI &gt; 70 → 超买区，注意减仓</li>
+            <li>RSI &lt; 30 → 超卖区，关注反弹机会</li>
+            <li>RSI 在 40-60 区间 → 趋势温和，适合趋势回调买入</li>
           </ul>
         </template>
-        <template v-else>
-          <p>{{ currentIndicator }} 指标详情请参考相关技术分析文档。</p>
+        <template v-else-if="currentIndicator === 'BOLL'">
+          <p><strong>BOLL 布林带 (20日, 2倍标准差)</strong></p>
+          <ul>
+            <li>价格触及上轨并放量滞涨 → 注意减仓</li>
+            <li>价格回调至中轨企稳，中轨上行 → 回调买入参考</li>
+            <li>价格跌破下轨后收回 → 超跌反弹信号</li>
+            <li>轨道收窄（缩口）→ 即将变盘</li>
+          </ul>
         </template>
       </div>
     </el-card>
@@ -323,9 +297,7 @@ onUnmounted(() => {
 }
 
 .info-card {
-  :deep(.el-card__body) {
-    padding: 12px 20px;
-  }
+  :deep(.el-card__body) { padding: 12px 20px; }
 }
 
 .stock-info {
@@ -340,17 +312,8 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
-  
-  .stock-code {
-    font-size: 20px;
-    font-weight: 600;
-    color: #409eff;
-  }
-  
-  .stock-name {
-    font-size: 18px;
-    color: #303133;
-  }
+  .stock-code { font-size: 20px; font-weight: 600; color: #409eff; }
+  .stock-name { font-size: 18px; color: #303133; }
 }
 
 .chart-card {
@@ -358,29 +321,23 @@ onUnmounted(() => {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .header-left {
+    display: flex;
+    align-items: center;
   }
 }
 
-.chart-container {
-  height: 500px;
-}
+.chart-container { height: 560px; }
 
 .desc-card {
   .indicator-desc {
     line-height: 1.8;
     color: #606266;
-    
-    p {
-      margin-bottom: 8px;
-    }
-    
-    ul {
-      padding-left: 20px;
-      
-      li {
-        margin-bottom: 4px;
-      }
-    }
+    p { margin-bottom: 8px; }
+    ul { padding-left: 20px; li { margin-bottom: 4px; } }
   }
 }
 </style>

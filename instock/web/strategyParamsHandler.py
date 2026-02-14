@@ -53,6 +53,30 @@ DEFAULT_STRATEGY_PARAMS = {
                         "step": 0.5,
                         "unit": "元",
                         "field": "per_netcash_operate"
+                    },
+                    {
+                        "key": "current_ratio_min",
+                        "label": "流动比率下限",
+                        "description": "衡量短期偿债能力。>=1.0表示流动资产大于流动负债，偿债有保障。",
+                        "type": "number",
+                        "value": 1.0,
+                        "min": 0.5,
+                        "max": 3.0,
+                        "step": 0.1,
+                        "unit": "",
+                        "field": "current_ratio"
+                    },
+                    {
+                        "key": "speed_ratio_min",
+                        "label": "速动比率下限",
+                        "description": "扣除存货后的快速偿债能力。制造业可适当降低至0.5。",
+                        "type": "number",
+                        "value": 0.7,
+                        "min": 0.3,
+                        "max": 2.0,
+                        "step": 0.1,
+                        "unit": "",
+                        "field": "speed_ratio"
                     }
                 ]
             },
@@ -77,7 +101,7 @@ DEFAULT_STRATEGY_PARAMS = {
                         "label": "毛利率下限(%)",
                         "description": "反映产品定价权和竞争优势。制造业通常较低(可设20%)，消费品/软件行业可设更高。",
                         "type": "number",
-                        "value": 30,
+                        "value": 25,
                         "min": 10,
                         "max": 80,
                         "step": 5,
@@ -87,14 +111,26 @@ DEFAULT_STRATEGY_PARAMS = {
                     {
                         "key": "sale_npr_min",
                         "label": "净利率下限(%)",
-                        "description": "衡量成本控制能力和最终盈利水平。一般>=10%为佳。",
+                        "description": "衡量成本控制能力和最终盈利水平。工业企业>=8%已属优秀。",
                         "type": "number",
-                        "value": 10,
+                        "value": 8,
                         "min": 3,
                         "max": 50,
                         "step": 1,
                         "unit": "%",
                         "field": "sale_npr"
+                    },
+                    {
+                        "key": "jroa_min",
+                        "label": "ROA下限(%)",
+                        "description": "总资产净利率，衡量资产使用效率。资产较重的行业（制造业）可适当降低。",
+                        "type": "number",
+                        "value": 4,
+                        "min": 1,
+                        "max": 20,
+                        "step": 1,
+                        "unit": "%",
+                        "field": "jroa"
                     }
                 ]
             },
@@ -105,9 +141,9 @@ DEFAULT_STRATEGY_PARAMS = {
                     {
                         "key": "income_growthrate_3y_min",
                         "label": "营收3年CAGR下限(%)",
-                        "description": "营业收入3年复合增长率。>10%表明业务持续扩张，蓝筹股可放宽至5%。",
+                        "description": "营业收入3年复合增长率。>8%表明业务持续扩张，蓝筹股可放宽至5%。",
                         "type": "number",
-                        "value": 10,
+                        "value": 8,
                         "min": 0,
                         "max": 50,
                         "step": 1,
@@ -117,14 +153,26 @@ DEFAULT_STRATEGY_PARAMS = {
                     {
                         "key": "netprofit_growthrate_3y_min",
                         "label": "净利润3年CAGR下限(%)",
-                        "description": "净利润3年复合增长率。>10%表明盈利能力持续增强。",
+                        "description": "净利润3年复合增长率。>8%表明盈利能力持续增强。",
                         "type": "number",
-                        "value": 10,
+                        "value": 8,
                         "min": 0,
                         "max": 50,
                         "step": 1,
                         "unit": "%",
                         "field": "netprofit_growthrate_3y"
+                    },
+                    {
+                        "key": "deduct_netprofit_growthrate_min",
+                        "label": "扣非净利润增长率下限(%)",
+                        "description": "扣除非经常性损益后的净利润增长率。>0%确认主业盈利在增长，排除靠一次性收益粉饰业绩的公司。",
+                        "type": "number",
+                        "value": 0,
+                        "min": -20,
+                        "max": 50,
+                        "step": 1,
+                        "unit": "%",
+                        "field": "deduct_netprofit_growthrate"
                     }
                 ]
             },
@@ -155,6 +203,18 @@ DEFAULT_STRATEGY_PARAMS = {
                         "step": 5,
                         "unit": "倍",
                         "field": "pe9"
+                    },
+                    {
+                        "key": "pbnewmrq_max",
+                        "label": "PB(MRQ)上限",
+                        "description": "市净率上限，排除极端高估值股票。一般<=10为合理范围。",
+                        "type": "number",
+                        "value": 10,
+                        "min": 2,
+                        "max": 50,
+                        "step": 1,
+                        "unit": "倍",
+                        "field": "pbnewmrq"
                     }
                 ]
             }
@@ -646,6 +706,7 @@ class FilterStocksHandler(webBase.BaseHandler, ABC):
             conditions.append("`date` = %s")
             sql_params.append(date)
         
+        # === 第一层：财务安全过滤 ===
         # 资产负债率 < 上限
         conditions.append("`debt_asset_ratio` < %s")
         sql_params.append(params["debt_asset_ratio_max"])
@@ -654,6 +715,17 @@ class FilterStocksHandler(webBase.BaseHandler, ABC):
         conditions.append("`per_netcash_operate` > %s")
         sql_params.append(params["per_netcash_operate_min"])
         
+        # 流动比率 >= 下限（允许NULL，不因缺失而排除）
+        if "current_ratio_min" in params:
+            conditions.append("(`current_ratio` IS NULL OR `current_ratio` >= %s)")
+            sql_params.append(params["current_ratio_min"])
+        
+        # 速动比率 >= 下限（允许NULL）
+        if "speed_ratio_min" in params:
+            conditions.append("(`speed_ratio` IS NULL OR `speed_ratio` >= %s)")
+            sql_params.append(params["speed_ratio_min"])
+        
+        # === 第二层：盈利能力筛选 ===
         # ROE >= 下限
         conditions.append("`roe_weight` >= %s")
         sql_params.append(params["roe_weight_min"])
@@ -666,6 +738,12 @@ class FilterStocksHandler(webBase.BaseHandler, ABC):
         conditions.append("`sale_npr` >= %s")
         sql_params.append(params["sale_npr_min"])
         
+        # ROA >= 下限（允许NULL）
+        if "jroa_min" in params:
+            conditions.append("(`jroa` IS NULL OR `jroa` >= %s)")
+            sql_params.append(params["jroa_min"])
+        
+        # === 第三层：成长质量筛选 ===
         # 营收3年CAGR > 下限
         conditions.append("`income_growthrate_3y` > %s")
         sql_params.append(params["income_growthrate_3y_min"])
@@ -674,6 +752,12 @@ class FilterStocksHandler(webBase.BaseHandler, ABC):
         conditions.append("`netprofit_growthrate_3y` > %s")
         sql_params.append(params["netprofit_growthrate_3y_min"])
         
+        # 扣非净利润增长率 > 下限（允许NULL）
+        if "deduct_netprofit_growthrate_min" in params:
+            conditions.append("(`deduct_netprofit_growthrate` IS NULL OR `deduct_netprofit_growthrate` > %s)")
+            sql_params.append(params["deduct_netprofit_growthrate_min"])
+        
+        # === 第五层：估值约束 ===
         # PE 范围
         conditions.append("`pe9` > %s")
         sql_params.append(params["pe_min"])
@@ -681,7 +765,12 @@ class FilterStocksHandler(webBase.BaseHandler, ABC):
         conditions.append("`pe9` <= %s")
         sql_params.append(params["pe_max"])
         
-        # 排除空值
+        # PB 上限（允许NULL）
+        if "pbnewmrq_max" in params:
+            conditions.append("(`pbnewmrq` IS NULL OR `pbnewmrq` <= %s)")
+            sql_params.append(params["pbnewmrq_max"])
+        
+        # 排除空值（核心字段必须有值）
         not_null_fields = [
             'debt_asset_ratio', 'per_netcash_operate', 'roe_weight',
             'sale_gpr', 'sale_npr', 'income_growthrate_3y',
@@ -693,9 +782,10 @@ class FilterStocksHandler(webBase.BaseHandler, ABC):
         where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
         
         count_sql = f"SELECT COUNT(*) AS cnt FROM `cn_stock_selection`{where_clause}"
-        data_sql = f"""SELECT `date`, `code`, `name`, `pe9`, `roe_weight`, `sale_gpr`, 
-                         `sale_npr`, `income_growthrate_3y`, `netprofit_growthrate_3y`, 
-                         `debt_asset_ratio`, `per_netcash_operate`
+        data_sql = f"""SELECT `date`, `code`, `name`, `pe9`, `pbnewmrq`, `roe_weight`, `sale_gpr`, 
+                         `sale_npr`, `jroa`, `income_growthrate_3y`, `netprofit_growthrate_3y`, 
+                         `deduct_netprofit_growthrate`, `debt_asset_ratio`, `per_netcash_operate`,
+                         `current_ratio`, `speed_ratio`
                   FROM `cn_stock_selection`{where_clause}
                   ORDER BY `roe_weight` DESC{limit_clause}"""
         
