@@ -95,7 +95,8 @@ def _fetch_one_batch(full_code, fq_type, kline_key, start_date, end_date, datale
     }
 
     try:
-        response = requests.get(url, params=params, headers=HEADERS, timeout=30)
+        # timeout=(连接超时, 读取超时)：防止SSL握手阶段无限等待
+        response = requests.get(url, params=params, headers=HEADERS, timeout=(10, 30))
         response.raise_for_status()
 
         text = response.text
