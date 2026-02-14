@@ -431,3 +431,73 @@ curl -X POST "http://localhost:9988/instock/control/attention" \
 2. 股票代码为6位数字字符串
 3. API 返回数据量较大时建议使用分页
 4. 关注功能需要先运行数据作业创建相关表
+
+---
+
+## 回测验证 API
+
+### 获取回测配置
+
+```
+GET /instock/api/backtest/config
+```
+
+**响应**: 返回可用的回测周期和策略列表
+
+```json
+{
+  "periods": [{"value": "1w", "label": "1周", "days": 5}, ...],
+  "strategies": [{"name": "cn_stock_strategy_enter", "cn": "放量上涨", "type": "strategy"}, ...]
+}
+```
+
+### 执行单股回测
+
+```
+GET /instock/api/backtest/run
+```
+
+| 参数 | 类型 | 必填 | 说明 |
+|-----|------|-----|------|
+| code | string | 是 | 股票代码（如 000001） |
+| strategy | string | 否 | 策略名称 |
+| period | string | 否 | 回测周期（1w/2w/1m/3m/6m/1y），默认 1m |
+| start_date | string | 否 | 买入日期（YYYY-MM-DD），默认自动选择 |
+
+**响应**: 返回买入价、各周期收益率、最大涨幅/回撤、策略命中、关键指标
+
+### 批量策略回测
+
+```
+GET /instock/api/backtest/batch
+```
+
+| 参数 | 类型 | 必填 | 说明 |
+|-----|------|-----|------|
+| strategy | string | 是 | 策略名称 |
+| period | string | 否 | 回测周期，默认 1m |
+| limit | int | 否 | 统计天数，默认 30 |
+
+**响应**: 返回策略按日汇总的选股数量、成功率、平均收益
+
+---
+
+## 交易日期 API
+
+### 获取最近交易日期
+
+```
+GET /instock/api/trade_date
+```
+
+**响应**:
+
+```json
+{
+  "run_date": "2026-02-13",
+  "run_date_nph": "2026-02-13"
+}
+```
+
+- `run_date`: 最近已收盘的交易日（用于非实时数据表）
+- `run_date_nph`: 当前交易日（含未收盘，用于实时数据表）

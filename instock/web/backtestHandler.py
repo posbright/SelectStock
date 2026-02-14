@@ -165,13 +165,10 @@ def _run_backtest(code, strategy, period, start_date_str, end_date_str):
     if start_date_str:
         buy_date = start_date_str
     else:
-        # 默认使用最近一个有数据的交易日
-        buy_date = hist['date'].iloc[-1]
-    
-    if end_date_str:
-        end_date = end_date_str
-    else:
-        end_date = hist['date'].iloc[-1]
+        # 默认使用有足够后续数据的日期（倒数第 max_days+1 天）
+        # 避免选最后一天导致 "之后无足够交易数据" 错误
+        idx = max(0, len(hist) - max_days - 1)
+        buy_date = hist['date'].iloc[idx]
     
     # 获取买入日及之后的数据
     mask = hist['date'] >= buy_date

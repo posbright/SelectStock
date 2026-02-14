@@ -48,8 +48,8 @@
    - 指标二次筛选（买入/卖出信号）
 
 **Phase 5: 回测与收尾**
-10. **backtest_data_daily_job** - 策略回测数据（从缓存按需读取）
-11. **basic_data_after_close_daily_job** - 收盘后数据
+8. **backtest_data_daily_job** - 策略回测数据（从缓存按需读取）
+9. **basic_data_after_close_daily_job** - 收盘后数据
 
 **适用场景**: 每个交易日收盘后运行（建议18:00后执行）
 
