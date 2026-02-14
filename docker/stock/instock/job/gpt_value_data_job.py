@@ -81,7 +81,7 @@ def prepare(date):
         logging.info(f"GPT综合选股：{date_str} 成功保存 {len(result_data)} 条记录")
         
     except Exception as e:
-        logging.error(f"gpt_value_data_job.prepare 处理异常：{e}")
+        logging.error(f"gpt_value_data_job.prepare 处理异常", exc_info=True)
 
 
 def main():

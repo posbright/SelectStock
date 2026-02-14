@@ -103,7 +103,7 @@ def fetch_stocks_trade_date():
         data_date = set(data['trade_date'].values.tolist())
         return data_date
     except Exception as e:
-        logging.error(f"stockfetch.fetch_stocks_trade_date处理异常：{e}")
+        logging.error(f"stockfetch.fetch_stocks_trade_date处理异常", exc_info=True)
     return None
 
 
@@ -146,7 +146,7 @@ def fetch_etfs(date):
         data = data.loc[data['new_price'].apply(is_open)]
         return data
     except Exception as e:
-        logging.error(f"stockfetch.fetch_etfs处理异常：{e}")
+        logging.error(f"stockfetch.fetch_etfs处理异常", exc_info=True)
     return None
 
 
@@ -189,7 +189,7 @@ def fetch_stocks(date):
         data = data.loc[data['code'].apply(is_a_stock)].loc[data['new_price'].apply(is_open)]
         return data
     except Exception as e:
-        logging.error(f"stockfetch.fetch_stocks处理异常：{e}")
+        logging.error(f"stockfetch.fetch_stocks处理异常", exc_info=True)
     return None
 
 
@@ -269,7 +269,7 @@ def fetch_stock_selection():
         
         return data
     except Exception as e:
-        logging.error(f"stockfetch.fetch_stocks_selection处理异常：{e}")
+        logging.error(f"stockfetch.fetch_stocks_selection处理异常", exc_info=True)
     return None
 
 
@@ -306,7 +306,7 @@ def fetch_stocks_fund_flow(index):
         data = data.loc[data['code'].apply(is_a_stock)].loc[data['new_price'].apply(is_open_with_line)]
         return data
     except Exception as e:
-        logging.error(f"stockfetch.fetch_stocks_fund_flow处理异常：{e}")
+        logging.error(f"stockfetch.fetch_stocks_fund_flow处理异常", exc_info=True)
     return None
 
 
@@ -349,7 +349,7 @@ def fetch_stocks_bonus(date):
         data = data.loc[data['code'].apply(is_a_stock)]
         return data
     except Exception as e:
-        logging.error(f"stockfetch.fetch_stocks_bonus处理异常：{e}")
+        logging.error(f"stockfetch.fetch_stocks_bonus处理异常", exc_info=True)
     return None
 
 
@@ -381,7 +381,7 @@ def fetch_stock_top_entity_data(date):
 
         return data_code
     except Exception as e:
-        logging.error(f"stockfetch.fetch_stock_top_entity_data处理异常：{e}")
+        logging.error(f"stockfetch.fetch_stock_top_entity_data处理异常", exc_info=True)
     return None
 
 # 描述: 获取龙虎榜-个股上榜统计（支持多数据源：新浪财经 -> 东方财富）
@@ -441,7 +441,7 @@ def fetch_stock_lhb_data(date, count=12):
         data.drop_duplicates('code', keep='last', inplace=True)
         return data
     except Exception as e:
-        logging.error(f"stockfetch.fetch_stock_lhb_data处理异常：{e}")
+        logging.error(f"stockfetch.fetch_stock_lhb_data处理异常", exc_info=True)
     return None
 
 # 描述: 获取新浪财经-龙虎榜-个股上榜统计
@@ -461,7 +461,7 @@ def fetch_stock_top_data(date):
             data.insert(0, 'date', date.strftime("%Y-%m-%d"))
         return data
     except Exception as e:
-        logging.error(f"stockfetch.fetch_stock_top_data处理异常：{e}")
+        logging.error(f"stockfetch.fetch_stock_top_data处理异常", exc_info=True)
     return None
 
 
@@ -483,7 +483,7 @@ def fetch_stock_blocktrade_data(date):
         logging.error("处理异常：目前还没有大宗交易数据，请17:00点后再获取！")
         return None
     except Exception as e:
-        logging.error(f"stockfetch.fetch_stock_blocktrade_data处理异常：{e}")
+        logging.error(f"stockfetch.fetch_stock_blocktrade_data处理异常", exc_info=True)
     return None
 
 # 读取早盘抢筹
@@ -502,7 +502,7 @@ def fetch_stock_chip_race_open(date):
         data.columns = list(tbs.TABLE_CN_STOCK_CHIP_RACE_OPEN['columns'])
         return data
     except Exception as e:
-        logging.error(f"stockfetch.fetch_stock_chip_race_open处理异常：{e}")
+        logging.error(f"stockfetch.fetch_stock_chip_race_open处理异常", exc_info=True)
     return None
 
 # 读取尾盘抢筹
@@ -521,7 +521,7 @@ def fetch_stock_chip_race_end(date):
         data.columns = list(tbs.TABLE_CN_STOCK_CHIP_RACE_END['columns'])
         return data
     except Exception as e:
-        logging.error(f"stockfetch.fetch_stock_chip_race_end处理异常：{e}")
+        logging.error(f"stockfetch.fetch_stock_chip_race_end处理异常", exc_info=True)
     return None
 
 # 读取涨停原因
@@ -534,7 +534,7 @@ def fetch_stock_limitup_reason(date):
         data.columns = list(tbs.TABLE_CN_STOCK_LIMITUP_REASON['columns'])
         return data
     except Exception as e:
-        logging.error(f"stockfetch.fetch_stock_limitup_reason处理异常：{e}")
+        logging.error(f"stockfetch.fetch_stock_limitup_reason处理异常", exc_info=True)
     return None
 
 # 读取股票历史数据
@@ -562,7 +562,7 @@ def fetch_etf_hist(data_base, date_start=None, date_end=None, adjust='qfq'):
             data['volume'] = data['volume'].astype('double') * 100  # 成交量单位从手变成股。
         return data
     except Exception as e:
-        logging.error(f"stockfetch.fetch_etf_hist处理异常：{e}")
+        logging.error(f"stockfetch.fetch_etf_hist处理异常", exc_info=True)
     return None
 
 
@@ -603,7 +603,7 @@ def fetch_stock_hist(data_base, date_start=None, date_end=None, is_cache=True, y
             data['volume'] = data['volume'].astype('double') * 100  # 成交量单位从手变成股。
         return data
     except Exception as e:
-        logging.error(f"stockfetch.fetch_stock_hist处理异常：{e}")
+        logging.error(f"stockfetch.fetch_stock_hist处理异常", exc_info=True)
     return None
 
 
@@ -848,7 +848,7 @@ def stock_hist_cache_incremental(code, date_start, date_end, is_cache=True, adju
         return result if len(result) > 0 else None
         
     except Exception as e:
-        logging.error(f"stockfetch.stock_hist_cache_incremental处理异常：{code}代码{e}")
+        logging.error(f"stockfetch.stock_hist_cache_incremental处理异常：{code}代码", exc_info=True)
     return None
 
 
@@ -947,7 +947,7 @@ def clean_expired_cache(expire_days=None):
                     continue
 
     except Exception as e:
-        logging.error(f"清理缓存失败: {e}")
+        logging.error(f"清理缓存失败", exc_info=True)
 
     total = delisted_count + bonus_count + corrupt_count
     if total > 0:
@@ -1058,7 +1058,7 @@ def update_all_caches(stocks, date_start, date_end, workers=2):
                     consecutive_fails = 0  # 成功时重置连续失败计数
             return ok
         except Exception as e:
-            logging.error(f"update_all_caches处理异常：{code} - {e}")
+            logging.error(f"update_all_caches处理异常：{code} -", exc_info=True)
             return False
         finally:
             # 仅在实际可能发起 API 请求时添加延迟
@@ -1131,7 +1131,7 @@ def update_all_caches(stocks, date_start, date_end, workers=2):
                     fail += 1
                     api_processed += 1
                     stock = future_to_stock[future]
-                    logging.error(f"update_all_caches处理异常：{stock[1]} - {e}")
+                    logging.error(f"update_all_caches处理异常：{stock[1]} -", exc_info=True)
                 
                 processed_total += 1
                 # 每 N 次 API 请求后短暂暂停，让连接池冷却
@@ -1145,7 +1145,7 @@ def update_all_caches(stocks, date_start, date_end, workers=2):
                     )
                     time.sleep(pause)
     except Exception as e:
-        logging.error(f"update_all_caches处理异常：{e}")
+        logging.error(f"update_all_caches处理异常", exc_info=True)
     
     logging.info(
         f"缓存更新完成：成功={success}, 失败={fail}, "
@@ -1211,5 +1211,5 @@ def read_stock_hist_from_cache(code, date_start, date_end):
         data['volume'] = data['volume'].astype('double') * 100
         return data
     except Exception as e:
-        logging.error(f"read_stock_hist_from_cache处理异常：{code} - {e}")
+        logging.error(f"read_stock_hist_from_cache处理异常：{code} -", exc_info=True)
     return None

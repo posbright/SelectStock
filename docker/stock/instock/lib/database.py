@@ -77,7 +77,7 @@ def get_connection():
     try:
         return pymysql.connect(**MYSQL_CONN_DBAPI)
     except Exception as e:
-        logging.error(f"database.get_connection处理异常：{e}")
+        logging.error(f"database.get_connection处理异常", exc_info=True)
         raise
 
 
@@ -113,14 +113,14 @@ def insert_other_db_from_df(to_db, data, table_name, cols_type, write_index, pri
             data.to_sql(name=table_name, con=engine_mysql, schema=to_db, if_exists='append',
                         dtype=cols_type, index=write_index, )
     except Exception as e:
-        logging.error(f"database.insert_other_db_from_df处理异常：{table_name}表{e}")
+        logging.error(f"database.insert_other_db_from_df处理异常：{table_name}表", exc_info=True)
         return
 
     # 判断是否存在主键
     try:
         pk_exists = ipt.get_pk_constraint(table_name)['constrained_columns']
     except Exception as e:
-        logging.error(f"database.insert_other_db_from_df检查主键异常：{table_name}表{e}")
+        logging.error(f"database.insert_other_db_from_df检查主键异常：{table_name}表", exc_info=True)
         return
     if not pk_exists:
         try:
@@ -132,7 +132,7 @@ def insert_other_db_from_df(to_db, data, table_name, cols_type, write_index, pri
                         for k in indexs:
                             db.execute(f'ALTER TABLE `{table_name}` ADD INDEX IN{k}({indexs[k]});')
         except Exception as e:
-            logging.error(f"database.insert_other_db_from_df处理异常：{table_name}表{e}")
+            logging.error(f"database.insert_other_db_from_df处理异常：{table_name}表", exc_info=True)
 
 
 # 更新数据
@@ -171,7 +171,7 @@ def update_db_from_df(data, table_name, where):
                     params = set_params + where_params
                     db.execute(sql, params)
     except Exception as e:
-        logging.error(f"database.update_db_from_df处理异常：{table_name}表{e}")
+        logging.error(f"database.update_db_from_df处理异常：{table_name}表", exc_info=True)
 
 
 # 检查表是否存在
@@ -187,7 +187,7 @@ def checkTableIsExist(tableName):
                 if db.fetchone()[0] == 1:
                     return True
     except Exception as e:
-        logging.error(f"database.checkTableIsExist处理异常：{e}")
+        logging.error(f"database.checkTableIsExist处理异常", exc_info=True)
     return False
 
 # 增删改数据
@@ -197,7 +197,7 @@ def executeSql(sql, params=()):
             try:
                 db.execute(sql, params)
             except Exception as e:
-                logging.error(f"database.executeSql处理异常：{sql}{e}")
+                logging.error(f"database.executeSql处理异常：{sql}", exc_info=True)
 
 
 # 查询数据
@@ -208,7 +208,7 @@ def executeSqlFetch(sql, params=()):
                 db.execute(sql, params)
                 return db.fetchall()
             except Exception as e:
-                logging.error(f"database.executeSqlFetch处理异常：{sql}{e}")
+                logging.error(f"database.executeSqlFetch处理异常：{sql}", exc_info=True)
     return None
 
 
@@ -224,5 +224,5 @@ def executeSqlCount(sql, params=()):
                 else:
                     return 0
             except Exception as e:
-                logging.error(f"database.select_count计算数量处理异常：{e}")
+                logging.error(f"database.select_count计算数量处理异常", exc_info=True)
     return 0

@@ -40,7 +40,7 @@ def save_nph_stock_spot_data(date, before=True):
         mdb.insert_db_from_df(data, table_name, cols_type, False, "`date`,`code`")
 
     except Exception as e:
-        logging.error(f"basic_data_daily_job.save_stock_spot_data处理异常：{e}")
+        logging.error(f"basic_data_daily_job.save_stock_spot_data处理异常", exc_info=True)
 
 
 # 基金实时行情数据。
@@ -64,7 +64,7 @@ def save_nph_etf_spot_data(date, before=True):
 
         mdb.insert_db_from_df(data, table_name, cols_type, False, "`date`,`code`")
     except Exception as e:
-        logging.error(f"basic_data_daily_job.save_nph_etf_spot_data处理异常：{e}")
+        logging.error(f"basic_data_daily_job.save_nph_etf_spot_data处理异常", exc_info=True)
 
 
 

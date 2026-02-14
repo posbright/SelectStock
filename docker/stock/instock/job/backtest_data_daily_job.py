@@ -77,7 +77,7 @@ def process(table, date_start, date_end, backtest_column):
         mdb.update_db_from_df(data_new, table_name, ('date', 'code'))
 
     except Exception as e:
-        logging.error(f"backtest_data_daily_job.process处理异常：{table}表{e}")
+        logging.error(f"backtest_data_daily_job.process处理异常：{table}表", exc_info=True)
 
 
 def run_check(stocks, date_start, date_end, backtest_column, workers=4):
@@ -110,9 +110,9 @@ def run_check(stocks, date_start, date_end, backtest_column, workers=4):
                     if _data_ is not None:
                         data[stock] = _data_
                 except Exception as e:
-                    logging.error(f"backtest_data_daily_job.run_check处理异常：{stock[1]}代码{e}")
+                    logging.error(f"backtest_data_daily_job.run_check处理异常：{stock[1]}代码", exc_info=True)
     except Exception as e:
-        logging.error(f"backtest_data_daily_job.run_check处理异常：{e}")
+        logging.error(f"backtest_data_daily_job.run_check处理异常", exc_info=True)
     if not data:
         return None
     else:
@@ -199,7 +199,7 @@ def summarize_backtest():
         logging.info(f"回测汇总完成：{len(result)} 条记录，覆盖 {len(all_rows)} 个策略")
         
     except Exception as e:
-        logging.error(f"backtest_data_daily_job.summarize_backtest处理异常：{e}")
+        logging.error(f"backtest_data_daily_job.summarize_backtest处理异常", exc_info=True)
 
 
 # main函数入口

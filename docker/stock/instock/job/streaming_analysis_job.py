@@ -67,7 +67,7 @@ def streaming_analysis(date):
             logging.error("流式分析：stock_data 返回 None，无法获取股票列表")
             return
     except Exception as e:
-        logging.error(f"流式分析：获取股票列表异常：{e}")
+        logging.error(f"流式分析：获取股票列表异常", exc_info=True)
         return
 
     _subset = spot[list(tbs.TABLE_CN_STOCK_FOREIGN_KEY['columns'])]
@@ -189,7 +189,7 @@ def streaming_analysis(date):
 
             except Exception as e:
                 errors += 1
-                logging.error(f"流式分析处理异常：{code} - {e}")
+                logging.error(f"流式分析处理异常：{code} -", exc_info=True)
 
             # 批量写入数据库
             if processed > 0 and processed % BATCH_SIZE == 0:
@@ -261,7 +261,7 @@ def _ensure_table_schema(table_name, expected_columns):
             mdb.executeSql(f"DROP TABLE `{table_name}`")
             logging.info(f"已删除旧表 {table_name}，将在写入时自动重建")
     except Exception as e:
-        logging.error(f"检查表 {table_name} schema 异常（后续写入可能失败）：{e}")
+        logging.error(f"检查表 {table_name} schema 异常（后续写入可能失败）", exc_info=True)
 
 
 def _flush_results(indicator_results, kline_results, strategy_results, date_str, strategies, tables_cleaned):
@@ -272,14 +272,14 @@ def _flush_results(indicator_results, kline_results, strategy_results, date_str,
         try:
             _write_indicator_results(indicator_results, date_str, tables_cleaned)
         except Exception as e:
-            logging.error(f"写入指标数据异常：{e}")
+            logging.error(f"写入指标数据异常", exc_info=True)
 
     # --- 写入K线形态数据 ---
     if kline_results:
         try:
             _write_kline_results(kline_results, date_str, tables_cleaned)
         except Exception as e:
-            logging.error(f"写入K线形态数据异常：{e}")
+            logging.error(f"写入K线形态数据异常", exc_info=True)
 
     # --- 写入策略数据 ---
     for strategy in strategies:
@@ -289,7 +289,7 @@ def _flush_results(indicator_results, kline_results, strategy_results, date_str,
             try:
                 _write_strategy_results(matched_stocks, table_name, date_str, tables_cleaned)
             except Exception as e:
-                logging.error(f"写入策略数据异常：{table_name} - {e}")
+                logging.error(f"写入策略数据异常：{table_name} -", exc_info=True)
 
 
 def _write_indicator_results(results, date_str, tables_cleaned):
@@ -401,7 +401,7 @@ def _guess_buy(date):
         data = data.reindex(columns=list(data.columns) + _columns_backtest)
         mdb.insert_db_from_df(data, table_name, cols_type, False, "`date`,`code`")
     except Exception as e:
-        logging.error(f"streaming_analysis_job._guess_buy处理异常：{e}")
+        logging.error(f"streaming_analysis_job._guess_buy处理异常", exc_info=True)
 
 
 def _guess_sell(date):
@@ -433,7 +433,7 @@ def _guess_sell(date):
         data = data.reindex(columns=list(data.columns) + _columns_backtest)
         mdb.insert_db_from_df(data, table_name, cols_type, False, "`date`,`code`")
     except Exception as e:
-        logging.error(f"streaming_analysis_job._guess_sell处理异常：{e}")
+        logging.error(f"streaming_analysis_job._guess_sell处理异常", exc_info=True)
 
 
 def main():

@@ -81,7 +81,7 @@ class RunBacktestHandler(webBase.BaseHandler, ABC):
             result = _run_backtest(code, strategy, period, start_date, end_date)
             self.write(json.dumps(result, ensure_ascii=False, default=_json_default))
         except Exception as e:
-            logging.error(f"RunBacktestHandler处理异常：{e}")
+            logging.error(f"RunBacktestHandler处理异常", exc_info=True)
             self.set_status(500)
             self.write(json.dumps({"error": str(e)}, ensure_ascii=False))
 
@@ -104,7 +104,7 @@ class RunBatchBacktestHandler(webBase.BaseHandler, ABC):
             result = _run_batch_backtest(strategy, period, int(limit))
             self.write(json.dumps(result, ensure_ascii=False, default=_json_default))
         except Exception as e:
-            logging.error(f"RunBatchBacktestHandler处理异常：{e}")
+            logging.error(f"RunBatchBacktestHandler处理异常", exc_info=True)
             self.set_status(500)
             self.write(json.dumps({"error": str(e)}, ensure_ascii=False))
 

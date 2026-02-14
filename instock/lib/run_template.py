@@ -37,9 +37,9 @@ def run_with_args(run_fun, *args):
                     try:
                         future.result()
                     except Exception as e:
-                        logging.error(f"run_template批量任务异常：{run_fun}{e}")
+                        logging.error(f"run_template批量任务异常：{run_fun}", exc_info=True)
         except Exception as e:
-            logging.error(f"run_template.run_with_args处理异常：{run_fun}{sys.argv}{e}")
+            logging.error(f"run_template.run_with_args处理异常：{run_fun}{sys.argv}", exc_info=True)
     elif len(sys.argv) == 2:
         # N个时间作业 python xxx.py 2023-03-01,2023-03-02
         dates = sys.argv[1].split(',')
@@ -59,9 +59,9 @@ def run_with_args(run_fun, *args):
                     try:
                         future.result()
                     except Exception as e:
-                        logging.error(f"run_template批量任务异常：{run_fun}{e}")
+                        logging.error(f"run_template批量任务异常：{run_fun}", exc_info=True)
         except Exception as e:
-            logging.error(f"run_template.run_with_args处理异常：{run_fun}{sys.argv}{e}")
+            logging.error(f"run_template.run_with_args处理异常：{run_fun}{sys.argv}", exc_info=True)
     else:
         # 当前时间作业 python xxx.py
         try:
@@ -73,4 +73,4 @@ def run_with_args(run_fun, *args):
             else:
                 run_fun(run_date_nph, *args)
         except Exception as e:
-            logging.error(f"run_template.run_with_args处理异常：{run_fun}{sys.argv}{e}")
+            logging.error(f"run_template.run_with_args处理异常：{run_fun}{sys.argv}", exc_info=True)

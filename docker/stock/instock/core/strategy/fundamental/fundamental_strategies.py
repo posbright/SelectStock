@@ -106,7 +106,7 @@ class ValueInvestStrategy(BaseStrategy):
             return True
             
         except Exception as e:
-            logging.error(f"价值投资策略检查异常: {e}")
+            logging.error(f"价值投资策略检查异常", exc_info=True)
             return False
     
     def filter_stocks(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -189,7 +189,7 @@ class GrowthInvestStrategy(BaseStrategy):
             return True
             
         except Exception as e:
-            logging.error(f"成长投资策略检查异常: {e}")
+            logging.error(f"成长投资策略检查异常", exc_info=True)
             return False
     
     def filter_stocks(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -263,7 +263,7 @@ class MoatStrategy(BaseStrategy):
             return True
             
         except Exception as e:
-            logging.error(f"护城河策略检查异常: {e}")
+            logging.error(f"护城河策略检查异常", exc_info=True)
             return False
     
     def filter_stocks(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -346,5 +346,5 @@ class DividendGrowthStrategy(BaseStrategy):
             return True
             
         except Exception as e:
-            logging.error(f"股息成长策略检查异常: {e}")
+            logging.error(f"股息成长策略检查异常", exc_info=True)
             return False

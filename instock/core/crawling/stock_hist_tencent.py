@@ -259,5 +259,5 @@ def stock_zh_a_hist_tencent(
         return df
 
     except Exception as e:
-        logging.error(f"stock_hist_tencent.stock_zh_a_hist_tencent处理异常：{symbol} - {e}")
+        logging.error(f"stock_hist_tencent.stock_zh_a_hist_tencent处理异常：{symbol} -", exc_info=True)
     return None

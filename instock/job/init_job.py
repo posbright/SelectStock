@@ -27,7 +27,7 @@ def create_new_database():
                 db.execute(create_sql)
                 create_new_base_table()
             except Exception as e:
-                logging.error(f"init_job.create_new_database处理异常：{e}")
+                logging.error(f"init_job.create_new_database处理异常", exc_info=True)
 
 
 # 创建基础表。

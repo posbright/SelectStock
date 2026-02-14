@@ -53,7 +53,7 @@ def prepare(date, strategy):
         mdb.insert_db_from_df(data, table_name, cols_type, False, "`date`,`code`")
 
     except Exception as e:
-        logging.error(f"strategy_data_daily_job.prepare处理异常：{strategy}策略{e}")
+        logging.error(f"strategy_data_daily_job.prepare处理异常：{strategy}策略", exc_info=True)
 
 
 def run_check(strategy_fun, table_name, stocks, date, workers=4):
@@ -75,9 +75,9 @@ def run_check(strategy_fun, table_name, stocks, date, workers=4):
                     if future.result():
                         data.append(stock)
                 except Exception as e:
-                    logging.error(f"strategy_data_daily_job.run_check处理异常：{stock[1]}代码{e}策略{table_name}")
+                    logging.error(f"strategy_data_daily_job.run_check处理异常：{stock[1]}代码策略{table_name}", exc_info=True)
     except Exception as e:
-        logging.error(f"strategy_data_daily_job.run_check处理异常：{e}策略{table_name}")
+        logging.error(f"strategy_data_daily_job.run_check处理异常策略{table_name}", exc_info=True)
     if not data:
         return None
     else:

@@ -153,7 +153,7 @@ class GetStockDataHandler(webBase.BaseHandler, ABC):
                 data = []
                 total = 0
             else:
-                logging.error(f"GetStockDataHandler查询异常：{web_module_data.table_name} {e}")
+                logging.error(f"GetStockDataHandler查询异常：{web_module_data.table_name}", exc_info=True)
                 self.set_status(500)
                 self.write(json.dumps({"error": f"查询数据异常: {error_msg}", "code": 500}))
                 return
@@ -179,6 +179,6 @@ class GetTradeDateHandler(webBase.BaseHandler, ABC):
             }
             self.write(json.dumps(response))
         except Exception as e:
-            logging.error(f"GetTradeDateHandler处理异常：{e}")
+            logging.error(f"GetTradeDateHandler处理异常", exc_info=True)
             today = datetime.date.today().strftime("%Y-%m-%d")
             self.write(json.dumps({"run_date": today, "run_date_nph": today}))

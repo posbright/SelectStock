@@ -45,7 +45,7 @@ def save_nph_stock_selection_data(date, before=True):
 
         mdb.insert_db_from_df(data, table_name, cols_type, False, "`date`,`code`")
     except Exception as e:
-        logging.error(f"selection_data_daily_job.save_nph_stock_selection_data处理异常：{e}")
+        logging.error(f"selection_data_daily_job.save_nph_stock_selection_data处理异常", exc_info=True)
 
 
 def main():

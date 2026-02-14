@@ -227,7 +227,7 @@ class MoatAIService:
             if response:
                 return self._parse_analysis_result(response)
         except Exception as e:
-            logging.error(f"AI分析失败: {e}")
+            logging.error(f"AI分析失败", exc_info=True)
         
         return None
     
@@ -352,7 +352,7 @@ class MoatAIService:
             logging.warning("requests库未安装，无法调用AI API")
             return None
         except Exception as e:
-            logging.error(f"AI API调用异常: {e}")
+            logging.error(f"AI API调用异常", exc_info=True)
             return None
     
     def _parse_analysis_result(self, response: str) -> Optional[AIAnalysisResult]:
@@ -372,10 +372,10 @@ class MoatAIService:
             return AIAnalysisResult.from_json(json_str)
             
         except json.JSONDecodeError as e:
-            logging.error(f"JSON解析失败: {e}")
+            logging.error(f"JSON解析失败", exc_info=True)
             return None
         except Exception as e:
-            logging.error(f"结果解析失败: {e}")
+            logging.error(f"结果解析失败", exc_info=True)
             return None
 
 

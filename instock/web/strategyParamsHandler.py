@@ -404,7 +404,7 @@ def _ensure_params_table():
                     """)
             logging.info("已创建策略参数表 cn_strategy_params")
     except Exception as e:
-        logging.error(f"创建策略参数表异常: {e}")
+        logging.error(f"创建策略参数表异常", exc_info=True)
 
 
 def _load_saved_params(strategy_key):
@@ -417,7 +417,7 @@ def _load_saved_params(strategy_key):
         if result:
             return {row[0]: json.loads(row[1]) for row in result}
     except Exception as e:
-        logging.error(f"加载策略参数异常: {e}")
+        logging.error(f"加载策略参数异常", exc_info=True)
     return {}
 
 
@@ -433,7 +433,7 @@ def _save_param(strategy_key, param_key, param_value):
         )
         return True
     except Exception as e:
-        logging.error(f"保存策略参数异常: {e}")
+        logging.error(f"保存策略参数异常", exc_info=True)
         return False
 
 
@@ -446,7 +446,7 @@ def _delete_strategy_params(strategy_key):
         )
         return True
     except Exception as e:
-        logging.error(f"删除策略参数异常: {e}")
+        logging.error(f"删除策略参数异常", exc_info=True)
         return False
 
 
@@ -756,7 +756,7 @@ class FilterStocksHandler(webBase.BaseHandler, ABC):
                     "warning": "cn_stock_selection 表尚未创建，请先执行选股作业"
                 }, ensure_ascii=False))
             else:
-                logging.error(f"FilterStocksHandler 查询异常: {e}")
+                logging.error(f"FilterStocksHandler 查询异常", exc_info=True)
                 self.set_status(500)
                 self.write(json.dumps({"error": f"查询异常: {error_msg}"}, ensure_ascii=False))
 
@@ -926,6 +926,6 @@ class FilterStocksHandler(webBase.BaseHandler, ABC):
             if "doesn't exist" in error_msg:
                 self.write(json.dumps({"columns": [], "data": [], "total": 0, "warning": f"表不存在"}, ensure_ascii=False))
             else:
-                logging.error(f"FilterStocksHandler 查询异常: {e}")
+                logging.error(f"FilterStocksHandler 查询异常", exc_info=True)
                 self.set_status(500)
                 self.write(json.dumps({"error": f"查询异常: {error_msg}"}, ensure_ascii=False))

@@ -73,7 +73,7 @@ def fetch_all_data(date):
             logging.error("实时行情加载失败：stock_data 返回 None")
             return
     except Exception as e:
-        logging.error(f"实时行情加载异常：{e}")
+        logging.error(f"实时行情加载异常", exc_info=True)
         return
 
     # Step 3: 批量更新历史K线缓存（低内存模式）
@@ -102,7 +102,7 @@ def fetch_all_data(date):
         elapsed_hist = time.time() - hist_start
         logging.info(f"历史K线缓存更新完成：成功 {success}，失败 {fail}，耗时 {elapsed_hist:.1f}秒")
     except Exception as e:
-        logging.error(f"历史K线缓存更新异常：{e}")
+        logging.error(f"历史K线缓存更新异常", exc_info=True)
 
     elapsed = time.time() - start_time
     logging.info(f"===== Phase 1: 数据获取完成，总耗时 {elapsed:.1f}秒 =====")

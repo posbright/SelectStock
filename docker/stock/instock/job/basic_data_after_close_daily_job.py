@@ -35,7 +35,7 @@ def save_after_close_stock_blocktrade_data(date):
 
         mdb.insert_db_from_df(data, table_name, cols_type, False, "`date`,`code`")
     except Exception as e:
-        logging.error(f"basic_data_after_close_daily_job.save_stock_blocktrade_data处理异常：{e}")
+        logging.error(f"basic_data_after_close_daily_job.save_stock_blocktrade_data处理异常", exc_info=True)
 
 # 每日尾盘抢筹
 def save_after_close_stock_chip_race_end_data(date):
@@ -55,7 +55,7 @@ def save_after_close_stock_chip_race_end_data(date):
 
         mdb.insert_db_from_df(data, table_name, cols_type, False, "`date`,`code`")
     except Exception as e:
-        logging.error(f"basic_data_after_close_daily_job.save_after_close_stock_chip_race_end_data：{e}")
+        logging.error(f"basic_data_after_close_daily_job.save_after_close_stock_chip_race_end_data", exc_info=True)
 
 def main():
     runt.run_with_args(save_after_close_stock_blocktrade_data)
