@@ -19,6 +19,12 @@ if not os.path.exists(log_path):
     os.makedirs(log_path)
 logging.basicConfig(format='%(asctime)s %(message)s', filename=os.path.join(log_path, 'stock_execute_job.log'))
 logging.getLogger().setLevel(logging.INFO)
+# 也加载新日志系统（文件名区分 + 格式化）
+try:
+    from instock.lib.log_config import setup_logging
+    setup_logging('execute')
+except Exception:
+    pass  # 兼容旧环境
 import init_job as bj
 import fetch_data_job as fdj
 import basic_data_daily_job as hdj
@@ -52,12 +58,12 @@ def main():
     try:
         hdj.main()   # 股票/ETF实时行情入库（从 stock_data 单例读取）
     except Exception as e:
-        logging.error(f"execute_daily_job basic_data_daily异常：{e}")
+        logging.error(f"execute_daily_job basic_data_daily异常", exc_info=True)
 
     try:
         sddj.main()  # 综合选股数据入库（需要API获取选股器数据）
     except Exception as e:
-        logging.error(f"execute_daily_job selection_data异常：{e}")
+        logging.error(f"execute_daily_job selection_data异常", exc_info=True)
 
     # ================================================================
     # Phase 3: 扩展数据获取与入库（独立API：资金流向、龙虎榜等）
@@ -65,12 +71,12 @@ def main():
     try:
         hdtj.main()  # 资金流向、龙虎榜、筹码等（I/O密集，内存占用低）
     except Exception as e:
-        logging.error(f"execute_daily_job basic_data_other异常：{e}")
+        logging.error(f"execute_daily_job basic_data_other异常", exc_info=True)
 
     try:
         gptj.main()  # GPT综合选股（纯DB读取+筛选，无API调用）
     except Exception as e:
-        logging.error(f"execute_daily_job gpt_value异常：{e}")
+        logging.error(f"execute_daily_job gpt_value异常", exc_info=True)
 
     # ================================================================
     # Phase 4: 数据分析（流式处理 — 低内存模式）
@@ -81,7 +87,7 @@ def main():
     try:
         saj.main()   # 流式分析：指标计算 + K线形态识别 + 策略选股（单次遍历）
     except Exception as e:
-        logging.error(f"execute_daily_job streaming_analysis异常：{e}")
+        logging.error(f"execute_daily_job streaming_analysis异常", exc_info=True)
 
     # ================================================================
     # Phase 5: 回测与收尾
@@ -98,12 +104,12 @@ def main():
     try:
         bdj.main()   # 策略回测（重新加载stock_hist_data，但此时缓存已热，无API调用）
     except Exception as e:
-        logging.error(f"execute_daily_job backtest异常：{e}")
+        logging.error(f"execute_daily_job backtest异常", exc_info=True)
 
     try:
         acdj.main()  # 闭盘后数据（大宗交易等，需要API）
     except Exception as e:
-        logging.error(f"execute_daily_job after_close异常：{e}")
+        logging.error(f"execute_daily_job after_close异常", exc_info=True)
 
     logging.info("######## 完成任务, 使用时间: %s 秒 #######" % (time.time() - start))
 

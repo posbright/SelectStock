@@ -37,6 +37,11 @@ if not os.path.exists(log_path):
     os.makedirs(log_path)
 logging.basicConfig(format='%(asctime)s %(message)s', filename=os.path.join(log_path, 'stock_execute_job.log'))
 logging.getLogger().setLevel(logging.INFO)
+try:
+    from instock.lib.log_config import setup_logging
+    setup_logging('analysis')
+except Exception:
+    pass
 import gpt_value_data_job as gptj
 import streaming_analysis_job as saj
 import backtest_data_daily_job as bdj
@@ -53,19 +58,19 @@ def main():
     try:
         gptj.main()
     except Exception as e:
-        logging.error(f"数据分析 gpt_value 异常：{e}")
+        logging.error("数据分析 gpt_value 异常", exc_info=True)
 
     # 流式分析：指标计算 + K线形态识别 + 策略选股（从磁盘缓存读取）
     try:
         saj.main()
     except Exception as e:
-        logging.error(f"数据分析 streaming_analysis 异常：{e}")
+        logging.error("数据分析 streaming_analysis 异常", exc_info=True)
 
     # 策略回测（从磁盘缓存按需读取）
     try:
         bdj.main()
     except Exception as e:
-        logging.error(f"数据分析 backtest 异常：{e}")
+        logging.error("数据分析 backtest 异常", exc_info=True)
 
     # 释放可能加载的单例
     try:

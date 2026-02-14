@@ -40,6 +40,11 @@ if not os.path.exists(log_path):
     os.makedirs(log_path)
 logging.basicConfig(format='%(asctime)s %(message)s', filename=os.path.join(log_path, 'stock_execute_job.log'))
 logging.getLogger().setLevel(logging.INFO)
+try:
+    from instock.lib.log_config import setup_logging
+    setup_logging('fetch')
+except Exception:
+    pass
 import init_job as bj
 import fetch_data_job as fdj
 import basic_data_daily_job as hdj
@@ -63,24 +68,24 @@ def main():
     try:
         hdj.main()
     except Exception as e:
-        logging.error(f"数据获取 basic_data_daily 异常：{e}")
+        logging.error(f"数据获取 basic_data_daily 异常", exc_info=True)
 
     try:
         sddj.main()
     except Exception as e:
-        logging.error(f"数据获取 selection_data 异常：{e}")
+        logging.error(f"数据获取 selection_data 异常", exc_info=True)
 
     # Phase 3: 扩展数据
     try:
         hdtj.main()
     except Exception as e:
-        logging.error(f"数据获取 basic_data_other 异常：{e}")
+        logging.error(f"数据获取 basic_data_other 异常", exc_info=True)
 
     # Phase 5 (收盘后数据): 大宗交易等
     try:
         acdj.main()
     except Exception as e:
-        logging.error(f"数据获取 after_close 异常：{e}")
+        logging.error(f"数据获取 after_close 异常", exc_info=True)
 
     # 释放单例
     try:
