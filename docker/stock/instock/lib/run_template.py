@@ -5,6 +5,7 @@
 import logging
 import datetime
 import concurrent.futures
+import os
 import sys
 import time
 import instock.lib.trade_time as trd
@@ -15,6 +16,20 @@ __date__ = '2026/02/14'
 
 # 通用函数，获得日期参数，支持批量作业。
 def run_with_args(run_fun, *args):
+    # 单独执行时自动初始化日志（通过父脚本调用时已有handler，不会重复）
+    if not logging.getLogger().handlers:
+        try:
+            from instock.lib.log_config import setup_logging
+            # 从调用脚本文件名推导日志名: strategy_data_daily_job → strategy
+            import inspect
+            caller = inspect.stack()
+            caller_file = caller[-1].filename if len(caller) > 1 else ''
+            base = os.path.basename(caller_file).replace('.py', '')
+            log_name = base.replace('_daily_job', '').replace('_data', '').replace('_job', '') or 'job'
+            setup_logging(log_name)
+        except Exception:
+            logging.basicConfig(format='%(asctime)s %(message)s', level=logging.INFO)
+
     if len(sys.argv) == 3:
         # 区间作业 python xxx.py 2023-03-01 2023-03-21
         tmp_year, tmp_month, tmp_day = sys.argv[1].split("-")
