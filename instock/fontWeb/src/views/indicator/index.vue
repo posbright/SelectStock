@@ -45,12 +45,12 @@ const loadKlineData = async () => {
       date: date.value,
       period: currentPeriod.value,
       name: stockName.value || '',
-    })
-    if (res.data?.error) {
-      ElMessage.warning(res.data.error)
+    }) as any
+    if (res?.error) {
+      ElMessage.warning(res.error)
       klineData.value = null
     } else {
-      klineData.value = res.data
+      klineData.value = res
     }
   } catch (e: any) {
     ElMessage.error('K线数据加载失败')
