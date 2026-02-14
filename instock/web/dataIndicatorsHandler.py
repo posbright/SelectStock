@@ -8,8 +8,8 @@ import instock.core.stockfetch as stf
 import instock.core.kline.visualization as vis
 import instock.web.base as webBase
 
-__author__ = 'myh '
-__date__ = '2023/3/10 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 
 # 获得页面数据。

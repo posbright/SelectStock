@@ -6,8 +6,8 @@ from collections import defaultdict
 from queue import Queue, Empty
 from threading import Thread
 
-__author__ = 'myh '
-__date__ = '2023/4/10 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 
 class Event:

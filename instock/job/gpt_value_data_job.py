@@ -21,7 +21,7 @@ import instock.lib.database as mdb
 from instock.core.strategy.gpt_value_strategy import filter_gpt_value_stocks
 
 __author__ = 'InStock'
-__date__ = '2026/02/09'
+__date__ = '2026/02/14'
 
 
 def prepare(date):

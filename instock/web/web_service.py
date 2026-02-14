@@ -30,8 +30,8 @@ import instock.web.strategyParamsHandler as strategyParamsHandler
 import instock.web.backtestHandler as backtestHandler
 import instock.web.base as webBase
 
-__author__ = 'myh '
-__date__ = '2023/3/10 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 
 class Application(tornado.web.Application):

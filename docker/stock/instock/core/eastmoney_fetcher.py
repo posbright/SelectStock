@@ -9,8 +9,8 @@ import time
 import random
 from instock.core.singleton_proxy import proxys
 
-__author__ = 'myh '
-__date__ = '2025/12/31 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 class eastmoney_fetcher:
     """

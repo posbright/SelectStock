@@ -9,8 +9,8 @@ import sys
 import time
 import instock.lib.trade_time as trd
 
-__author__ = 'myh '
-__date__ = '2023/3/10 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 
 # 通用函数，获得日期参数，支持批量作业。

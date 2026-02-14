@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from instock.core.singleton_proxy import proxys
 
 __author__ = 'InStock'
-__date__ = '2026/1/30'
+__date__ = '2026/02/14'
 
 
 def stock_individual_fund_flow_rank_sina(indicator: str = "5日") -> pd.DataFrame:

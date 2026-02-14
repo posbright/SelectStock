@@ -22,7 +22,7 @@ import instock.lib.trade_time as trd
 import instock.lib.database as mdb
 
 __author__ = 'InStock'
-__date__ = '2026/02/13'
+__date__ = '2026/02/14'
 
 
 # 可选回测周期

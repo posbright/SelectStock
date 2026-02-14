@@ -5,8 +5,8 @@ import datetime
 import logging
 from instock.core.singleton_trade_date import stock_trade_date
 
-__author__ = 'myh '
-__date__ = '2023/4/10 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 
 def is_trade_date(date=None):

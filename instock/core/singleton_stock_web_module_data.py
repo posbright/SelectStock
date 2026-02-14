@@ -5,8 +5,8 @@ import instock.core.tablestructure as tbs
 from instock.lib.singleton_type import singleton_type
 import instock.core.web_module_data as wmd
 
-__author__ = 'myh '
-__date__ = '2023/3/10 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 
 class stock_web_module_data(metaclass=singleton_type):

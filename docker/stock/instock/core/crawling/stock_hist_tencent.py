@@ -25,7 +25,7 @@ import datetime
 import logging
 
 __author__ = 'InStock'
-__date__ = '2026/2/10'
+__date__ = '2026/02/14'
 
 # 请求配置
 HEADERS = {

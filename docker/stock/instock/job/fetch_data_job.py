@@ -32,7 +32,7 @@ import instock.core.stockfetch as stf
 from instock.core.singleton_stock import stock_data
 
 __author__ = 'InStock'
-__date__ = '2026/2/10'
+__date__ = '2026/02/14'
 
 
 def fetch_all_data(date):

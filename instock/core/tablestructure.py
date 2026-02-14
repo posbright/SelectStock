@@ -16,8 +16,8 @@ from instock.core.strategy import keep_increasing
 from instock.core.strategy import high_tight_flag
 from instock.core.strategy.technical import value_invest_strategies
 
-__author__ = 'myh '
-__date__ = '2023/3/10 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 RATE_FIELDS_COUNT = 100  # N日收益率字段数目，即N值
 _COLLATE = "utf8mb4_general_ci"

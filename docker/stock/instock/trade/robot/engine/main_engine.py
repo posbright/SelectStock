@@ -15,8 +15,8 @@ from instock.trade.robot.engine.event_engine import EventEngine
 from instock.trade.robot.engine.clock_engine import ClockEngine
 from instock.trade.robot.infrastructure.default_handler import DefaultLogHandler
 
-__author__ = 'myh '
-__date__ = '2023/4/10 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 
 class MainEngine:

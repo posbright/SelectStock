@@ -10,8 +10,8 @@ import time
 import instock.lib.trade_time as etime
 from instock.trade.robot.engine.event_engine import Event
 
-__author__ = 'myh '
-__date__ = '2023/4/10 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 
 class Clock:

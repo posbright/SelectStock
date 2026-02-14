@@ -5,8 +5,8 @@ import pandas as pd
 import instock.core.tablestructure as tbs
 from instock.core.eastmoney_fetcher import eastmoney_fetcher
 
-__author__ = 'myh '
-__date__ = '2025/12/31 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 # 创建全局实例，供所有函数使用
 fetcher = eastmoney_fetcher()

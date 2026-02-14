@@ -12,7 +12,7 @@ import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 __author__ = 'InStock'
-__date__ = '2026/1/30'
+__date__ = '2026/02/14'
 
 
 def _get_stock_codes():

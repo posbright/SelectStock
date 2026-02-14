@@ -18,8 +18,8 @@ import threading
 import logging
 from collections import OrderedDict
 
-__author__ = 'auto'
-__date__ = '2026/2/10'
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 logger = logging.getLogger(__name__)
 

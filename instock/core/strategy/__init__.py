@@ -24,8 +24,8 @@
     result = strategy.check(code_name, data, date)
 """
 
-__author__ = 'myh '
-__date__ = '2023/3/10 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 # 导入基类
 from .base import (

@@ -24,7 +24,7 @@ from .fundamental_filter import (
 )
 
 __author__ = 'InStock'
-__date__ = '2026/02/06'
+__date__ = '2026/02/14'
 
 
 @register_strategy

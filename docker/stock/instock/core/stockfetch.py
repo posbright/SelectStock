@@ -31,7 +31,7 @@ import instock.core.crawling.stock_hist_tencent as sht  # 腾讯财经历史K线
 import time
 import random
 
-__author__ = 'myh '
+__author__ = 'InStock'
 
 # 数据源重试配置（支持环境变量覆盖）
 DATA_SOURCE_MAX_RETRIES = int(os.environ.get('DATA_SOURCE_MAX_RETRIES', 2))  # 单个数据源最大重试次数（失败后优先换源）
@@ -57,7 +57,7 @@ def _retry_sleep(retry_count, base_interval=None):
     logging.info(f"等待{delay:.0f}秒后重试...")
     time.sleep(delay)
 
-__date__ = '2023/3/10 '
+__date__ = '2026/02/14'
 
 # 设置基础目录，每次加载使用。
 cpath_current = os.path.dirname(os.path.dirname(__file__))

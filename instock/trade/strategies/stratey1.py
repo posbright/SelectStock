@@ -7,8 +7,8 @@ from dateutil import tz
 from instock.trade.robot.infrastructure.default_handler import DefaultLogHandler
 from instock.trade.robot.infrastructure.strategy_template import StrategyTemplate
 
-__author__ = 'myh '
-__date__ = '2023/4/10 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 
 class Strategy(StrategyTemplate):

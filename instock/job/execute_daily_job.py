@@ -35,8 +35,8 @@ import backtest_data_daily_job as bdj
 import selection_data_daily_job as sddj
 import gpt_value_data_job as gptj
 
-__author__ = 'myh '
-__date__ = '2023/3/10 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 
 def main():

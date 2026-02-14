@@ -9,8 +9,8 @@ from sqlalchemy.types import NVARCHAR
 from sqlalchemy import inspect
 from urllib.parse import quote_plus
 
-__author__ = 'myh '
-__date__ = '2023/3/10 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 db_host = "115.29.213.22"  # 数据库服务主机
 db_user = "root"  # 数据库访问用户

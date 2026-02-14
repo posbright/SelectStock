@@ -15,8 +15,8 @@ import os
 import time
 import pymysql
 
-__author__ = 'myh '
-__date__ = '2023/3/10 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 try:
 

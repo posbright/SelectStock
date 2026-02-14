@@ -5,8 +5,8 @@ import instock.core.tablestructure as tbs
 from instock.lib.singleton_type import singleton_type
 import instock.core.web_module_data as wmd
 
-__author__ = 'myh '
-__date__ = '2023/3/10 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 
 class stock_web_module_data(metaclass=singleton_type):
@@ -230,6 +230,41 @@ class stock_web_module_data(metaclass=singleton_type):
                     order_by=" `cdatetime` DESC"
                 )
             )
+
+        # 添加GPT综合选股（基本面策略，独立于K线策略框架）
+        _gpt = tbs.TABLE_CN_STOCK_STRATEGY_GPT_VALUE
+        self.data_list.append(
+            wmd.web_module_data(
+                mode="query",
+                type="股票策略数据",
+                ico="fa fa-check-square-o",
+                name=_gpt['cn'],
+                table_name=_gpt['name'],
+                columns=tuple(_gpt['columns']),
+                column_names=tbs.get_field_cns(_gpt['columns']),
+                primary_key=[],
+                is_realtime=False,
+                order_columns=f"(SELECT `datetime` FROM `{tbs.TABLE_CN_STOCK_ATTENTION['name']}` WHERE `code`=`{_gpt['name']}`.`code`) AS `cdatetime`",
+                order_by=" `cdatetime` DESC"
+            )
+        )
+
+        # 添加回测汇总表
+        self.data_list.append(
+            wmd.web_module_data(
+                mode="query",
+                type="选股验证",
+                ico="fa fa-line-chart",
+                name=tbs.TABLE_CN_STOCK_BACKTEST['cn'],
+                table_name=tbs.TABLE_CN_STOCK_BACKTEST['name'],
+                columns=tuple(tbs.TABLE_CN_STOCK_BACKTEST['columns']),
+                column_names=tbs.get_field_cns(tbs.TABLE_CN_STOCK_BACKTEST['columns']),
+                primary_key=[],
+                is_realtime=False,
+                order_by=" `date` DESC, `success_rate` DESC"
+            )
+        )
+
         for tmp in self.data_list:
             _data[tmp.table_name] = tmp
         self.data = _data

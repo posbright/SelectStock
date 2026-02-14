@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 __author__ = 'InStock'
-__date__ = '2026/02/06'
+__date__ = '2026/02/14'
 
 
 class FilterLevel(Enum):

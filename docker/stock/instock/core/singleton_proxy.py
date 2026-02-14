@@ -12,8 +12,8 @@ cpath = os.path.abspath(os.path.join(cpath_current, os.pardir))
 sys.path.append(cpath)
 proxy_filename = os.path.join(cpath_current, 'config', 'proxy.txt')
 
-__author__ = 'myh '
-__date__ = '2025/1/6 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 
 # 读取代理

@@ -16,7 +16,7 @@ from instock.lib.query_cache import filter_result_cache
 from instock.web.strategy_params_config import TECHNICAL_STRATEGY_PARAMS
 
 __author__ = 'InStock'
-__date__ = '2026/02/10'
+__date__ = '2026/02/14'
 
 
 # ========== 默认策略参数定义 ==========

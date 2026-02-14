@@ -10,8 +10,8 @@ import pandas as pd
 import requests
 from instock.core.singleton_proxy import proxys
 
-__author__ = 'myh '
-__date__ = '2025/2/26 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 def stock_chip_race_open(date: str = "") -> pd.DataFrame:
     """

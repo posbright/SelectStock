@@ -12,8 +12,8 @@ import re
 import numpy as np
 from instock.core.singleton_proxy import proxys
 
-__author__ = 'myh '
-__date__ = '2025/5/9 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 def stock_limitup_reason(date: str = "2025-02-27") -> pd.DataFrame:
     """

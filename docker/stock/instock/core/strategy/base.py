@@ -13,8 +13,8 @@ import talib as tl
 import pandas as pd
 from datetime import datetime
 
-__author__ = 'myh '
-__date__ = '2023/3/10 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 
 class BaseStrategy(ABC):

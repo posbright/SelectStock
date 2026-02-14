@@ -43,7 +43,7 @@ from instock.core.singleton_stock import stock_data
 from instock.core.stockfetch import fetch_stock_top_entity_data
 
 __author__ = 'InStock'
-__date__ = '2025/7/10'
+__date__ = '2026/02/14'
 
 # 批量写入大小：每处理 BATCH_SIZE 只股票后统一写入数据库
 BATCH_SIZE = 200

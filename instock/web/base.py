@@ -5,8 +5,8 @@ from abc import ABC
 import tornado.web
 import instock.core.singleton_stock_web_module_data as sswmd
 
-__author__ = 'myh '
-__date__ = '2023/3/10 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 
 # 基础handler，主要负责检查mysql的数据库链接，并支持CORS跨域。

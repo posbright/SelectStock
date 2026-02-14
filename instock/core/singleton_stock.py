@@ -8,8 +8,8 @@ import instock.core.tablestructure as tbs
 import instock.lib.trade_time as trd
 from instock.lib.singleton_type import singleton_type
 
-__author__ = 'myh '
-__date__ = '2023/3/10 '
+__author__ = 'InStock'
+__date__ = '2026/02/14'
 
 # 历史数据默认年数（与 stockfetch.py 保持一致，支持环境变量覆盖）
 _DEFAULT_HIST_YEARS = stf.HIST_DATA_DEFAULT_YEARS
