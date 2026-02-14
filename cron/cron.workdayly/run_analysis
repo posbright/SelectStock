@@ -1,0 +1,28 @@
+#!/bin/bash
+
+# 数据分析任务（独立）
+# 只执行本地分析计算（指标/K线/策略/回测），不调用外部API
+# 与 run_fetch 配合使用，实现获取与分析解耦
+# 依赖 fetch 已更新的缓存，但即使缓存未更新也能用历史数据运行
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+PROJECT_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
+
+export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH
+export PYTHONIOENCODING=utf-8
+export LANG=zh_CN.UTF-8
+export PYTHONPATH=$PROJECT_ROOT
+export LC_CTYPE=zh_CN.UTF-8
+
+LOG_DIR=$PROJECT_ROOT/instock/log
+mkdir -p $LOG_DIR
+LOG_FILE=$LOG_DIR/workdayly.log
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始执行 analysis_daily_job（数据分析）" >> $LOG_FILE
+python3 $PROJECT_ROOT/instock/job/analysis_daily_job.py >> $LOG_FILE 2>&1
+EXIT_CODE=$?
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 数据分析完成 (成功)" >> $LOG_FILE
+else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 数据分析完成 (失败, 退出码: $EXIT_CODE)" >> $LOG_FILE
+fi

@@ -1,0 +1,27 @@
+#!/bin/bash
+
+# 数据获取任务（独立）
+# 只执行外部API数据获取，不执行分析计算
+# 与 run_analysis 配合使用，实现获取与分析解耦
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+PROJECT_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
+
+export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH
+export PYTHONIOENCODING=utf-8
+export LANG=zh_CN.UTF-8
+export PYTHONPATH=$PROJECT_ROOT
+export LC_CTYPE=zh_CN.UTF-8
+
+LOG_DIR=$PROJECT_ROOT/instock/log
+mkdir -p $LOG_DIR
+LOG_FILE=$LOG_DIR/workdayly.log
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始执行 fetch_daily_job（数据获取）" >> $LOG_FILE
+python3 $PROJECT_ROOT/instock/job/fetch_daily_job.py >> $LOG_FILE 2>&1
+EXIT_CODE=$?
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 数据获取完成 (成功)" >> $LOG_FILE
+else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 数据获取完成 (失败, 退出码: $EXIT_CODE)" >> $LOG_FILE
+fi
