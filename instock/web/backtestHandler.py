@@ -54,6 +54,11 @@ STRATEGY_LIST.append({
     'cn': '指标卖出信号',
     'type': 'indicator'
 })
+STRATEGY_LIST.append({
+    'name': tbs.TABLE_CN_STOCK_STRATEGY_GPT_VALUE['name'],
+    'cn': tbs.TABLE_CN_STOCK_STRATEGY_GPT_VALUE['cn'],
+    'type': 'strategy'
+})
 
 
 class GetBacktestConfigHandler(webBase.BaseHandler, ABC):
@@ -267,6 +272,9 @@ def _run_batch_backtest(strategy_name, period, limit=30):
         elif strategy_name == 'indicators_sell':
             table_name = tbs.TABLE_CN_STOCK_INDICATORS_SELL['name']
             strategy_cn = '指标卖出信号'
+        elif strategy_name == tbs.TABLE_CN_STOCK_STRATEGY_GPT_VALUE['name']:
+            table_name = tbs.TABLE_CN_STOCK_STRATEGY_GPT_VALUE['name']
+            strategy_cn = tbs.TABLE_CN_STOCK_STRATEGY_GPT_VALUE['cn']
         else:
             return {"error": f"未知策略: {strategy_name}"}
     
