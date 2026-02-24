@@ -128,8 +128,8 @@ def summarize_backtest():
     """
     汇总各策略表的回测结果到 cn_stock_backtest 表
     
-    从每个策略表中读取已完成回测的记录（rate_1 不为 NULL），
-    计算平均收益率和成功率，写入汇总表。
+    从每个策略表中读取选股记录，统计选股数量。
+    如果有回测收益数据(rate_1不为NULL)，同时计算平均收益率和成功率。
     """
     try:
         tables = [tbs.TABLE_CN_STOCK_INDICATORS_BUY, tbs.TABLE_CN_STOCK_INDICATORS_SELL]
@@ -150,17 +150,18 @@ def summarize_backtest():
                 continue
             
             try:
-                # 只统计有回测数据的记录（rate_1 不为 NULL）
+                # 统计所有选股记录（无论是否有回测数据）
                 sql = f"""SELECT `date`, 
                     COUNT(*) as stock_count,
-                    SUM(CASE WHEN `rate_5` > 0 THEN 1 ELSE 0 END) as success_count,
+                    SUM(CASE WHEN `rate_5` > 0 THEN 1 
+                             WHEN `rate_5` IS NULL THEN NULL
+                             ELSE 0 END) as success_count,
                     ROUND(AVG(`rate_1`), 4) as avg_rate_1,
                     ROUND(AVG(`rate_3`), 4) as avg_rate_3,
                     ROUND(AVG(`rate_5`), 4) as avg_rate_5,
                     ROUND(AVG(`rate_10`), 4) as avg_rate_10,
                     ROUND(AVG(`rate_20`), 4) as avg_rate_20
                     FROM `{table_name}` 
-                    WHERE `rate_1` IS NOT NULL
                     GROUP BY `date`
                     ORDER BY `date` DESC
                     LIMIT 30"""
@@ -171,7 +172,16 @@ def summarize_backtest():
                 
                 # 添加策略名称和成功率
                 data['strategy_name'] = table.get('cn', table_name)
-                data['success_rate'] = (data['success_count'] / data['stock_count'] * 100).round(2)
+                # success_count 可能全为 NULL（未回测），先转数值类型
+                data['success_count'] = pd.to_numeric(data['success_count'], errors='coerce')
+                data['stock_count'] = pd.to_numeric(data['stock_count'], errors='coerce')
+                has_backtest = data['success_count'].notna()
+                if has_backtest.any():
+                    data.loc[has_backtest, 'success_rate'] = (
+                        data.loc[has_backtest, 'success_count'] / data.loc[has_backtest, 'stock_count'] * 100
+                    ).round(2)
+                if (~has_backtest).any():
+                    data.loc[~has_backtest, 'success_rate'] = None
                 
                 # 按 cn_stock_backtest 表的列顺序整理
                 cols = list(tbs.TABLE_CN_STOCK_BACKTEST['columns'].keys())
