@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getStockData, toggleAttention, getTradeDate } from '@/api/stock'
@@ -270,9 +270,21 @@ watch(
   () => {
     currentPage.value = 1
     columnDefs.value = []
+    lastLoadedPath = route.path
     loadData()
   }
 )
+
+// keep-alive 重新激活时，检查路由是否变化并重新加载
+let lastLoadedPath = ''
+onActivated(() => {
+  if (route.path !== lastLoadedPath) {
+    currentPage.value = 1
+    columnDefs.value = []
+    lastLoadedPath = route.path
+    loadData()
+  }
+})
 
 onMounted(async () => {
   // noDateFilter 模式下不设置日期，加载所有日期的数据
@@ -293,6 +305,7 @@ onMounted(async () => {
     // 获取失败时保持客户端日期作为回退
   }
   loadData()
+  lastLoadedPath = route.path
 })
 </script>
 

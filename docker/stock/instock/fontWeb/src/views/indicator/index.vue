@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, onActivated, computed, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import * as echarts from 'echarts'
 import dayjs from 'dayjs'
@@ -200,9 +200,27 @@ const goBacktest = () => {
 
 const handleResize = () => { chartInstance?.resize() }
 
+// 监听路由参数变化，当从别的股票点击进入时重新加载
+watch(
+  () => route.query.code,
+  (newCode, oldCode) => {
+    if (newCode && newCode !== oldCode) {
+      currentPeriod.value = 'daily'
+      loadKlineData()
+    }
+  }
+)
+
 onMounted(() => {
   loadKlineData()
   window.addEventListener('resize', handleResize)
+})
+
+// keep-alive 重新激活时重新加载
+onActivated(() => {
+  loadKlineData()
+  window.addEventListener('resize', handleResize)
+  nextTick(() => { chartInstance?.resize() })
 })
 
 onUnmounted(() => {
