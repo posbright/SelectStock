@@ -14,6 +14,7 @@ let chartInstance: echarts.ECharts | null = null
 const code = computed(() => route.query.code as string)
 const date = computed(() => route.query.date as string || dayjs().format('YYYY-MM-DD'))
 const stockName = computed(() => route.query.name as string)
+const strategy = computed(() => route.query.strategy as string || '')
 
 const klineChartRef = ref<HTMLDivElement>()
 const loading = ref(false)
@@ -194,7 +195,11 @@ watch(currentIndicator, () => {
 const goBacktest = () => {
   router.push({
     path: '/backtest/custom',
-    query: { code: code.value, name: stockName.value }
+    query: {
+      code: code.value,
+      name: stockName.value,
+      strategy: strategy.value || undefined
+    }
   })
 }
 

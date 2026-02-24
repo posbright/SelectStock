@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onActivated } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getBacktestConfig, runBacktest, runBatchBacktest } from '@/api/stock'
+
+const route = useRoute()
 
 // 配置数据
 const periods = ref<any[]>([])
@@ -32,7 +35,26 @@ onMounted(async () => {
   } catch {
     ElMessage.error('加载回测配置失败')
   }
+  // 从路由参数回填表单
+  _applyQueryParams()
 })
+
+// keep-alive 重新激活时回填
+onActivated(() => {
+  _applyQueryParams()
+})
+
+// 从 route.query 回填表单字段
+const _applyQueryParams = () => {
+  const q = route.query
+  if (q.code) {
+    backtestForm.value.code = q.code as string
+    backtestForm.value.mode = 'single'
+  }
+  if (q.strategy) {
+    backtestForm.value.strategy = q.strategy as string
+  }
+}
 
 // 执行回测
 const handleRun = async () => {

@@ -123,7 +123,8 @@ const viewIndicators = (row: any) => {
     query: {
       code: row.code,
       date: row.date || selectedDate.value,
-      name: row.name
+      name: row.name,
+      strategy: tableName.value
     }
   })
 }
