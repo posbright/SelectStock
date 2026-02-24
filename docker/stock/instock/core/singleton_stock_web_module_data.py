@@ -245,7 +245,7 @@ class stock_web_module_data(metaclass=singleton_type):
                 primary_key=[],
                 is_realtime=False,
                 order_columns=f"(SELECT `datetime` FROM `{tbs.TABLE_CN_STOCK_ATTENTION['name']}` WHERE `code`=`{_gpt['name']}`.`code`) AS `cdatetime`",
-                order_by=" `cdatetime` DESC"
+                order_by=" `gpt_score` DESC, `cdatetime` DESC"
             )
         )
 

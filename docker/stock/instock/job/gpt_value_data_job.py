@@ -18,7 +18,7 @@ sys.path.append(cpath)
 import instock.lib.run_template as runt
 import instock.core.tablestructure as tbs
 import instock.lib.database as mdb
-from instock.core.strategy.gpt_value_strategy import filter_gpt_value_stocks
+from instock.core.strategy.gpt_value_strategy import filter_gpt_value_stocks, GPT_INDICATOR_FIELDS
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
@@ -58,12 +58,20 @@ def prepare(date):
         
         logging.info(f"GPT综合选股：{date_str} 筛选出 {len(filtered)} 只股票")
         
-        # 准备结果数据（只保留基础字段）
-        result_columns = ['date', 'code', 'name']
-        result_data = filtered[result_columns].copy()
+        # 准备结果数据（基础字段 + 评分 + 指标值）
+        result_columns = ['date', 'code', 'name'] + GPT_INDICATOR_FIELDS
+        # 只保留存在的列
+        available_cols = [c for c in result_columns if c in filtered.columns]
+        result_data = filtered[available_cols].copy()
         
-        # 删除老数据
+        # 按综合评分降序排序
+        if 'gpt_score' in result_data.columns:
+            result_data = result_data.sort_values('gpt_score', ascending=False, na_position='last')
+        
+        # 删除老数据，检查表 schema
         if mdb.checkTableIsExist(table_name):
+            # 检查表列数是否匹配（旧表可能缺少 gpt_score 等列）
+            _check_and_rebuild_table(table_name)
             del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
             mdb.executeSql(del_sql, (date_str,))
             cols_type = None
@@ -82,6 +90,27 @@ def prepare(date):
         
     except Exception as e:
         logging.error(f"gpt_value_data_job.prepare 处理异常", exc_info=True)
+
+
+def _check_and_rebuild_table(table_name):
+    """检查表结构，缺少列时删除重建"""
+    try:
+        import pymysql
+        expected_cols = set(tbs.TABLE_CN_STOCK_STRATEGY_GPT_VALUE['columns'].keys())
+        with pymysql.connect(**mdb.MYSQL_CONN_DBAPI) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COLUMN_NAME FROM information_schema.columns "
+                    "WHERE table_schema=%s AND table_name=%s",
+                    (mdb.db_database, table_name)
+                )
+                db_cols = set(row[0] for row in cur.fetchall())
+        missing = expected_cols - db_cols
+        if missing:
+            logging.info(f"GPT选股表缺少 {len(missing)} 列（如 {list(missing)[:5]}），删除重建")
+            mdb.executeSql(f"DROP TABLE `{table_name}`")
+    except Exception as e:
+        logging.warning(f"检查GPT选股表结构异常：{e}")
 
 
 def main():

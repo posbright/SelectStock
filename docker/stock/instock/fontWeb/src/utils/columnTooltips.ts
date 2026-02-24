@@ -196,6 +196,25 @@ export const strategyDescriptions: Record<string, string> = {
   cn_stock_strategy_trend_pullback: '趋势回调：上升趋势中的短期回调买入机会',
   cn_stock_strategy_oversold_rebound: '超跌反弹：大幅下跌后的超卖反弹机会',
   cn_stock_strategy_breakout_confirm: '突破确认：关键阻力位突破后的确认买入',
+  cn_stock_strategy_gpt_value: 'GPT综合选股：基于财务安全、盈利能力、成长质量、估值约束四层过滤，综合评分越高越好',
+}
+
+// GPT综合选股指标列说明（含筛选阈值）
+export const gptValueColumnDescriptions: Record<string, string> = {
+  gpt_score: '综合评分(0~100)：基于财务安全(20分)+盈利能力(30分)+成长质量(30分)+估值优势(20分)',
+  debt_asset_ratio: '资产负债率(%)：筛选阈值 < 60%。越低财务越安全',
+  per_netcash_operate: '每股经营现金流(元)：筛选阈值 > 0。正现金流表示经营健康',
+  current_ratio: '流动比率：筛选阈值 ≥ 1.0。流动资产/流动负债，衡量短期偿债能力',
+  speed_ratio: '速动比率：筛选阈值 ≥ 0.7。(流动资产-存货)/流动负债',
+  roe_weight: 'ROE加权(%)：筛选阈值 ≥ 15%。净利润/平均净资产，核心盈利指标',
+  sale_gpr: '毛利率(%)：筛选阈值 ≥ 25%。(营收-成本)/营收',
+  sale_npr: '净利率(%)：筛选阈值 ≥ 8%。净利润/营收',
+  jroa: 'ROA(%)：筛选阈值 ≥ 4%。净利润/总资产',
+  income_growthrate_3y: '营收3年CAGR(%)：筛选阈值 > 8%。近3年营收复合增长率',
+  netprofit_growthrate_3y: '净利润3年CAGR(%)：筛选阈值 > 8%。近3年净利润复合增长率',
+  deduct_netprofit_growthrate: '扣非净利润增长率(%)：筛选阈值 > 0%。扣除非经常性损益后的增长',
+  pe9: '市盈率TTM：筛选阈值 0 < PE ≤ 50。越低估值越有吸引力',
+  pbnewmrq: '市净率MRQ：筛选阈值 ≤ 10。股价/每股净资产',
 }
 
 // 通用股票数据列说明（综合选股、每日行情等通用列）
@@ -258,8 +277,9 @@ export function getColumnTooltip(fieldName: string, tableName: string): string {
     return ''
   }
   // 策略表 — 列只有 date/code/name/rate_N，显示回测列说明
+  // GPT综合选股有额外的指标列
   if (tableName.includes('strategy')) {
-    return commonColumnDescriptions[fieldName] || ''
+    return gptValueColumnDescriptions[fieldName] || commonColumnDescriptions[fieldName] || ''
   }
   // 通用列（综合选股、股票行情、资金流向等）
   return commonColumnDescriptions[fieldName] || indicatorDescriptions[fieldName] || ''

@@ -439,9 +439,27 @@ TABLE_CN_STOCK_STRATEGIES = [
 ]
 
 # GPT综合选股（基本面策略，不走K线策略框架，有独立的 gpt_value_data_job）
+_gpt_value_columns = TABLE_CN_STOCK_FOREIGN_KEY['columns'].copy()
+_gpt_value_columns.update({
+    'gpt_score': {'type': FLOAT, 'cn': '综合评分', 'size': 70},
+    'debt_asset_ratio': {'type': FLOAT, 'cn': '资产负债率', 'size': 70},
+    'per_netcash_operate': {'type': FLOAT, 'cn': '每股经营现金流', 'size': 70},
+    'current_ratio': {'type': FLOAT, 'cn': '流动比率', 'size': 70},
+    'speed_ratio': {'type': FLOAT, 'cn': '速动比率', 'size': 70},
+    'roe_weight': {'type': FLOAT, 'cn': 'ROE', 'size': 70},
+    'sale_gpr': {'type': FLOAT, 'cn': '毛利率', 'size': 70},
+    'sale_npr': {'type': FLOAT, 'cn': '净利率', 'size': 70},
+    'jroa': {'type': FLOAT, 'cn': 'ROA', 'size': 70},
+    'income_growthrate_3y': {'type': FLOAT, 'cn': '营收3年CAGR', 'size': 70},
+    'netprofit_growthrate_3y': {'type': FLOAT, 'cn': '净利润3年CAGR', 'size': 70},
+    'deduct_netprofit_growthrate': {'type': FLOAT, 'cn': '扣非净利润增长率', 'size': 70},
+    'pe9': {'type': FLOAT, 'cn': '市盈率TTM', 'size': 70},
+    'pbnewmrq': {'type': FLOAT, 'cn': '市净率MRQ', 'size': 70},
+})
+_gpt_value_columns.update(TABLE_CN_STOCK_BACKTEST_DATA['columns'])
 TABLE_CN_STOCK_STRATEGY_GPT_VALUE = {
     'name': 'cn_stock_strategy_gpt_value', 'cn': 'GPT综合选股', 'size': 70,
-    'columns': _tmp_columns
+    'columns': _gpt_value_columns
 }
 
 STOCK_KLINE_PATTERN_DATA = {'name': 'cn_stock_pattern_recognitions', 'cn': 'K线形态',

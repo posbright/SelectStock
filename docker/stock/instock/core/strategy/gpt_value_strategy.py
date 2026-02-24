@@ -176,4 +176,134 @@ def filter_gpt_value_stocks(selection_data):
     # 加载一次参数，供所有行复用
     params = _load_params()
     mask = selection_data.apply(lambda row: check_gpt_value_from_selection(row, params), axis=1)
-    return selection_data[mask].copy()
+    filtered = selection_data[mask].copy()
+    
+    if len(filtered) == 0:
+        return filtered
+    
+    # 计算综合评分和提取指标值
+    scores_and_indicators = filtered.apply(
+        lambda row: compute_gpt_score(row, params), axis=1, result_type='expand'
+    )
+    for col in scores_and_indicators.columns:
+        filtered[col] = scores_and_indicators[col].values
+    
+    return filtered
+
+
+# GPT综合选股使用的指标字段列表（与 _DEFAULT_PARAMS 中的筛选条件对应）
+GPT_INDICATOR_FIELDS = [
+    'gpt_score',           # 综合评分
+    'debt_asset_ratio',    # 资产负债率
+    'per_netcash_operate', # 每股经营现金流
+    'current_ratio',       # 流动比率
+    'speed_ratio',         # 速动比率
+    'roe_weight',          # ROE
+    'sale_gpr',            # 毛利率
+    'sale_npr',            # 净利率
+    'jroa',                # ROA
+    'income_growthrate_3y',       # 营收3年CAGR
+    'netprofit_growthrate_3y',    # 净利润3年CAGR
+    'deduct_netprofit_growthrate', # 扣非净利润增长率
+    'pe9',                 # 市盈率TTM
+    'pbnewmrq',            # 市净率MRQ
+]
+
+
+def compute_gpt_score(stock_row, params=None):
+    """
+    计算GPT综合选股评分（0~100分）
+
+    评分逻辑：各指标按超过阈值的程度加分，满分100。
+    - 财务安全（20分）：资产负债率越低、现金流越高、流动/速动比率越高越好
+    - 盈利能力（30分）：ROE、毛利率、净利率、ROA 越高越好
+    - 成长质量（30分）：营收/利润增速越高越好
+    - 估值优势（20分）：PE/PB 越低越好
+
+    Args:
+        stock_row: pd.Series
+        params: dict
+
+    Returns:
+        dict: {'gpt_score': float, 指标字段: 实际值, ...}
+    """
+    if params is None:
+        params = _load_params()
+
+    import math
+
+    def _val(key):
+        v = stock_row.get(key, None)
+        if v is not None and not pd.isna(v) and math.isfinite(float(v)):
+            return float(v)
+        return None
+
+    result = {}
+    for field in GPT_INDICATOR_FIELDS:
+        if field == 'gpt_score':
+            continue
+        result[field] = _val(field)
+
+    score = 0.0
+
+    # --- 财务安全 20分 ---
+    debt = _val('debt_asset_ratio')
+    if debt is not None:
+        # 阈值60, 值越低越好, 0→满分5, 60→0分
+        score += max(0, min(5, 5 * (params['debt_asset_ratio_max'] - debt) / params['debt_asset_ratio_max']))
+
+    cash = _val('per_netcash_operate')
+    if cash is not None and cash > 0:
+        # 现金流>0 即得基础分, 越高加分
+        score += min(5, 2 + cash * 0.5)
+
+    cur_r = _val('current_ratio')
+    if cur_r is not None:
+        score += max(0, min(5, 5 * min(cur_r / 2.0, 1)))
+
+    spd_r = _val('speed_ratio')
+    if spd_r is not None:
+        score += max(0, min(5, 5 * min(spd_r / 1.5, 1)))
+
+    # --- 盈利能力 30分 ---
+    roe = _val('roe_weight')
+    if roe is not None:
+        score += max(0, min(10, 10 * min(roe / 30, 1)))
+
+    gpr = _val('sale_gpr')
+    if gpr is not None:
+        score += max(0, min(8, 8 * min(gpr / 50, 1)))
+
+    npr = _val('sale_npr')
+    if npr is not None:
+        score += max(0, min(7, 7 * min(npr / 20, 1)))
+
+    roa = _val('jroa')
+    if roa is not None:
+        score += max(0, min(5, 5 * min(roa / 10, 1)))
+
+    # --- 成长质量 30分 ---
+    rev_g = _val('income_growthrate_3y')
+    if rev_g is not None:
+        score += max(0, min(10, 10 * min(rev_g / 30, 1)))
+
+    pft_g = _val('netprofit_growthrate_3y')
+    if pft_g is not None:
+        score += max(0, min(10, 10 * min(pft_g / 30, 1)))
+
+    ded_g = _val('deduct_netprofit_growthrate')
+    if ded_g is not None:
+        score += max(0, min(10, 10 * min(ded_g / 30, 1)))
+
+    # --- 估值优势 20分 ---
+    pe = _val('pe9')
+    if pe is not None and pe > 0:
+        # PE 越低越好, 10→满分, 50→0分
+        score += max(0, min(10, 10 * (params['pe_max'] - pe) / params['pe_max']))
+
+    pb = _val('pbnewmrq')
+    if pb is not None and pb > 0:
+        score += max(0, min(10, 10 * (params['pbnewmrq_max'] - pb) / params['pbnewmrq_max']))
+
+    result['gpt_score'] = round(score, 1)
+    return result
