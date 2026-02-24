@@ -417,17 +417,33 @@ def fetch_stock_lhb_data(date, count=12):
         
         # 根据数据源处理列名
         if source == "新浪财经":
-            # 新浪数据需要特殊处理
+            # 新浪数据列较少(序号,股票代码,股票名称,收盘价,对应值,成交量,成交额,指标)
+            # 需要映射到标准表结构并填充缺失列
+            import numpy as np
             data = data.rename(columns={
                 '股票代码': 'code',
                 '股票名称': 'name',
                 '收盘价': 'new_price',
+                '成交额': 'lhb_amount',
+                '成交量': 'sum_buy',
+                '指标': 'reason',
             })
+            # 删除不需要的列
+            for col in ['序号', '对应值']:
+                if col in data.columns:
+                    data.drop(col, axis=1, inplace=True)
+            # 填充标准表结构中缺失的列
+            target_columns = list(tbs.TABLE_CN_STOCK_lHB['columns'])
+            for col in target_columns:
+                if col not in data.columns and col != 'date':
+                    data[col] = np.nan
             if 'date' not in data.columns:
                 if date is None:
                     data.insert(0, 'date', datetime.datetime.now().strftime("%Y-%m-%d"))
                 else:
                     data.insert(0, 'date', date.strftime("%Y-%m-%d"))
+            # 按标准列顺序排列
+            data = data[target_columns]
         else:
             _columns = list(tbs.TABLE_CN_STOCK_lHB['columns'])
             _columns.pop(0)

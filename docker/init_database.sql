@@ -254,12 +254,15 @@ CREATE TABLE IF NOT EXISTS `cn_stock_chip_race_open` (
   `name` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
   `new_price` float DEFAULT NULL,
   `change_rate` float DEFAULT NULL,
+  `pre_close_price` float DEFAULT NULL,
+  `open_price` float DEFAULT NULL,
+  `deal_amount` bigint DEFAULT NULL,
+  `bid_rate` float DEFAULT NULL,
   `bid_trust_amount` bigint DEFAULT NULL,
-  `trust_amount_chg` float DEFAULT NULL,
+  `bid_deal_amount` bigint DEFAULT NULL,
   `bid_ratio` float DEFAULT NULL,
-  `open_turnover` float DEFAULT NULL,
-  `stock_holder_num` bigint DEFAULT NULL,
-  `industry` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `limitup_day` smallint DEFAULT NULL,
+  `limitup_board` smallint DEFAULT NULL,
   PRIMARY KEY (`date`, `code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
@@ -270,12 +273,15 @@ CREATE TABLE IF NOT EXISTS `cn_stock_chip_race_end` (
   `name` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
   `new_price` float DEFAULT NULL,
   `change_rate` float DEFAULT NULL,
+  `pre_close_price` float DEFAULT NULL,
+  `open_price` float DEFAULT NULL,
+  `deal_amount` bigint DEFAULT NULL,
+  `bid_rate` float DEFAULT NULL,
   `bid_trust_amount` bigint DEFAULT NULL,
-  `trust_amount_chg` float DEFAULT NULL,
+  `bid_deal_amount` bigint DEFAULT NULL,
   `bid_ratio` float DEFAULT NULL,
-  `close_turnover` float DEFAULT NULL,
-  `stock_holder_num` bigint DEFAULT NULL,
-  `industry` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `limitup_day` smallint DEFAULT NULL,
+  `limitup_board` smallint DEFAULT NULL,
   PRIMARY KEY (`date`, `code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
@@ -284,16 +290,15 @@ CREATE TABLE IF NOT EXISTS `cn_stock_limitup_reason` (
   `date` date NOT NULL,
   `code` varchar(6) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
   `name` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
-  `reason` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
-  `limitup_times` int DEFAULT NULL,
-  `first_limitup_time` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
-  `last_limitup_time` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
-  `open_times` int DEFAULT NULL,
-  `order_amount` bigint DEFAULT NULL,
+  `title` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `reason` varchar(2000) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `new_price` float DEFAULT NULL,
   `change_rate` float DEFAULT NULL,
+  `ups_downs` float DEFAULT NULL,
   `turnoverrate` float DEFAULT NULL,
-  `free_cap` bigint DEFAULT NULL,
-  `limit_height` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `volume` bigint DEFAULT NULL,
+  `deal_amount` bigint DEFAULT NULL,
+  `dde` bigint DEFAULT NULL,
   PRIMARY KEY (`date`, `code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
@@ -330,14 +335,20 @@ CREATE TABLE IF NOT EXISTS `cn_stock_lhb` (
   `interpret` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
   `new_price` float DEFAULT NULL,
   `change_rate` float DEFAULT NULL,
-  `lhb_net_buy` bigint DEFAULT NULL,
-  `lhb_buy` bigint DEFAULT NULL,
-  `lhb_sell` bigint DEFAULT NULL,
-  `lhb_turnover` float DEFAULT NULL,
-  `net_buy_ratio` float DEFAULT NULL,
-  `deal_amount` bigint DEFAULT NULL,
+  `net_amount_buy` float DEFAULT NULL,
+  `sum_buy` float DEFAULT NULL,
+  `sum_sell` float DEFAULT NULL,
+  `lhb_amount` float DEFAULT NULL,
+  `market_amount` float DEFAULT NULL,
+  `net_amount_rate` float DEFAULT NULL,
+  `sum_rate` float DEFAULT NULL,
   `turnoverrate` float DEFAULT NULL,
   `free_cap` bigint DEFAULT NULL,
+  `reason` varchar(2000) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `ranking_after_1` float DEFAULT NULL,
+  `ranking_after_2` float DEFAULT NULL,
+  `ranking_after_5` float DEFAULT NULL,
+  `ranking_after_10` float DEFAULT NULL,
   PRIMARY KEY (`date`, `code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
@@ -348,13 +359,12 @@ CREATE TABLE IF NOT EXISTS `cn_stock_blocktrade` (
   `name` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
   `new_price` float DEFAULT NULL,
   `change_rate` float DEFAULT NULL,
-  `blocktrade_price` float DEFAULT NULL,
-  `blocktrade_amount` bigint DEFAULT NULL,
-  `blocktrade_volume` bigint DEFAULT NULL,
-  `premium_rate` float DEFAULT NULL,
-  `blocktrade_buyer` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
-  `blocktrade_seller` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
-  `blocktrade_tradenum` int DEFAULT NULL,
+  `average_price` float DEFAULT NULL,
+  `overflow_rate` float DEFAULT NULL,
+  `trade_number` float DEFAULT NULL,
+  `sum_volume` float DEFAULT NULL,
+  `sum_turnover` float DEFAULT NULL,
+  `turnover_market_rate` float DEFAULT NULL,
   PRIMARY KEY (`date`, `code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
@@ -379,85 +389,25 @@ CREATE TABLE IF NOT EXISTS `cn_etf_spot` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- 14. 综合选股表
-CREATE TABLE IF NOT EXISTS `cn_stock_selection` (
-  `date` date NOT NULL,
-  `code` varchar(6) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
-  `name` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
-  `new_price` float DEFAULT NULL,
-  `change_rate` float DEFAULT NULL,
-  `ups_downs` float DEFAULT NULL,
-  `volume` bigint DEFAULT NULL,
-  `deal_amount` bigint DEFAULT NULL,
-  `amplitude` float DEFAULT NULL,
-  `turnoverrate` float DEFAULT NULL,
-  `volume_ratio` float DEFAULT NULL,
-  `strategies` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
-  PRIMARY KEY (`date`, `code`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+-- 注意: 该表列数较多(140+列)，由代码自动创建。
+-- 如需手动创建，请参考 instock/core/tablestructure.py 中 TABLE_CN_STOCK_SELECTION 的定义。
+-- 代码在表不存在时会通过 SQLAlchemy 自动创建正确的表结构。
 
 -- 15. 股票指标表
-CREATE TABLE IF NOT EXISTS `cn_stock_indicators` (
-  `date` date NOT NULL,
-  `code` varchar(6) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
-  `name` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
-  `new_price` float DEFAULT NULL,
-  `change_rate` float DEFAULT NULL,
-  `ma5` float DEFAULT NULL,
-  `ma10` float DEFAULT NULL,
-  `ma20` float DEFAULT NULL,
-  `ma60` float DEFAULT NULL,
-  `ma120` float DEFAULT NULL,
-  `ma250` float DEFAULT NULL,
-  `macd` float DEFAULT NULL,
-  `macd_dea` float DEFAULT NULL,
-  `macd_dif` float DEFAULT NULL,
-  `kdj_k` float DEFAULT NULL,
-  `kdj_d` float DEFAULT NULL,
-  `kdj_j` float DEFAULT NULL,
-  `rsi_6` float DEFAULT NULL,
-  `rsi_12` float DEFAULT NULL,
-  `rsi_24` float DEFAULT NULL,
-  `boll_upper` float DEFAULT NULL,
-  `boll_mid` float DEFAULT NULL,
-  `boll_lower` float DEFAULT NULL,
-  `cci` float DEFAULT NULL,
-  `atr` float DEFAULT NULL,
-  `sar` float DEFAULT NULL,
-  PRIMARY KEY (`date`, `code`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+-- 注意: 该表列70+列，由代码自动创建。
+-- 如需手动创建，请参考 instock/core/tablestructure.py 中 TABLE_CN_STOCK_INDICATORS 的定义。
+-- 代码在表不存在时会通过 SQLAlchemy 自动创建正确的表结构。
 
 -- 16. 指标买入选股表
-CREATE TABLE IF NOT EXISTS `cn_stock_indicators_buy` (
-  `date` date NOT NULL,
-  `code` varchar(6) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
-  `name` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
-  `new_price` float DEFAULT NULL,
-  `change_rate` float DEFAULT NULL,
-  `indicators` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
-  PRIMARY KEY (`date`, `code`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+-- 注意: 该表包含 date/code/name + rate_1到rate_100 共103列，由代码自动创建。
+-- 代码在表不存在时会通过 SQLAlchemy 自动创建正确的表结构。
 
 -- 17. 指标卖出选股表
-CREATE TABLE IF NOT EXISTS `cn_stock_indicators_sell` (
-  `date` date NOT NULL,
-  `code` varchar(6) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
-  `name` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
-  `new_price` float DEFAULT NULL,
-  `change_rate` float DEFAULT NULL,
-  `indicators` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
-  PRIMARY KEY (`date`, `code`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+-- 同上，由代码自动创建。
 
 -- 18. K线形态表
-CREATE TABLE IF NOT EXISTS `cn_stock_kline_pattern` (
-  `date` date NOT NULL,
-  `code` varchar(6) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
-  `name` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
-  `new_price` float DEFAULT NULL,
-  `change_rate` float DEFAULT NULL,
-  `patterns` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
-  PRIMARY KEY (`date`, `code`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+-- 注意: 该表包含 date/code/name + 63个形态列 共66列，由代码自动创建。
+-- 代码在表不存在时会通过 SQLAlchemy 自动创建正确的表结构。
 
 -- 19. 交易日历表
 CREATE TABLE IF NOT EXISTS `cn_stock_trade_date` (
@@ -467,26 +417,23 @@ CREATE TABLE IF NOT EXISTS `cn_stock_trade_date` (
 
 -- 20-29. 策略选股表（包含回测数据列）
 -- 通用策略表结构：基础信息 + 100日收益率
-CREATE TABLE IF NOT EXISTS `cn_stock_strategy_enter` (
-  `date` date NOT NULL,
-  `code` varchar(6) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
-  `name` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
-  `rate_1` float DEFAULT NULL, `rate_2` float DEFAULT NULL, `rate_3` float DEFAULT NULL, `rate_4` float DEFAULT NULL, `rate_5` float DEFAULT NULL,
-  `rate_6` float DEFAULT NULL, `rate_7` float DEFAULT NULL, `rate_8` float DEFAULT NULL, `rate_9` float DEFAULT NULL, `rate_10` float DEFAULT NULL,
-  `rate_11` float DEFAULT NULL, `rate_12` float DEFAULT NULL, `rate_13` float DEFAULT NULL, `rate_14` float DEFAULT NULL, `rate_15` float DEFAULT NULL,
-  `rate_16` float DEFAULT NULL, `rate_17` float DEFAULT NULL, `rate_18` float DEFAULT NULL, `rate_19` float DEFAULT NULL, `rate_20` float DEFAULT NULL,
-  PRIMARY KEY (`date`, `code`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-
-CREATE TABLE IF NOT EXISTS `cn_stock_strategy_keep_increasing` LIKE `cn_stock_strategy_enter`;
-CREATE TABLE IF NOT EXISTS `cn_stock_strategy_parking_apron` LIKE `cn_stock_strategy_enter`;
-CREATE TABLE IF NOT EXISTS `cn_stock_strategy_backtrace_ma250` LIKE `cn_stock_strategy_enter`;
-CREATE TABLE IF NOT EXISTS `cn_stock_strategy_breakthrough_platform` LIKE `cn_stock_strategy_enter`;
-CREATE TABLE IF NOT EXISTS `cn_stock_strategy_low_backtrace_increase` LIKE `cn_stock_strategy_enter`;
-CREATE TABLE IF NOT EXISTS `cn_stock_strategy_turtle_trade` LIKE `cn_stock_strategy_enter`;
-CREATE TABLE IF NOT EXISTS `cn_stock_strategy_high_tight_flag` LIKE `cn_stock_strategy_enter`;
-CREATE TABLE IF NOT EXISTS `cn_stock_strategy_climax_limitdown` LIKE `cn_stock_strategy_enter`;
-CREATE TABLE IF NOT EXISTS `cn_stock_strategy_low_atr` LIKE `cn_stock_strategy_enter`;
+-- 注意: 该表包含 date/code/name + rate_1到rate_100 共103列，由代码自动创建。
+-- 代码在表不存在时会通过 SQLAlchemy 自动创建正确的表结构。
+-- 包括以下策略表:
+-- cn_stock_strategy_enter (放量上涨)
+-- cn_stock_strategy_keep_increasing (均线多头)
+-- cn_stock_strategy_parking_apron (停机坪)
+-- cn_stock_strategy_backtrace_ma250 (回踩年线)
+-- cn_stock_strategy_breakthrough_platform (突破平台)
+-- cn_stock_strategy_low_backtrace_increase (无大幅回撤)
+-- cn_stock_strategy_turtle_trade (海龟交易法则)
+-- cn_stock_strategy_high_tight_flag (高而窄的旗形)
+-- cn_stock_strategy_climax_limitdown (放量跌停)
+-- cn_stock_strategy_low_atr (低ATR成长)
+-- cn_stock_strategy_trend_pullback (趋势回调)
+-- cn_stock_strategy_oversold_rebound (超跌反弹)
+-- cn_stock_strategy_breakout_confirm (突破确认)
+-- cn_stock_strategy_gpt_value (GPT综合选股)
 
 -- 30. 回测汇总表
 CREATE TABLE IF NOT EXISTS `cn_stock_backtest` (
