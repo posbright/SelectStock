@@ -291,7 +291,7 @@ const routes: RouteRecordRaw[] = [
         path: 'list',
         name: 'BacktestList',
         component: () => import('@/views/stock/StockData.vue'),
-        meta: { title: '回测汇总', tableName: 'cn_stock_backtest', isRealtime: false }
+        meta: { title: '回测汇总', tableName: 'cn_stock_backtest', isRealtime: false, noDateFilter: true }
       }
     ]
   }

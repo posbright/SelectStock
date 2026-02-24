@@ -33,6 +33,7 @@ const pageSize = ref(50)
 // 表名
 const tableName = computed(() => route.meta.tableName as string || 'cn_stock_spot')
 const pageTitle = computed(() => route.meta.title as string || '股票数据')
+const noDateFilter = computed(() => route.meta.noDateFilter as boolean ?? false)
 
 // 策略说明（仅策略页面显示）
 const strategyDesc = computed(() => {
@@ -80,9 +81,11 @@ const loadData = async () => {
   try {
     const params: any = {
       name: tableName.value,
-      date: selectedDate.value,
       page: currentPage.value,
       page_size: pageSize.value
+    }
+    if (selectedDate.value) {
+      params.date = selectedDate.value
     }
     if (searchKeyword.value) {
       params.keyword = searchKeyword.value
@@ -272,6 +275,12 @@ watch(
 )
 
 onMounted(async () => {
+  // noDateFilter 模式下不设置日期，加载所有日期的数据
+  if (noDateFilter.value) {
+    selectedDate.value = ''
+    loadData()
+    return
+  }
   // 从服务端获取正确的交易日期，避免使用客户端本地日期导致日期不匹配
   try {
     const dateRes: any = await getTradeDate()
@@ -304,6 +313,7 @@ onMounted(async () => {
           </el-tooltip>
           <span v-else class="page-title">{{ pageTitle }}</span>
           <el-date-picker
+            v-if="!noDateFilter"
             v-model="selectedDate"
             type="date"
             placeholder="选择日期"
