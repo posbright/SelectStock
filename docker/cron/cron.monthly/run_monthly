@@ -1,17 +1,23 @@
-#!/bin/sh
+#!/bin/bash
+
+# 获取脚本所在目录，计算项目根目录
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+PROJECT_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 
 export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH
-export PYTHONPATH=/data/InStock
 export PYTHONIOENCODING=utf-8
+export LANG=zh_CN.UTF-8
+export PYTHONPATH=$PROJECT_ROOT
+export LC_CTYPE=zh_CN.UTF-8
 
-LOG_DIR=/data/InStock/instock/log
+LOG_DIR=$PROJECT_ROOT/instock/log
 mkdir -p $LOG_DIR
 LOG_FILE=$LOG_DIR/monthly.log
 
 # 清理过期缓存数据
 if [ "$1" = "--all" ]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始全量清除缓存" >> $LOG_FILE
-    rm -rf /data/InStock/instock/cache/hist/*
+    rm -rf $PROJECT_ROOT/instock/cache/hist/*
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] 已全量清除所有历史K线缓存" >> $LOG_FILE
 else
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始智能清理缓存" >> $LOG_FILE
