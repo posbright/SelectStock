@@ -1,0 +1,14 @@
+2026-02-26 14:27:38,310 Uncaught exception GET /favicon.svg (::1)
+HTTPServerRequest(protocol='http', host='localhost:19988', method='GET', uri='/favicon.svg', version='HTTP/1.1', remote_ip='::1')
+Traceback (most recent call last):
+  File "Q:\tools\SelectStock\.venv\Lib\site-packages\tornado\web.py", line 1857, in _execute
+    result = method(*self.path_args, **self.path_kwargs)
+TypeError: StaticFileHandler.get() missing 1 required positional argument: 'path'
+2026-02-26 14:27:38,313 500 GET /favicon.svg (::1) 2.92ms
+2026-02-26 14:30:36,327 Uncaught exception GET /favicon.svg (::1)
+HTTPServerRequest(protocol='http', host='localhost:19988', method='GET', uri='/favicon.svg', version='HTTP/1.1', remote_ip='::1')
+Traceback (most recent call last):
+  File "Q:\tools\SelectStock\.venv\Lib\site-packages\tornado\web.py", line 1857, in _execute
+    result = method(*self.path_args, **self.path_kwargs)
+TypeError: StaticFileHandler.get() missing 1 required positional argument: 'path'
+2026-02-26 14:30:36,328 500 GET /favicon.svg (::1) 1.73ms

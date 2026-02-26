@@ -7,11 +7,27 @@ https://vip.stock.finance.sina.com.cn/q/go.php/vInvestConsult/kind/lhb/index.pht
 """
 
 from io import StringIO
+import logging
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 from instock.core.singleton_proxy import proxys
+
+
+def _sina_request(url, params=None, timeout=30):
+    """新浪财经通用请求（带代理反馈、超时、错误处理）"""
+    proxy_pool = proxys()
+    current_proxy = proxy_pool.get_proxies()
+    proxy_url = current_proxy.get("http") if current_proxy else None
+    try:
+        r = requests.get(url, proxies=current_proxy, params=params, timeout=timeout)
+        proxy_pool.report_success(proxy_url)
+        return r
+    except Exception as e:
+        proxy_pool.report_failure(proxy_url)
+        logging.debug(f"新浪龙虎榜请求失败: {url} - {e}")
+        raise
 
 
 def stock_lhb_detail_daily_sina(date: str = "20240222") -> pd.DataFrame:
@@ -26,7 +42,10 @@ def stock_lhb_detail_daily_sina(date: str = "20240222") -> pd.DataFrame:
     date = "-".join([date[:4], date[4:6], date[6:]])
     url = "https://vip.stock.finance.sina.com.cn/q/go.php/vInvestConsult/kind/lhb/index.phtml"
     params = {"tradedate": date}
-    r = requests.get(url, proxies = proxys().get_proxies(), params=params)
+    try:
+        r = _sina_request(url, params=params)
+    except Exception:
+        return pd.DataFrame()
     soup = BeautifulSoup(r.text, features="lxml")
     list_div = soup.find(name="div", attrs={"class": "list"})
     if list_div is None:
@@ -70,7 +89,10 @@ def _find_last_page(
         "last": recent_day,
         "p": "1",
     }
-    r = requests.get(url, proxies = proxys().get_proxies(), params=params)
+    try:
+        r = _sina_request(url, params=params)
+    except Exception:
+        return 1
     soup = BeautifulSoup(r.text, "lxml")
     try:
         previous_page = int(soup.find_all(attrs={"class": "page"})[-2].text)
@@ -82,7 +104,10 @@ def _find_last_page(
                 "last": recent_day,
                 "p": previous_page,
             }
-            r = requests.get(url, proxies = proxys().get_proxies(), params=params)
+            try:
+                r = _sina_request(url, params=params)
+            except Exception:
+                break
             soup = BeautifulSoup(r.text, features="lxml")
             last_page = int(soup.find_all(attrs={"class": "page"})[-2].text)
             if last_page != previous_page:
@@ -112,9 +137,14 @@ def stock_lhb_ggtj_sina(symbol: str = "5") -> pd.DataFrame:
             "last": symbol,
             "p": page,
         }
-        r = requests.get(url, proxies = proxys().get_proxies(), params=params)
+        try:
+            r = _sina_request(url, params=params)
+        except Exception:
+            continue
         temp_df = pd.read_html(StringIO(r.text))[0].iloc[0:, :]
         big_df = pd.concat(objs=[big_df, temp_df], ignore_index=True)
+    if big_df.empty:
+        return big_df
     big_df["股票代码"] = big_df["股票代码"].astype(str).str.zfill(6)
     big_df.columns = [
         "股票代码",
@@ -148,9 +178,14 @@ def stock_lhb_yytj_sina(symbol: str = "5") -> pd.DataFrame:
             "last": "5",
             "p": page,
         }
-        r = requests.get(url, proxies = proxys().get_proxies(), params=params)
+        try:
+            r = _sina_request(url, params=params)
+        except Exception:
+            continue
         temp_df = pd.read_html(StringIO(r.text))[0].iloc[0:, :]
         big_df = pd.concat([big_df, temp_df], ignore_index=True)
+    if big_df.empty:
+        return big_df
     big_df.columns = [
         "营业部名称",
         "上榜次数",
@@ -185,11 +220,16 @@ def stock_lhb_jgzz_sina(symbol: str = "5") -> pd.DataFrame:
             "last": symbol,
             "p": page,
         }
-        r = requests.get(url, proxies = proxys().get_proxies(), params=params)
+        try:
+            r = _sina_request(url, params=params)
+        except Exception:
+            continue
         temp_df = pd.read_html(StringIO(r.text))[0].iloc[0:, :]
         if temp_df.empty:
             continue
         big_df = pd.concat(objs=[big_df, temp_df], ignore_index=True)
+    if big_df.empty:
+        return big_df
     big_df["股票代码"] = big_df["股票代码"].astype(str).str.zfill(6)
     del big_df["当前价"]
     del big_df["涨跌幅"]
@@ -220,7 +260,10 @@ def stock_lhb_jgmx_sina() -> pd.DataFrame:
     params = {
         "p": "1",
     }
-    r = requests.get(url, proxies = proxys().get_proxies(), params=params)
+    try:
+        r = _sina_request(url, params=params)
+    except Exception:
+        return pd.DataFrame()
     soup = BeautifulSoup(r.text, features="lxml")
     try:
         last_page_num = int(soup.find_all(attrs={"class": "page"})[-2].text)
@@ -231,7 +274,10 @@ def stock_lhb_jgmx_sina() -> pd.DataFrame:
         params = {
             "p": page,
         }
-        r = requests.get(url, proxies = proxys().get_proxies(), params=params)
+        try:
+            r = _sina_request(url, params=params)
+        except Exception:
+            continue
         temp_df = pd.read_html(StringIO(r.text))[0].iloc[0:, :]
         big_df = pd.concat(objs=[big_df, temp_df], ignore_index=True)
     big_df["股票代码"] = big_df["股票代码"].astype(str).str.zfill(6)

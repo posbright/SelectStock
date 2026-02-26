@@ -6,6 +6,7 @@ Desc: 通达信抢筹
 http://excalc.icfqs.com:7616/TQLEX?Entry=HQServ.hq_nlp
 """
 
+import logging
 import pandas as pd
 import requests
 from instock.core.singleton_proxy import proxys
@@ -33,7 +34,16 @@ def stock_chip_race_open(date: str = "") -> pd.DataFrame:
         "User-Agent": "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.138 Safari/537.36 TdxW",
     }
 
-    r = requests.post(url, proxies = proxys().get_proxies(), json=params,headers=headers)
+    proxy_pool = proxys()
+    current_proxy = proxy_pool.get_proxies()
+    proxy_url = current_proxy.get("http") if current_proxy else None
+    try:
+        r = requests.post(url, proxies=current_proxy, json=params, headers=headers, timeout=30)
+        proxy_pool.report_success(proxy_url)
+    except Exception as e:
+        proxy_pool.report_failure(proxy_url)
+        logging.debug(f"stock_chip_race_open请求失败: {e}")
+        return pd.DataFrame()
     data_json = r.json()
     data = data_json.get("datas")
     if not data:
@@ -101,7 +111,16 @@ def stock_chip_race_end(date: str = "") -> pd.DataFrame:
         "User-Agent": "TdxW",
     }
 
-    r = requests.post(url, proxies = proxys().get_proxies(), json=params,headers=headers)
+    proxy_pool = proxys()
+    current_proxy = proxy_pool.get_proxies()
+    proxy_url = current_proxy.get("http") if current_proxy else None
+    try:
+        r = requests.post(url, proxies=current_proxy, json=params, headers=headers, timeout=30)
+        proxy_pool.report_success(proxy_url)
+    except Exception as e:
+        proxy_pool.report_failure(proxy_url)
+        logging.debug(f"stock_chip_race_end请求失败: {e}")
+        return pd.DataFrame()
     data_json = r.json()
     data = data_json.get("datas")
     if not data:

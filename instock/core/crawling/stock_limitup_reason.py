@@ -6,6 +6,7 @@ Desc: 同花顺涨停原因
 http://zx.10jqka.com.cn/event/api/getharden/date/2025-02-21/orderby/date/orderway/desc/charset/GBK/
 """
 
+import logging
 import pandas as pd
 import requests
 import re
@@ -26,8 +27,17 @@ def stock_limitup_reason(date: str = "2025-02-27") -> pd.DataFrame:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.138 Safari/537.36 Thx"
     }
-    r = requests.get(url, proxies = proxys().get_proxies(), headers=headers)
-    data_json = r.json()
+    proxy_pool = proxys()
+    current_proxy = proxy_pool.get_proxies()
+    proxy_url = current_proxy.get("http") if current_proxy else None
+    try:
+        r = requests.get(url, proxies=current_proxy, headers=headers, timeout=30)
+        proxy_pool.report_success(proxy_url)
+        data_json = r.json()
+    except Exception as e:
+        proxy_pool.report_failure(proxy_url)
+        logging.debug(f"stock_limitup_reason请求失败: {e}")
+        return pd.DataFrame()
 
     data = data_json["data"]
     if not data:
@@ -100,8 +110,12 @@ def stock_limitup_detail(row):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36"
     }
-    r = requests.get(url, proxies = proxys().get_proxies(), headers=headers)
-    data_text = r.text
+    try:
+        r = requests.get(url, proxies=proxys().get_proxies(), headers=headers, timeout=15)
+        data_text = r.text
+    except Exception as e:
+        logging.debug(f"stock_limitup_detail请求失败: {row['ID']} - {e}")
+        return ""
 
     # match_title = re.search(r"var title = '(.*?)';", data_text)
     # _title = ""

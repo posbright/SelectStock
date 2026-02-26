@@ -10,6 +10,7 @@ import tornado.escape
 import tornado.httpserver
 import tornado.ioloop
 import tornado.options
+import tornado.web
 from tornado import gen
 
 # 在项目运行时，临时将项目路径添加到环境变量
@@ -37,15 +38,12 @@ __date__ = '2026/02/14'
 
 class Application(tornado.web.Application):
     def __init__(self):
+        static_path = os.path.join(os.path.dirname(__file__), "static")
         handlers = [
-            # 设置路由
-            (r"/", HomeHandler),
-            (r"/instock/", HomeHandler),
-            # 使用datatable 展示报表数据模块。
+            # ── JSON API 路由（Vue SPA 通过 AJAX 调用）──
             (r"/instock/api_data", dataTableHandler.GetStockDataHandler),
             (r"/instock/api/trade_date", dataTableHandler.GetTradeDateHandler),
-            (r"/instock/data", dataTableHandler.GetStockHtmlHandler),
-            # 获得股票指标数据。
+            # 获得股票指标数据（Bokeh 图表API，返回 HTML 片段）
             (r"/instock/data/indicators", dataIndicatorsHandler.GetDataIndicatorsHandler),
             # 加入关注
             (r"/instock/control/attention", dataIndicatorsHandler.SaveCollectHandler),
@@ -60,10 +58,15 @@ class Application(tornado.web.Application):
             (r"/instock/api/backtest/config", backtestHandler.GetBacktestConfigHandler),
             (r"/instock/api/backtest/run", backtestHandler.RunBacktestHandler),
             (r"/instock/api/backtest/batch", backtestHandler.RunBatchBacktestHandler),
+            # ── Vue SPA 路由 ──
+            # 静态资源（assets/）
+            (r"/assets/(.*)", tornado.web.StaticFileHandler, {"path": os.path.join(static_path, "assets")}),
+            # 所有非 API 路径 fallback 到 Vue SPA 的 index.html（支持前端路由）
+            (r"/(.*)", SPAHandler, {"static_path": static_path}),
         ]
         settings = dict(  # 配置
             template_path=os.path.join(os.path.dirname(__file__), "templates"),
-            static_path=os.path.join(os.path.dirname(__file__), "static"),
+            static_path=static_path,
             xsrf_cookies=False,  # True,
             # cookie加密
             cookie_secret="027bb1b670eddf0392cdda8709268a17b58b7",
@@ -74,13 +77,29 @@ class Application(tornado.web.Application):
         self.db = torndb.Connection(**mdb.MYSQL_CONN_TORNDB)
 
 
-# 首页handler。
-class HomeHandler(webBase.BaseHandler, ABC):
+class SPAHandler(tornado.web.RequestHandler, ABC):
+    """Vue SPA 的 fallback handler：所有非 API 路径都返回 index.html"""
+
+    def initialize(self, static_path):
+        self.spa_path = static_path
+
     @gen.coroutine
-    def get(self):
-        self.render("index.html",
-                    stockVersion=version.__version__,
-                    leftMenu=webBase.GetLeftMenu(self.request.uri))
+    def get(self, path=""):
+        # 如果请求的是一个实际存在的静态文件，直接返回
+        full_path = os.path.join(self.spa_path, path)
+        if path and os.path.isfile(full_path):
+            # 根据扩展名设置 Content-Type
+            import mimetypes
+            content_type, _ = mimetypes.guess_type(full_path)
+            if content_type:
+                self.set_header("Content-Type", content_type)
+            with open(full_path, "rb") as f:
+                self.write(f.read())
+            return
+        # 否则返回 Vue SPA 的 index.html（前端路由处理）
+        index_path = os.path.join(self.spa_path, "index.html")
+        with open(index_path, "r", encoding="utf-8") as f:
+            self.write(f.read())
 
 
 def main():

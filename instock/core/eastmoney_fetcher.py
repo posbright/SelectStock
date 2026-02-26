@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import logging
 import requests
 import threading
 from pathlib import Path
@@ -88,20 +89,38 @@ class eastmoney_fetcher:
         }
         
         session = self._get_thread_session()
+        proxy_pool = proxys()
         
         for i in range(retry):
+            current_proxy = proxy_pool.get_proxies()
+            # 记录当前使用的代理URL（用于后续反馈成功/失败）
+            proxy_url = current_proxy.get("http") if current_proxy else None
             try:
                 response = session.get(
                     url,
                     headers=headers,
-                    proxies=proxys().get_proxies(),
+                    proxies=current_proxy,
                     params=params,
                     timeout=timeout
                 )
                 response.raise_for_status()  # 检查HTTP错误
+                # 请求成功，反馈给代理池
+                proxy_pool.report_success(proxy_url)
                 return response
             except requests.exceptions.RequestException as e:
-                print(f"请求错误: {e}, 第 {i + 1}/{retry} 次重试")
+                # 请求失败，反馈给代理池（累积失败次数，达阈值后自动移除）
+                proxy_pool.report_failure(proxy_url)
+                err_str = str(e)
+                # 连接级错误（服务器拒绝/断开）：不重试，立即抛出让上层换数据源
+                is_connection_error = any(kw in err_str for kw in [
+                    'RemoteDisconnected', 'Connection aborted', 'ConnectionReset',
+                    'Connection refused', 'Max retries exceeded',
+                    'SSLError', 'SSLEOFError'
+                ])
+                if is_connection_error:
+                    logging.debug(f"请求连接错误(不重试): {e}")
+                    raise
+                logging.debug(f"请求错误: {e}, 第 {i + 1}/{retry} 次重试")
                 if i < retry - 1:
                     # 随机延迟后重试，逐步增加延迟
                     time.sleep(random.uniform(2, 5) * (i + 1))

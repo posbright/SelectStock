@@ -43,7 +43,15 @@ def stock_individual_fund_flow_rank_sina(indicator: str = "5日") -> pd.DataFram
             'Referer': 'http://vip.stock.finance.sina.com.cn/',
         }
         
-        response = requests.get(url, params=params, headers=headers, proxies=proxys().get_proxies(), timeout=30)
+        proxy_pool = proxys()
+        current_proxy = proxy_pool.get_proxies()
+        proxy_url = current_proxy.get("http") if current_proxy else None
+        try:
+            response = requests.get(url, params=params, headers=headers, proxies=current_proxy, timeout=30)
+            proxy_pool.report_success(proxy_url)
+        except Exception as e:
+            proxy_pool.report_failure(proxy_url)
+            raise
         if response.status_code != 200:
             return pd.DataFrame()
         
@@ -147,7 +155,15 @@ def stock_sector_fund_flow_rank_sina(
             'Referer': 'http://vip.stock.finance.sina.com.cn/',
         }
         
-        response = requests.get(url, params=params, headers=headers, proxies=proxys().get_proxies(), timeout=30)
+        proxy_pool = proxys()
+        current_proxy = proxy_pool.get_proxies()
+        proxy_url = current_proxy.get("http") if current_proxy else None
+        try:
+            response = requests.get(url, params=params, headers=headers, proxies=current_proxy, timeout=30)
+            proxy_pool.report_success(proxy_url)
+        except Exception as e:
+            proxy_pool.report_failure(proxy_url)
+            raise
         if response.status_code != 200:
             return pd.DataFrame()
         

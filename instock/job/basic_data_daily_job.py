@@ -31,8 +31,11 @@ def save_nph_stock_spot_data(date, before=True):
         table_name = tbs.TABLE_CN_STOCK_SPOT['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            try:
+                del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
+                mdb.executeSql(del_sql)
+            except Exception as e:
+                logging.warning(f"basic_data_daily_job.save_stock_spot_data删除旧数据失败，将使用upsert模式继续: {e}")
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_SPOT['columns'])
@@ -56,8 +59,11 @@ def save_nph_etf_spot_data(date, before=True):
         table_name = tbs.TABLE_CN_ETF_SPOT['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            try:
+                del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
+                mdb.executeSql(del_sql)
+            except Exception as e:
+                logging.warning(f"basic_data_daily_job.save_nph_etf_spot_data删除旧数据失败，将使用upsert模式继续: {e}")
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_ETF_SPOT['columns'])
