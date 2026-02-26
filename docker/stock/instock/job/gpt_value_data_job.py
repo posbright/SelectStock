@@ -72,11 +72,13 @@ def prepare(date):
         if mdb.checkTableIsExist(table_name):
             # 检查表列数是否匹配（旧表可能缺少 gpt_score 等列）
             _check_and_rebuild_table(table_name)
+        
+        if mdb.checkTableIsExist(table_name):
             del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
             mdb.executeSql(del_sql, (date_str,))
             cols_type = None
         else:
-            # 获取列类型定义
+            # 表不存在（首次或刚被重建），获取列类型定义
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_STRATEGY_GPT_VALUE['columns'])
         
         # 添加回测字段（空值）
