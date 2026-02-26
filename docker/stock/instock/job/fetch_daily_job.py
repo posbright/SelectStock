@@ -93,8 +93,8 @@ def main():
         from instock.core.singleton_stock import stock_data
         stock_data.release()
         gc.collect()
-    except Exception:
-        pass
+    except Exception as e:
+        logging.debug(f"释放单例跳过: {e}")
 
     elapsed = time.time() - start
     logging.info("====== 数据获取任务完成，耗时 %.1f 秒 ======" % elapsed)

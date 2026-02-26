@@ -496,7 +496,7 @@ def fetch_stock_blocktrade_data(date):
         data.drop('index', axis=1, inplace=True)
         return data
     except TypeError:
-        logging.error("处理异常：目前还没有大宗交易数据，请17:00点后再获取！")
+        logging.warning("目前还没有大宗交易数据，请17:00点后再获取")
         return None
     except Exception as e:
         logging.error(f"stockfetch.fetch_stock_blocktrade_data处理异常", exc_info=True)
@@ -629,8 +629,8 @@ def _get_cache_file_path(code, adjust=''):
     try:
         if not os.path.exists(cache_dir):
             os.makedirs(cache_dir)
-    except Exception:
-        pass
+    except Exception as e:
+        logging.debug(f"创建缓存目录失败: {cache_dir} - {e}")
     return os.path.join(cache_dir, f"{code}{adjust}.gzip.pickle")
 
 
@@ -652,8 +652,8 @@ def _read_cache_meta(code, adjust=''):
                     'last_date': parts[0] if len(parts) > 0 else None,
                     'update_time': parts[1] if len(parts) > 1 else None
                 }
-    except Exception:
-        pass
+    except Exception as e:
+        logging.debug(f"读取缓存元数据失败: {code} - {e}")
     return None
 
 
@@ -663,8 +663,8 @@ def _write_cache_meta(code, last_date, adjust=''):
     try:
         with open(meta_path, 'w') as f:
             f.write(f"{last_date},{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}")
-    except Exception:
-        pass
+    except Exception as e:
+        logging.debug(f"写入缓存元数据失败: {code} - {e}")
 
 
 def _fetch_from_sources(code, fetch_start, date_end, adjust=''):

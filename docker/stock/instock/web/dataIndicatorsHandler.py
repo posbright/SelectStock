@@ -61,8 +61,5 @@ class SaveCollectHandler(webBase.BaseHandler, ABC):
                 sql = f"INSERT INTO `{table_name}`(`datetime`, `code`) VALUE(%s, %s)"
                 self.db.query(sql,datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),code)
         except Exception as e:
-            err = {"error": str(e)}
-            # logging.info(err)
-            # self.write(err)
-            # return
+            logging.warning(f"SaveCollectHandler处理异常: {e}")
         self.write("{\"data\":[{}]}")

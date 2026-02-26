@@ -116,7 +116,8 @@ def main():
     port = 9988
     http_server.listen(port)
 
-    logging.warning(f"服务已启动，web地址 : http://localhost:{port}/")
+    logging.info(f"服务已启动，web地址 : http://localhost:{port}/")
+    print(f"服务已启动，web地址 : http://localhost:{port}/")  # 控制台通知运维人员
 
     tornado.ioloop.IOLoop.current().start()
 

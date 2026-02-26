@@ -79,8 +79,8 @@ def main():
         stock_data.release()
         stock_hist_data.release()
         gc.collect()
-    except Exception:
-        pass
+    except Exception as e:
+        logging.debug(f"释放单例跳过: {e}")
 
     elapsed = time.time() - start
     logging.info("====== 数据分析任务完成，耗时 %.1f 秒 ======" % elapsed)
