@@ -96,7 +96,7 @@ def _find_last_page(
     soup = BeautifulSoup(r.text, "lxml")
     try:
         previous_page = int(soup.find_all(attrs={"class": "page"})[-2].text)
-    except:  # noqa: E722
+    except (IndexError, ValueError):
         previous_page = 1
     if previous_page != 1:
         while True:
@@ -267,7 +267,7 @@ def stock_lhb_jgmx_sina() -> pd.DataFrame:
     soup = BeautifulSoup(r.text, features="lxml")
     try:
         last_page_num = int(soup.find_all(attrs={"class": "page"})[-2].text)
-    except:  # noqa: E722
+    except (IndexError, ValueError):
         last_page_num = 1
     big_df = pd.DataFrame()
     for page in tqdm(range(1, last_page_num + 1), leave=False):

@@ -108,6 +108,8 @@ crontab -e
 # 添加以下内容（假设项目在 /root/SelectStock）：
 
 # ── 收盘后采集基础行情数据（轻量级，可多次执行）──
+30 12 * * 1-5 flock -xn /tmp/instock_hourly.lock /root/SelectStock/cron/cron.hourly/run_hourly
+0 13 * * 1-5 flock -xn /tmp/instock_hourly.lock /root/SelectStock/cron/cron.hourly/run_hourly
 0 16 * * 1-5 flock -xn /tmp/instock_hourly.lock /root/SelectStock/cron/cron.hourly/run_hourly
 0 17 * * 1-5 flock -xn /tmp/instock_hourly.lock /root/SelectStock/cron/cron.hourly/run_hourly
 

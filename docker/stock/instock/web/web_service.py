@@ -17,11 +17,17 @@ from tornado import gen
 cpath_current = os.path.dirname(os.path.dirname(__file__))
 cpath = os.path.abspath(os.path.join(cpath_current, os.pardir))
 sys.path.append(cpath)
-log_path = os.path.join(cpath_current, 'log')
-if not os.path.exists(log_path):
-    os.makedirs(log_path)
-logging.basicConfig(format='%(asctime)s %(message)s', filename=os.path.join(log_path, 'stock_web.log'))
-logging.getLogger().setLevel(logging.ERROR)
+try:
+    from instock.lib.log_config import setup_logging
+    setup_logging('web')
+except Exception:
+    log_path = os.path.join(cpath_current, 'log')
+    os.makedirs(log_path, exist_ok=True)
+    logging.basicConfig(
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        filename=os.path.join(log_path, 'stock_web.log'),
+        level=logging.WARNING,
+    )
 import instock.lib.torndb as torndb
 import instock.lib.database as mdb
 import instock.lib.version as version
@@ -110,8 +116,7 @@ def main():
     port = 9988
     http_server.listen(port)
 
-    print(f"服务已启动，web地址 : http://localhost:{port}/")
-    logging.info(f"服务已启动，web地址 : http://localhost:{port}/")
+    logging.warning(f"服务已启动，web地址 : http://localhost:{port}/")
 
     tornado.ioloop.IOLoop.current().start()
 

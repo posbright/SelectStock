@@ -32,16 +32,17 @@ import sys
 cpath_current = os.path.dirname(os.path.dirname(__file__))
 cpath = os.path.abspath(os.path.join(cpath_current, os.pardir))
 sys.path.append(cpath)
-log_path = os.path.join(cpath_current, 'log')
-if not os.path.exists(log_path):
-    os.makedirs(log_path)
-logging.basicConfig(format='%(asctime)s %(message)s', filename=os.path.join(log_path, 'stock_execute_job.log'))
-logging.getLogger().setLevel(logging.INFO)
 try:
     from instock.lib.log_config import setup_logging
     setup_logging('analysis')
 except Exception:
-    pass
+    log_path = os.path.join(cpath_current, 'log')
+    os.makedirs(log_path, exist_ok=True)
+    logging.basicConfig(
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        filename=os.path.join(log_path, 'stock_analysis_job.log'),
+        level=logging.INFO,
+    )
 import gpt_value_data_job as gptj
 import streaming_analysis_job as saj
 import backtest_data_daily_job as bdj

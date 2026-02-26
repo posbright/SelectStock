@@ -244,7 +244,7 @@ class Connection(object):
         try:
             return cursor.execute(query, kwparameters or parameters)
         except OperationalError:
-            logging.error(f"Error connecting to MySQL on {self.host}")
+            logging.error(f"Error connecting to MySQL on {self.host}", exc_info=True)
             self.close()
             raise
 

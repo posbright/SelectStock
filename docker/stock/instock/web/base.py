@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import logging
 from abc import ABC
 import tornado.web
 import instock.core.singleton_stock_web_module_data as sswmd
@@ -30,7 +31,7 @@ class BaseHandler(tornado.web.RequestHandler, ABC):
             # check every time。
             self.application.db.query("SELECT 1 ")
         except Exception as e:
-            print(e)
+            logging.warning(f"DB连接检查失败，尝试重连: {e}")
             self.application.db.reconnect()
         return self.application.db
 

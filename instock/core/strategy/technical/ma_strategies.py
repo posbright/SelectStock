@@ -122,7 +122,7 @@ class MA250PullbackStrategy(TechnicalStrategy):
         try:
             date_diff = datetime.date(datetime.strptime(recent_lowest_row[2], '%Y-%m-%d')) - \
                         datetime.date(datetime.strptime(highest_row[2], '%Y-%m-%d'))
-        except:
+        except (ValueError, TypeError):
             return False
         
         if not (timedelta(days=10) <= date_diff <= timedelta(days=50)):

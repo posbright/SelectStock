@@ -28,7 +28,10 @@ def run_with_args(run_fun, *args):
             log_name = base.replace('_daily_job', '').replace('_data', '').replace('_job', '') or 'job'
             setup_logging(log_name)
         except Exception:
-            logging.basicConfig(format='%(asctime)s %(message)s', level=logging.INFO)
+            logging.basicConfig(
+                format='%(asctime)s [%(levelname)s] %(message)s',
+                level=logging.INFO,
+            )
 
     if len(sys.argv) == 3:
         # 区间作业 python xxx.py 2023-03-01 2023-03-21

@@ -111,7 +111,7 @@ class MainEngine:
                 old_strategy = self.get_strategy(strategy_module.Strategy.name)
                 if old_strategy is None:
                     for s in self.strategy_list:
-                        print(s.name)
+                        self.log.info(f"strategy: {s.name}")
                 self.log.warn(u'卸载策略: %s' % old_strategy.name)
                 self.strategy_listen_event(old_strategy, "unlisten")
                 time.sleep(2)
@@ -168,7 +168,7 @@ class MainEngine:
                 self.load_strategy(self._names)
                 time.sleep(2)
             except Exception as e:
-                print(e)
+                self.log.error(f"动态加载策略异常: {e}")
 
     def get_strategy(self, name):
         for strategy in self.strategy_list:

@@ -104,7 +104,7 @@ class AEScryptor():
         elif self.paddingMode == "PKCS5Padding" or self.paddingMode == "PKCS7Padding":
             return self.__PKCS5_7Padding(data)
         else:
-            print("不支持Padding")
+            raise ValueError(f"不支持Padding模式: {self.paddingMode}")
 
     def __stripPaddingData(self, data):
         if self.paddingMode == "NoPadding":
@@ -115,7 +115,7 @@ class AEScryptor():
         elif self.paddingMode == "PKCS5Padding" or self.paddingMode == "PKCS7Padding":
             return self.__StripPKCS5_7Padding(data)
         else:
-            print("不支持Padding")
+            raise ValueError(f"不支持Padding模式: {self.paddingMode}")
 
     def setCharacterSet(self, characterSet):
         '''
@@ -180,8 +180,7 @@ class AEScryptor():
         elif self.mode == AES.MODE_ECB:
             aes = AES.new(self.key, self.mode)
         else:
-            print("不支持这种模式")
-            return
+            raise ValueError(f"不支持AES模式: {self.mode}")
 
         data = self.__paddingData(self.data)
         enData = aes.encrypt(data)
@@ -193,8 +192,7 @@ class AEScryptor():
         elif self.mode == AES.MODE_ECB:
             aes = AES.new(self.key, self.mode)
         else:
-            print("不支持这种模式")
-            return
+            raise ValueError(f"不支持AES模式: {self.mode}")
         data = aes.decrypt(self.data)
         mData = MData(self.__stripPaddingData(data), characterSet=self.characterSet)
         return mData

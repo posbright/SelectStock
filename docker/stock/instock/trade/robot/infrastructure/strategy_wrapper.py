@@ -34,7 +34,7 @@ class ProcessWrapper(object):
                 if event == 0:
                     break
                 self.__strategy.clock(event)
-            except:
+            except Exception:
                 pass
 
     def _process(self):

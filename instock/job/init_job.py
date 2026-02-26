@@ -54,7 +54,7 @@ def main():
     try:
         check_database()
     except Exception as e:
-        logging.error("执行信息：数据库不存在，将创建。")
+        logging.warning("执行信息：数据库不存在，将创建。")
         # 检查数据库失败，
         create_new_database()
     # 执行数据初始化。

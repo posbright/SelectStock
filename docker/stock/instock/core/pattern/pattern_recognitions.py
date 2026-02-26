@@ -23,7 +23,7 @@ def get_pattern_recognitions(data, stock_column, end_date=None, threshold=120, c
         try:
             data.loc[:, k] = stock_column[k]['func'](data['open'].values, data['high'].values, data['low'].values, data['close'].values)
         except Exception as e:
-            pass
+            logging.debug(f"K线形态 {k} 计算跳过: {e}")
 
     if data is None or len(data.index) == 0:
         return None

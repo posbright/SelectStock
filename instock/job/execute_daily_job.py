@@ -14,17 +14,18 @@ import sys
 cpath_current = os.path.dirname(os.path.dirname(__file__))
 cpath = os.path.abspath(os.path.join(cpath_current, os.pardir))
 sys.path.append(cpath)
-log_path = os.path.join(cpath_current, 'log')
-if not os.path.exists(log_path):
-    os.makedirs(log_path)
-logging.basicConfig(format='%(asctime)s %(message)s', filename=os.path.join(log_path, 'stock_execute_job.log'))
-logging.getLogger().setLevel(logging.INFO)
-# 也加载新日志系统（文件名区分 + 格式化）
 try:
     from instock.lib.log_config import setup_logging
     setup_logging('execute')
 except Exception:
-    pass  # 兼容旧环境
+    # 兼容旧环境：log_config 不可用时降级为 basicConfig
+    log_path = os.path.join(cpath_current, 'log')
+    os.makedirs(log_path, exist_ok=True)
+    logging.basicConfig(
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        filename=os.path.join(log_path, 'stock_execute_job.log'),
+        level=logging.INFO,
+    )
 import init_job as bj
 import fetch_data_job as fdj
 import basic_data_daily_job as hdj
