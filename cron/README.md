@@ -20,7 +20,7 @@
 
 **作用**: 采集实时股票基础数据（最新价、涨跌幅、成交量等）
 
-**适用场景**: 交易时间内（9:30-15:00）每小时更新数据
+**适用场景**: 收盘后（16:00-17:00）更新当日收盘行情数据，也可在交易时间内每小时执行获取盘中快照
 
 ---
 
@@ -108,34 +108,34 @@ crontab -e
 # 添加以下内容（假设项目在 /root/SelectStock）：
 
 # ── 收盘后采集基础行情数据（轻量级，可多次执行）──
-0 16 * * 1-5 /root/SelectStock/cron/cron.hourly/run_hourly
-0 17 * * 1-5 /root/SelectStock/cron/cron.hourly/run_hourly
+0 16 * * 1-5 flock -xn /tmp/instock_hourly.lock /root/SelectStock/cron/cron.hourly/run_hourly
+0 17 * * 1-5 flock -xn /tmp/instock_hourly.lock /root/SelectStock/cron/cron.hourly/run_hourly
 
 # ── 方式A：拆分模式（推荐，获取和分析独立运行）──
 # 18:00 数据获取（API调用：实时行情+K线+资金流向+龙虎榜等）
 0 18 * * 1-5 flock -xn /tmp/instock_fetch.lock /root/SelectStock/cron/cron.workdayly/run_fetch
-# 20:30 数据分析（本地计算：指标+K线形态+策略+回测，约10分钟）
-30 20 * * 1-5 flock -xn /tmp/instock_analysis.lock /root/SelectStock/cron/cron.workdayly/run_analysis
-# 23:00 重试获取（如果18:00仍在运行则跳过）
-0 23 * * 1-5 flock -xn /tmp/instock_fetch.lock /root/SelectStock/cron/cron.workdayly/run_fetch
-# 23:30 重试分析
-30 23 * * 1-5 flock -xn /tmp/instock_analysis.lock /root/SelectStock/cron/cron.workdayly/run_analysis
+# 22:00 数据分析（本地计算：指标+K线形态+策略+回测，约10分钟）
+# 说明：安排在22:00而非20:30，是因为首次运行fetch可能需要3-5小时下载全量K线缓存
+0 22 * * 1-5 flock -xn /tmp/instock_analysis.lock /root/SelectStock/cron/cron.workdayly/run_analysis
+# 01:00 重试获取（如果18:00仍在运行则跳过）
+0 1 * * 2-6 flock -xn /tmp/instock_fetch.lock /root/SelectStock/cron/cron.workdayly/run_fetch
+# 01:30 重试分析
+30 1 * * 2-6 flock -xn /tmp/instock_analysis.lock /root/SelectStock/cron/cron.workdayly/run_analysis
 
 # ── 方式B：一体模式（兼容旧版，获取+分析串行执行）──
-# 30 18 * * 1-5 flock -xn /tmp/instock_workdayly.lock /root/SelectStock/cron/cron.workdayly/run_workdayly
-# 30 22 * * 1-5 flock -xn /tmp/instock_workdayly.lock /root/SelectStock/cron/cron.workdayly/run_workdayly
+# 0 18 * * 1-5 flock -xn /tmp/instock_workdayly.lock /root/SelectStock/cron/cron.workdayly/run_workdayly
+# 0 1 * * 2-6 flock -xn /tmp/instock_workdayly.lock /root/SelectStock/cron/cron.workdayly/run_workdayly
 
 # ── 月度缓存清理 ──
 0 4 1 * * /root/SelectStock/cron/cron.monthly/run_monthly
 ```
 
 > **说明**：
-> - **拆分模式优势**：数据获取（1-2小时）不阻塞分析计算（~10分钟），即使获取失败分析也能用历史缓存运行
+> - **拆分模式优势**：数据获取（1-4小时）不阻塞分析计算（~10分钟），即使获取失败分析也能用历史缓存运行
 > - `flock -xn` 参数：`-x` 排他锁，`-n` 非阻塞（如果锁被占用则立即退出，不等待）
-> - 获取和分析使用**不同的锁文件**，互不阻塞
-> - 这样即使 18:30 的任务跑了超过 4 小时，22:30 的任务也不会重复启动导致 OOM
-> - 18:00 的 run_hourly 已移除，避免与 18:30 的 run_workdayly 写同一张表冲突
-> - 凌晨 1:00 的重复执行已移除（22:30 已是充分的重试保障）
+> - 获取和分析使用**不同的锁文件**，互不阻塞；`run_hourly` 也用独立锁文件避免与 `run_fetch` 写同一张表冲突
+> - 分析安排在22:00而非20:30，给首次运行的K线缓存下载留充足时间（后续增量更新速度很快）
+> - 重试服务安排在凌晨1:00/1:30（周二到周六），对应周一到周五的交易日数据
 
 ---
 
@@ -145,6 +145,8 @@ crontab -e
    ```bash
    chmod +x cron/cron.hourly/run_hourly
    chmod +x cron/cron.workdayly/run_workdayly
+   chmod +x cron/cron.workdayly/run_fetch
+   chmod +x cron/cron.workdayly/run_analysis
    chmod +x cron/cron.monthly/run_monthly
    ```
 
