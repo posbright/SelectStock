@@ -61,8 +61,9 @@ def engine():
             MYSQL_CONN_URL,
             pool_size=2,
             max_overflow=3,
-            pool_recycle=1800,
-            pool_pre_ping=True
+            pool_recycle=600,
+            pool_pre_ping=True,
+            pool_timeout=30
         )
     return _engine_instance
 
@@ -198,6 +199,7 @@ def executeSql(sql, params=()):
                 db.execute(sql, params)
             except Exception as e:
                 logging.error(f"database.executeSql处理异常：{sql}", exc_info=True)
+                raise
 
 
 # 查询数据

@@ -288,6 +288,8 @@ onActivated(() => {
 })
 
 onMounted(async () => {
+  // 立即记录当前路径，避免 onActivated 在 await 期间重复加载
+  lastLoadedPath = route.path
   // noDateFilter 模式下不设置日期，加载所有日期的数据
   if (noDateFilter.value) {
     selectedDate.value = ''
@@ -306,7 +308,6 @@ onMounted(async () => {
     // 获取失败时保持客户端日期作为回退
   }
   loadData()
-  lastLoadedPath = route.path
 })
 </script>
 

@@ -60,9 +60,10 @@ def prepare(date):
         
         # 准备结果数据（基础字段 + 评分 + 指标值）
         result_columns = ['date', 'code', 'name'] + GPT_INDICATOR_FIELDS
-        # 只保留存在的列
-        available_cols = [c for c in result_columns if c in filtered.columns]
-        result_data = filtered[available_cols].copy()
+        result_data = filtered[['date', 'code', 'name']].copy()
+        # 确保所有指标列都存在（缺失的填 None），避免建表时缺列导致反复 DROP
+        for col in GPT_INDICATOR_FIELDS:
+            result_data[col] = filtered[col] if col in filtered.columns else None
         
         # 按综合评分降序排序
         if 'gpt_score' in result_data.columns:

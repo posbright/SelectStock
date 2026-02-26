@@ -35,7 +35,7 @@ def stock_chip_race_open(date: str = "") -> pd.DataFrame:
 
     r = requests.post(url, proxies = proxys().get_proxies(), json=params,headers=headers)
     data_json = r.json()
-    data = data_json["datas"]
+    data = data_json.get("datas")
     if not data:
         return pd.DataFrame()
     temp_df = pd.DataFrame(data)
@@ -103,7 +103,7 @@ def stock_chip_race_end(date: str = "") -> pd.DataFrame:
 
     r = requests.post(url, proxies = proxys().get_proxies(), json=params,headers=headers)
     data_json = r.json()
-    data = data_json["datas"]
+    data = data_json.get("datas")
     if not data:
         return pd.DataFrame()
     temp_df = pd.DataFrame(data)

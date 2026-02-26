@@ -206,26 +206,33 @@ const goBacktest = () => {
 const handleResize = () => { chartInstance?.resize() }
 
 // 监听路由参数变化，当从别的股票点击进入时重新加载
+let lastLoadedCode = ''
 watch(
   () => route.query.code,
   (newCode, oldCode) => {
     if (newCode && newCode !== oldCode) {
       currentPeriod.value = 'daily'
+      lastLoadedCode = newCode as string
       loadKlineData()
     }
   }
 )
 
 onMounted(() => {
+  lastLoadedCode = code.value || ''
   loadKlineData()
   window.addEventListener('resize', handleResize)
 })
 
-// keep-alive 重新激活时重新加载
+// keep-alive 重新激活时，仅在股票代码变化时重新加载
 onActivated(() => {
-  loadKlineData()
   window.addEventListener('resize', handleResize)
   nextTick(() => { chartInstance?.resize() })
+  if (code.value && code.value !== lastLoadedCode) {
+    lastLoadedCode = code.value
+    currentPeriod.value = 'daily'
+    loadKlineData()
+  }
 })
 
 onUnmounted(() => {

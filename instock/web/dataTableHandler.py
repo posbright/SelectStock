@@ -152,6 +152,23 @@ class GetStockDataHandler(webBase.BaseHandler, ABC):
             if "doesn't exist" in error_msg or "not found" in error_msg.lower():
                 data = []
                 total = 0
+            elif "Unknown column" in error_msg and order_by:
+                # ORDER BY 引用了不存在的列（如新增列尚未同步到表），去掉排序重试
+                logging.warning(f"GetStockDataHandler: ORDER BY 列不存在，去掉排序重试: {error_msg}")
+                data_sql_fallback = f"SELECT *{order_columns} FROM `{web_module_data.table_name}`{where}{limit_clause}"
+                try:
+                    if query_params:
+                        data = self.db.query(data_sql_fallback, *query_params)
+                        total_result = self.db.query(count_sql, *query_params)
+                    else:
+                        data = self.db.query(data_sql_fallback)
+                        total_result = self.db.query(count_sql)
+                    total = total_result[0]["cnt"] if total_result else 0
+                except Exception as e2:
+                    logging.error(f"GetStockDataHandler fallback查询异常：{web_module_data.table_name}", exc_info=True)
+                    self.set_status(500)
+                    self.write(json.dumps({"error": f"查询数据异常: {str(e2)}", "code": 500}))
+                    return
             else:
                 logging.error(f"GetStockDataHandler查询异常：{web_module_data.table_name}", exc_info=True)
                 self.set_status(500)
