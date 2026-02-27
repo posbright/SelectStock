@@ -28,7 +28,7 @@ __author__ = 'InStock'
 __date__ = '2026/02/27'
 
 
-SUMMARY_HORIZONS = [1, 3, 5, 10, 20]
+SUMMARY_HORIZONS = [1, 3, 5, 10, 20, 30, 60, 90, 120]
 MAX_TABLE_HORIZON = 100
 
 
@@ -370,7 +370,7 @@ class DashboardOverviewHandler(webBase.BaseHandler, ABC):
             days_i = 60
         days_i = max(1, min(days_i, 365))
 
-        metric_list = _parse_int_list(metric, default=[5], min_value=1, max_value=20, max_items=1)
+        metric_list = _parse_int_list(metric, default=[5], min_value=1, max_value=120, max_items=1)
         metric_h = metric_list[0] if metric_list else 5
         if metric_h not in SUMMARY_HORIZONS:
             metric_h = 5
@@ -406,12 +406,18 @@ class DashboardOverviewHandler(webBase.BaseHandler, ABC):
         items = []
         for strategy_name, g in df.groupby('strategy_name'):
             total_signals = int(g['stock_count'].fillna(0).sum())
-            avg_success = round(float(g['success_rate'].mean()), 2) if not g['success_rate'].isna().all() else 0
+            # success_rate: 排除 NULL (未回测) 行，只取有数据的行做平均
+            sr_valid = g['success_rate'].dropna()
+            avg_success = round(float(sr_valid.mean()), 2) if len(sr_valid) > 0 else None
 
             avg_rates = {}
             for h in SUMMARY_HORIZONS:
                 c = f'avg_rate_{h}'
-                avg_rates[f'{h}d'] = round(float(g[c].mean()), 2) if (c in g.columns and not g[c].isna().all()) else 0
+                if c in g.columns:
+                    vals = g[c].dropna()
+                    avg_rates[f'{h}d'] = round(float(vals.mean()), 2) if len(vals) > 0 else None
+                else:
+                    avg_rates[f'{h}d'] = None
 
             metric_col = f'avg_rate_{metric_h}'
             best_day = None
@@ -468,7 +474,7 @@ class PerformanceTimelineHandler(webBase.BaseHandler, ABC):
             days_i = 90
         days_i = max(1, min(days_i, 365))
 
-        horizon_list = _parse_int_list(horizon, default=[5], min_value=1, max_value=20, max_items=1)
+        horizon_list = _parse_int_list(horizon, default=[5], min_value=1, max_value=120, max_items=1)
         h = horizon_list[0] if horizon_list else 5
         if h not in SUMMARY_HORIZONS:
             self.write(json.dumps({'error': f'horizon 仅支持 {SUMMARY_HORIZONS}'}, ensure_ascii=False))

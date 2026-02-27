@@ -3,7 +3,7 @@ export type BacktestDashboardFocus = 'overview' | 'timeline' | 'detail'
 export const DEFAULT_BACKTEST_TIMELINE_DAYS = '90'
 export const DEFAULT_BACKTEST_TIMELINE_HORIZON = '5'
 export const DEFAULT_BACKTEST_DETAIL_DAYS = '90'
-export const DEFAULT_BACKTEST_DETAIL_HORIZONS = '1,3,5,10,20,30,60,120'
+export const DEFAULT_BACKTEST_DETAIL_HORIZONS = '1,3,5,10,20,30,60,90,120'
 
 export function extractBacktestStrategyName(row: any): string {
   const strategy = row?.strategy_name || row?.strategy || row?.name || ''

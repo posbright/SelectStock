@@ -60,7 +60,7 @@ const pendingFocus = ref('')
 // Strategy detail
 const selectedStrategy = ref('')
 const detailDays = ref(30)
-const detailHorizons = ref<number[]>([1, 3, 5, 10, 20])
+const detailHorizons = ref<number[]>([1, 3, 5, 10, 20, 30, 60, 90, 120])
 const detailPage = ref(1)
 const detailPageSize = ref(50)
 const detail = ref<any>(null)
@@ -167,7 +167,7 @@ const scrollToFocus = async () => {
 }
 
 const overviewItems = computed(() => overview.value?.items || [])
-const overviewHorizonList = computed(() => overview.value?.horizons || [1, 3, 5, 10, 20])
+const overviewHorizonList = computed(() => overview.value?.horizons || [1, 3, 5, 10, 20, 30, 60, 90, 120])
 
 const formatRate = (val: any) => {
   if (val === null || val === undefined) return '-'
@@ -424,18 +424,20 @@ watch(
         <span class="card-title">策略总览</span>
       </template>
 
-      <el-table :data="overviewItems" border size="small" stripe>
-        <el-table-column prop="strategy_cn" label="策略" min-width="160" />
-        <el-table-column prop="total_signals" label="信号数" width="90" align="right" />
-        <el-table-column prop="avg_success_rate" label="平均成功率" width="110" align="right">
-          <template #default="{ row }">{{ row.avg_success_rate }}%</template>
+      <el-table :data="overviewItems" border size="small" stripe :scroll-x="true">
+        <el-table-column prop="strategy_cn" label="策略" min-width="140" fixed="left" />
+        <el-table-column prop="total_signals" label="信号数" width="80" align="right" />
+        <el-table-column prop="avg_success_rate" label="平均成功率" width="100" align="right">
+          <template #default="{ row }">{{
+            row.avg_success_rate === null || row.avg_success_rate === undefined ? '-' : `${row.avg_success_rate}%`
+          }}</template>
         </el-table-column>
-        <el-table-column v-for="h in overviewHorizonList" :key="h" :label="`${h}日均值`" width="110" align="right">
+        <el-table-column v-for="h in overviewHorizonList" :key="h" :label="`${h}日均值`" width="100" align="right">
           <template #default="{ row }">
             <span :class="getRateClass(row.avg_returns?.[`${h}d`])">{{ formatRate(row.avg_returns?.[`${h}d`]) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="120" align="center">
+        <el-table-column label="操作" width="100" align="center" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="selectStrategyFromOverview(row.strategy_name)">查看明细</el-button>
           </template>

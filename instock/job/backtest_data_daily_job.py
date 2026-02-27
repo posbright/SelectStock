@@ -124,13 +124,35 @@ def main():
     summarize_backtest()
 
 
+def _migrate_summary_columns(summary_table, horizons):
+    """检查 cn_stock_backtest 表是否缺少 avg_rate_N 列，缺少则自动添加。"""
+    try:
+        existing = mdb.executeSql(f"SHOW COLUMNS FROM `{summary_table}`")
+        existing_names = {row[0] for row in existing} if existing else set()
+        for h in horizons:
+            col = f'avg_rate_{h}'
+            if col not in existing_names:
+                mdb.executeSql(f"ALTER TABLE `{summary_table}` ADD COLUMN `{col}` FLOAT NULL")
+                logging.info(f"Auto-migrated: added column `{col}` to `{summary_table}`")
+    except Exception as e:
+        logging.error(f"Migration check failed for {summary_table}: {e}")
+
+
 def summarize_backtest():
     """
     汇总各策略表的回测结果到 cn_stock_backtest 表
     
     从每个策略表中读取选股记录，统计选股数量。
-    如果有回测收益数据(rate_1不为NULL)，同时计算平均收益率和成功率。
+    如果有回测收益数据(rate_N不为NULL)，同时计算平均收益率和成功率。
+    
+    成功率定义：使用最短可用horizon（rate_5优先，不存在时用rate_3，再不存在用rate_1）
+    判断 rate_N > 0 的比例。
     """
+    # 汇总表覆盖的 horizon 列表（与 cn_stock_backtest 表结构一致）
+    SUMMARY_HORIZONS = [1, 3, 5, 10, 20, 30, 60, 90, 120]
+    # 成功率计算优先使用的 horizon（依优先级尝试）
+    SUCCESS_HORIZONS = [5, 3, 1]
+
     try:
         tables = [tbs.TABLE_CN_STOCK_INDICATORS_BUY, tbs.TABLE_CN_STOCK_INDICATORS_SELL]
         tables.extend(tbs.TABLE_CN_STOCK_STRATEGIES)
@@ -138,8 +160,9 @@ def summarize_backtest():
         
         summary_table = tbs.TABLE_CN_STOCK_BACKTEST['name']
         
-        # 清空旧的汇总数据
+        # 自动迁移：如果表已存在但缺少新增的 avg_rate_N 列，自动 ALTER TABLE 添加
         if mdb.checkTableIsExist(summary_table):
+            _migrate_summary_columns(summary_table, SUMMARY_HORIZONS)
             mdb.executeSql(f"DELETE FROM `{summary_table}`")
         
         all_rows = []
@@ -150,19 +173,24 @@ def summarize_backtest():
                 continue
             
             try:
-                # 统计所有选股记录（无论是否有回测数据）
-                # backtested_count: 已回测的记录数（rate_5 IS NOT NULL）
-                # success_count: 回测 rate_5 > 0 的记录数
-                # stock_count: 全部选股数量
+                # 动态构建 AVG 子句
+                avg_parts = []
+                for h in SUMMARY_HORIZONS:
+                    if h <= tbs.RATE_FIELDS_COUNT:
+                        avg_parts.append(f"ROUND(AVG(`rate_{h}`), 4) as avg_rate_{h}")
+                    else:
+                        avg_parts.append(f"NULL as avg_rate_{h}")
+                avg_clause = ",\n                    ".join(avg_parts)
+                
+                # 成功率：依次尝试 rate_5, rate_3, rate_1，取第一个非全 NULL 的
+                # 使用 COALESCE 方式：先看 rate_5，NULL 时降级到 rate_3，再降级到 rate_1
+                success_expr = "COALESCE(`rate_5`, `rate_3`, `rate_1`)"
+                
                 sql = f"""SELECT `date`, 
                     COUNT(*) as stock_count,
-                    SUM(CASE WHEN `rate_5` IS NOT NULL THEN 1 ELSE 0 END) as backtested_count,
-                    SUM(CASE WHEN `rate_5` > 0 THEN 1 ELSE 0 END) as success_count,
-                    ROUND(AVG(`rate_1`), 4) as avg_rate_1,
-                    ROUND(AVG(`rate_3`), 4) as avg_rate_3,
-                    ROUND(AVG(`rate_5`), 4) as avg_rate_5,
-                    ROUND(AVG(`rate_10`), 4) as avg_rate_10,
-                    ROUND(AVG(`rate_20`), 4) as avg_rate_20
+                    SUM(CASE WHEN {success_expr} IS NOT NULL THEN 1 ELSE 0 END) as backtested_count,
+                    SUM(CASE WHEN {success_expr} > 0 THEN 1 ELSE 0 END) as success_count,
+                    {avg_clause}
                     FROM `{table_name}` 
                     GROUP BY `date`
                     ORDER BY `date` DESC"""
