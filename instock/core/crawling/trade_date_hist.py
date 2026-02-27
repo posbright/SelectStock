@@ -312,6 +312,7 @@ def _request_with_ssl_retry(url, proxies=None, timeout=30, max_retries=2):
     3. 最终降级为 verify=False
     """
     import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     last_exc = None
     attempts = []
 
@@ -329,9 +330,17 @@ def _request_with_ssl_retry(url, proxies=None, timeout=30, max_retries=2):
                 r = requests.get(url, proxies=proxy, timeout=timeout, verify=verify)
                 r.raise_for_status()
                 if not verify:
-                    logging.warning(f"trade_date_hist: 使用 verify=False 成功（{label}）")
+                    logging.info(f"trade_date_hist: 使用 verify=False 成功（{label}）")
                 return r
-            except (requests.exceptions.SSLError, requests.exceptions.ConnectionError) as e:
+            except requests.exceptions.SSLError as e:
+                last_exc = e
+                logging.warning(f"trade_date_hist请求失败({label}, retry {retry+1}/{max_retries}): {type(e).__name__}")
+            except (requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout) as e:
+                # 超时错误不值得在同一组合上重试，直接切换下一组合
+                last_exc = e
+                logging.warning(f"trade_date_hist请求超时({label}): {type(e).__name__}")
+                break
+            except requests.exceptions.ConnectionError as e:
                 last_exc = e
                 logging.warning(f"trade_date_hist请求失败({label}, retry {retry+1}/{max_retries}): {type(e).__name__}")
             except Exception as e:
