@@ -26,6 +26,13 @@ def save_nph_stock_selection_data(date, before=True):
     try:
         data = stf.fetch_stock_selection()
         if data is None:
+            # 首次获取失败，等待后重试一次（可能是瞬时网络问题）
+            logging.warning("selection_data: 首次获取选股数据失败，5秒后重试")
+            import time as _time
+            _time.sleep(5)
+            data = stf.fetch_stock_selection()
+        if data is None:
+            logging.error("selection_data: 重试后仍无法获取选股数据，跳过本次更新")
             return
 
         table_name = tbs.TABLE_CN_STOCK_SELECTION['name']

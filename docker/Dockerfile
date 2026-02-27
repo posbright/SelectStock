@@ -135,12 +135,13 @@ RUN set -eux; \
     chmod 755 /data/InStock/instock/bin/run_*.sh; \
     find /etc/cron.hourly /etc/cron.workdayly /etc/cron.monthly -type f -exec chmod 755 {} \; 2>/dev/null || true; \
     # 创建crontab配置
+    # 注意：workdayly 使用 run_workdayly 而非 run-parts，避免三个脚本重复执行
     printf '%s\n' \
         'SHELL=/bin/sh' \
         'PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin' \
         '# min hour day month weekday command' \
         '*/30 9,10,11,13,14,15 * * 1-5 /bin/run-parts /etc/cron.hourly' \
-        '30 17 * * 1-5 /bin/run-parts /etc/cron.workdayly' \
+        '30 17 * * 1-5 /etc/cron.workdayly/run_workdayly' \
         '30 10 * * 3,6 /bin/run-parts /etc/cron.monthly' \
     > /var/spool/cron/crontabs/root; \
     chmod 600 /var/spool/cron/crontabs/root

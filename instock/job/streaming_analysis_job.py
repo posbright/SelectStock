@@ -64,7 +64,14 @@ def streaming_analysis(date):
     try:
         spot = stock_data(date).get_data()
         if spot is None:
-            logging.error("流式分析：stock_data 返回 None，无法获取股票列表")
+            # 单例可能缓存了上次 API 失败的 None，释放后重试一次
+            logging.warning("流式分析：stock_data 首次返回 None，释放单例后重试")
+            stock_data.release()
+            import time as _time
+            _time.sleep(3)  # 短暂等待，避免立即重试同样失败
+            spot = stock_data(date).get_data()
+        if spot is None:
+            logging.error("流式分析：stock_data 重试后仍返回 None，无法获取股票列表")
             return
     except Exception as e:
         logging.error(f"流式分析：获取股票列表异常", exc_info=True)

@@ -79,6 +79,18 @@ def main():
     except Exception as e:
         logging.error(f"execute_daily_job gpt_value异常", exc_info=True)
 
+    # 释放 stock_data 单例：如果 Phase 2 API 失败，单例缓存了 None，
+    # Phase 4 流式分析调用 stock_data(date).get_data() 会得到缓存的 None 从而跳过。
+    # 此处释放单例，让 Phase 4 有机会重新发起 API 请求获取股票列表。
+    try:
+        from instock.core.singleton_stock import stock_data
+        _sd = getattr(stock_data, '_instance', None)
+        if _sd is not None and _sd.data is None:
+            stock_data.release()
+            logging.warning("Phase 2 stock_data 返回 None，已释放单例以允许 Phase 4 重试")
+    except Exception:
+        pass
+
     # ================================================================
     # Phase 4: 数据分析（流式处理 — 低内存模式）
     # 从磁盘缓存逐只读取股票历史数据，同时计算指标+K线形态+策略
@@ -112,7 +124,59 @@ def main():
     except Exception as e:
         logging.error(f"execute_daily_job after_close异常", exc_info=True)
 
+    # ================================================================
+    # 数据健康检查：在流水线结束后，检查各表是否有今日数据
+    # 方便排查"页面无数据"问题
+    # ================================================================
+    _data_health_check(start)
+
     logging.info("######## 完成任务, 使用时间: %s 秒 #######" % (time.time() - start))
+
+
+def _data_health_check(pipeline_start):
+    """流水线结束后，检查核心表是否有当日数据"""
+    try:
+        import instock.lib.database as mdb
+        import instock.lib.trade_time as trd
+        run_date, run_date_nph = trd.get_trade_date_last()
+        date_str = run_date_nph.strftime("%Y-%m-%d")
+
+        tables_to_check = [
+            ('cn_stock_spot', '实时行情'),
+            ('cn_stock_selection', '综合选股'),
+            ('cn_stock_indicators', '技术指标'),
+            ('cn_stock_kline_pattern', 'K线形态'),
+            ('cn_stock_strategy_enter', '放量上涨(策略)'),
+            ('cn_stock_strategy_gpt_value', 'GPT综合选股'),
+            ('cn_stock_backtest_summary', '回测汇总'),
+        ]
+        results = []
+        for table, label in tables_to_check:
+            try:
+                if not mdb.checkTableIsExist(table):
+                    results.append(f"  {label}({table}): 表不存在")
+                    continue
+                row = mdb.executeSqlFetch(
+                    f"SELECT COUNT(*) AS cnt, MAX(`date`) AS latest FROM `{table}`"
+                )
+                if row:
+                    cnt_today_row = mdb.executeSqlFetch(
+                        f"SELECT COUNT(*) AS cnt FROM `{table}` WHERE `date` = '{date_str}'"
+                    )
+                    cnt_today = cnt_today_row[0][0] if cnt_today_row else 0
+                    latest = row[0][1]
+                    latest_str = latest.strftime("%Y-%m-%d") if hasattr(latest, 'strftime') else str(latest)
+                    total = row[0][0]
+                    results.append(f"  {label}: 今日({date_str})={cnt_today}条, 最近日期={latest_str}, 总计={total}条")
+                else:
+                    results.append(f"  {label}({table}): 空表")
+            except Exception as e:
+                results.append(f"  {label}({table}): 查询异常 {e}")
+
+        health = "\n".join(results)
+        logging.info(f"===== 数据健康检查 [{date_str}] =====\n{health}")
+    except Exception as e:
+        logging.warning(f"数据健康检查异常（不影响任务结果）：{e}")
 
 
 # main函数入口
