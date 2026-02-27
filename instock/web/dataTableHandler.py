@@ -74,6 +74,7 @@ class GetStockDataHandler(webBase.BaseHandler, ABC):
 
         query_params = []
         conditions = []
+        actual_date = date  # 实际使用的日期（可能回退）
         if date is not None:
             conditions.append("`date` = %s")
             query_params.append(date)
@@ -176,11 +177,37 @@ class GetStockDataHandler(webBase.BaseHandler, ABC):
                 return
 
         # 返回包含列定义和数据的响应
+        # 日期回退：如果按指定日期查无数据（可能作业尚未完成），自动回退到最近有数据的日期
+        if total == 0 and date is not None and not keyword:
+            try:
+                fallback_result = self.db.query(
+                    f"SELECT MAX(`date`) AS latest FROM `{web_module_data.table_name}`"
+                )
+                latest = fallback_result[0]["latest"] if fallback_result and fallback_result[0]["latest"] else None
+                if latest:
+                    latest_str = latest.strftime("%Y-%m-%d") if hasattr(latest, 'strftime') else str(latest)
+                    if latest_str != date:
+                        # 用最新日期重新查询
+                        fb_conditions = ["`date` = %s"]
+                        fb_params = [latest_str]
+                        fb_where = " WHERE " + " AND ".join(fb_conditions)
+                        fb_count_sql = f"SELECT COUNT(*) AS cnt FROM `{web_module_data.table_name}`{fb_where}"
+                        fb_data_sql = f"SELECT *{order_columns} FROM `{web_module_data.table_name}`{fb_where}{order_by}{limit_clause}"
+                        fb_total_result = self.db.query(fb_count_sql, *fb_params)
+                        total = fb_total_result[0]["cnt"] if fb_total_result else 0
+                        data = self.db.query(fb_data_sql, *fb_params)
+                        actual_date = latest_str
+                        logging.info(f"GetStockDataHandler日期回退：{date} → {latest_str} ({web_module_data.table_name})")
+            except Exception as e:
+                logging.warning(f"GetStockDataHandler日期回退查询异常：{e}")
+
         response = {
             "columns": web_module_data.column_names,
             "data": data,
             "total": total
         }
+        if actual_date != date:
+            response["actual_date"] = actual_date
         self.write(json.dumps(response, cls=MyEncoder))
 
 

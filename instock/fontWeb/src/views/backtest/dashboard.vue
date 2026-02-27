@@ -114,13 +114,13 @@ const applyQueryParams = () => {
   if (q.metric) {
     const n = Number(q.metric)
     if (Number.isFinite(n) && n > 0) {
-      overviewMetric.value = Math.min(20, Math.max(1, Math.floor(n)))
+      overviewMetric.value = Math.min(120, Math.max(1, Math.floor(n)))
     }
   }
   if (q.horizon) {
     const n = Number(q.horizon)
     if (Number.isFinite(n) && n > 0) {
-      timelineHorizon.value = Math.min(20, Math.max(1, Math.floor(n)))
+      timelineHorizon.value = Math.min(120, Math.max(1, Math.floor(n)))
     }
   }
 
@@ -134,7 +134,7 @@ const applyQueryParams = () => {
     const arr = String(q.detail_horizons)
       .split(',')
       .map(s => Number(s.trim()))
-      .filter(v => Number.isFinite(v) && v >= 1 && v <= 100)
+      .filter(v => Number.isFinite(v) && v >= 1 && v <= 120)
     if (arr.length) {
       detailHorizons.value = Array.from(new Set(arr)).sort((a, b) => a - b)
     }
@@ -261,7 +261,7 @@ const loadStrategyDetail = async () => {
   if (!params.start_date) params.days = detailDays.value
 
   const res: any = await getBacktestDashboardStrategyDetail(params)
-  if (res?.error) throw new Error(res.error)
+  if (res?.error) { detail.value = null; console.warn('strategyDetail:', res.error); return }
   detail.value = res
 }
 
@@ -278,7 +278,7 @@ const loadDistribution = async () => {
   if (!params.start_date) params.days = distDays.value
 
   const res: any = await getBacktestDashboardDistribution(params)
-  if (res?.error) throw new Error(res.error)
+  if (res?.error) { distribution.value = null; console.warn('distribution:', res.error); return }
   distribution.value = res
 }
 
@@ -297,7 +297,7 @@ const loadTradePairs = async () => {
   if (!params.start_date) params.days = pairDays.value
 
   const res: any = await getBacktestDashboardTradePairs(params)
-  if (res?.error) throw new Error(res.error)
+  if (res?.error) { tradePairs.value = null; console.warn('tradePairs:', res.error); return }
   tradePairs.value = res
 }
 

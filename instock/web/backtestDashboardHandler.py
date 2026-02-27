@@ -659,7 +659,16 @@ class ReturnDistributionHandler(webBase.BaseHandler, ABC):
         sql = f"SELECT `rate_{h}` as v FROM `{table_name}` WHERE `date` >= %s AND `date` <= %s AND `rate_{h}` IS NOT NULL"
         df = pd.read_sql(sql, con=mdb.engine(), params=(start_date, end_date))
         if df is None or len(df) == 0:
-            self.write(json.dumps({'error': '无收益数据'}, ensure_ascii=False))
+            # 无收益数据属于正常情况（信号太新，尚无 rate 数据），返回空分布而非 error
+            bins_empty = [{'range': lab, 'count': 0, 'percentage': 0} for lab in ['<-10%', '-10%~-5%', '-5%~0%', '0%~5%', '5%~10%', '>10%']]
+            self.write(json.dumps({
+                'strategy_name': strategy,
+                'strategy_cn': meta.get('cn', strategy),
+                'date_range': date_range,
+                'horizon': h,
+                'bins': bins_empty,
+                'total': 0,
+            }, ensure_ascii=False, default=_json_default))
             return
 
         values = df['v'].astype(float)

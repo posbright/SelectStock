@@ -98,6 +98,11 @@ const loadData = async () => {
       columnDefs.value = res.columns
       tableData.value = Array.isArray(res.data) ? res.data : []
       totalCount.value = res.total ?? tableData.value.length
+      // 日期回退提示：后端自动切换到最近有数据的日期
+      if (res.actual_date && res.actual_date !== selectedDate.value) {
+        selectedDate.value = res.actual_date
+        ElMessage.info(`${params.date} 暂无数据，已自动切换到最近日期 ${res.actual_date}`)
+      }
     } else if (Array.isArray(res)) {
       // 兼容旧格式
       tableData.value = res
