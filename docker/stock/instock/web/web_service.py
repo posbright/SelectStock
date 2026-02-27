@@ -35,6 +35,7 @@ import instock.web.dataTableHandler as dataTableHandler
 import instock.web.dataIndicatorsHandler as dataIndicatorsHandler
 import instock.web.strategyParamsHandler as strategyParamsHandler
 import instock.web.backtestHandler as backtestHandler
+import instock.web.backtestDashboardHandler as backtestDashboardHandler
 import instock.web.klineHandler as klineHandler
 import instock.web.base as webBase
 
@@ -42,10 +43,19 @@ __author__ = 'InStock'
 __date__ = '2026/02/14'
 
 
+class RobotsTxtHandler(tornado.web.RequestHandler, ABC):
+    """返回 robots.txt，避免搜索引擎爬虫产生大量 404 日志"""
+    def get(self):
+        self.set_header("Content-Type", "text/plain")
+        self.write("User-agent: *\nDisallow: /instock/\nDisallow: /api/\n")
+
+
 class Application(tornado.web.Application):
     def __init__(self):
         static_path = os.path.join(os.path.dirname(__file__), "static")
         handlers = [
+            # ── robots.txt（避免搜索引擎爬虫产生大量 404 日志） ──
+            (r"/robots\.txt", RobotsTxtHandler),
             # ── JSON API 路由（Vue SPA 通过 AJAX 调用）──
             (r"/instock/api_data", dataTableHandler.GetStockDataHandler),
             (r"/instock/api/trade_date", dataTableHandler.GetTradeDateHandler),
@@ -64,6 +74,12 @@ class Application(tornado.web.Application):
             (r"/instock/api/backtest/config", backtestHandler.GetBacktestConfigHandler),
             (r"/instock/api/backtest/run", backtestHandler.RunBacktestHandler),
             (r"/instock/api/backtest/batch", backtestHandler.RunBatchBacktestHandler),
+            # 回测看板
+            (r"/instock/api/backtest/dashboard/overview", backtestDashboardHandler.DashboardOverviewHandler),
+            (r"/instock/api/backtest/dashboard/strategy_detail", backtestDashboardHandler.StrategyDetailHandler),
+            (r"/instock/api/backtest/dashboard/distribution", backtestDashboardHandler.ReturnDistributionHandler),
+            (r"/instock/api/backtest/dashboard/timeline", backtestDashboardHandler.PerformanceTimelineHandler),
+            (r"/instock/api/backtest/dashboard/trade_pairs", backtestDashboardHandler.TradePairHandler),
             # ── Vue SPA 路由 ──
             # 静态资源（assets/）
             (r"/assets/(.*)", tornado.web.StaticFileHandler, {"path": os.path.join(static_path, "assets")}),

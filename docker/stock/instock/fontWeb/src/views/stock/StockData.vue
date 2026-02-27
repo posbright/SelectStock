@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getStockData, toggleAttention, getTradeDate } from '@/api/stock'
 import { getColumnTooltip, strategyDescriptions } from '@/utils/columnTooltips'
+import { buildBacktestDashboardQuery } from '@/utils/backtestDashboardLinks'
 import dayjs from 'dayjs'
 
 // 列定义接口
@@ -34,6 +35,7 @@ const pageSize = ref(50)
 const tableName = computed(() => route.meta.tableName as string || 'cn_stock_spot')
 const pageTitle = computed(() => route.meta.title as string || '股票数据')
 const noDateFilter = computed(() => route.meta.noDateFilter as boolean ?? false)
+const isBacktestSummary = computed(() => tableName.value === 'cn_stock_backtest')
 
 // 策略说明（仅策略页面显示）
 const strategyDesc = computed(() => {
@@ -126,6 +128,27 @@ const viewIndicators = (row: any) => {
       name: row.name,
       strategy: tableName.value
     }
+  })
+}
+
+const goBacktestDashboard = (row: any) => {
+  router.push({
+    path: '/backtest/dashboard',
+    query: buildBacktestDashboardQuery(row)
+  })
+}
+
+const goBacktestTimeline = (row: any) => {
+  router.push({
+    path: '/backtest/dashboard',
+    query: buildBacktestDashboardQuery(row, 'timeline')
+  })
+}
+
+const goBacktestDetail = (row: any) => {
+  router.push({
+    path: '/backtest/dashboard',
+    query: buildBacktestDashboardQuery(row, 'detail')
   })
 }
 
@@ -419,10 +442,11 @@ onMounted(async () => {
           </template>
         </el-table-column>
         
-        <!-- 固定列：操作（仅当有code字段时显示） -->
-        <el-table-column v-if="hasCodeField" label="操作" width="100" fixed="right" align="center">
+        <!-- 固定列：操作 -->
+        <el-table-column v-if="hasCodeField || isBacktestSummary" label="操作" width="140" fixed="right" align="center">
           <template #default="{ row }">
             <el-button
+              v-if="hasCodeField"
               :type="row.cdatetime ? 'warning' : 'primary'"
               size="small"
               text
@@ -433,6 +457,36 @@ onMounted(async () => {
                 <Star v-else />
               </el-icon>
               {{ row.cdatetime ? '取消' : '关注' }}
+            </el-button>
+
+            <el-button
+              v-if="isBacktestSummary"
+              type="primary"
+              size="small"
+              text
+              @click="goBacktestDashboard(row)"
+            >
+              看板
+            </el-button>
+
+            <el-button
+              v-if="isBacktestSummary"
+              type="primary"
+              size="small"
+              text
+              @click="goBacktestTimeline(row)"
+            >
+              时间序列
+            </el-button>
+
+            <el-button
+              v-if="isBacktestSummary"
+              type="primary"
+              size="small"
+              text
+              @click="goBacktestDetail(row)"
+            >
+              明细
             </el-button>
           </template>
         </el-table-column>

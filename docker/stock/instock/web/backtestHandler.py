@@ -36,6 +36,10 @@ BACKTEST_PERIODS = {
     '1y': {'label': '1年', 'days': 250},
 }
 
+# 默认展示/统计的收益周期（交易日）
+DEFAULT_HORIZONS = [1, 3, 5, 10, 20]
+MAX_TABLE_HORIZON = 100
+
 # 可选策略列表
 STRATEGY_LIST = []
 for s in tbs.TABLE_CN_STOCK_STRATEGIES:
@@ -68,6 +72,8 @@ class GetBacktestConfigHandler(webBase.BaseHandler, ABC):
         response = {
             'periods': [{'value': k, 'label': v['label'], 'days': v['days']} for k, v in BACKTEST_PERIODS.items()],
             'strategies': STRATEGY_LIST,
+            'default_horizons': DEFAULT_HORIZONS,
+            'max_table_horizon': MAX_TABLE_HORIZON,
         }
         self.write(json.dumps(response, ensure_ascii=False))
 
@@ -82,9 +88,10 @@ class RunBacktestHandler(webBase.BaseHandler, ABC):
         period = self.get_argument("period", default="1m", strip=True)
         start_date = self.get_argument("start_date", default=None, strip=True)
         end_date = self.get_argument("end_date", default=None, strip=True)
+        checkpoints = self.get_argument("checkpoints", default=None, strip=True)
         
         try:
-            result = _run_backtest(code, strategy, period, start_date, end_date)
+            result = _run_backtest(code, strategy, period, start_date, end_date, checkpoints)
             self.write(json.dumps(result, ensure_ascii=False, default=_json_default))
         except Exception as e:
             logging.error(f"RunBacktestHandler处理异常", exc_info=True)
@@ -100,6 +107,8 @@ class RunBatchBacktestHandler(webBase.BaseHandler, ABC):
         strategy = self.get_argument("strategy", default=None, strip=True)
         period = self.get_argument("period", default="1m", strip=True)
         limit = self.get_argument("limit", default="30", strip=True)
+        horizons = self.get_argument("horizons", default=None, strip=True)
+        success_days = self.get_argument("success_days", default=None, strip=True)
         
         if not strategy:
             self.set_status(400)
@@ -107,12 +116,35 @@ class RunBatchBacktestHandler(webBase.BaseHandler, ABC):
             return
         
         try:
-            result = _run_batch_backtest(strategy, period, int(limit))
+            result = _run_batch_backtest(strategy, period, int(limit), horizons=horizons, success_days=success_days)
             self.write(json.dumps(result, ensure_ascii=False, default=_json_default))
         except Exception as e:
             logging.error(f"RunBatchBacktestHandler处理异常", exc_info=True)
             self.set_status(500)
             self.write(json.dumps({"error": str(e)}, ensure_ascii=False))
+
+
+def _parse_int_list(csv_text, *, default=None, min_value=1, max_value=None, max_items=20):
+    if not csv_text:
+        return list(default) if default is not None else []
+    values = []
+    for part in str(csv_text).split(','):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            v = int(part)
+        except Exception:
+            continue
+        if v < min_value:
+            continue
+        if max_value is not None and v > max_value:
+            continue
+        values.append(v)
+    values = sorted(set(values))
+    if max_items is not None and len(values) > max_items:
+        values = values[:max_items]
+    return values
 
 
 def _json_default(obj):
@@ -130,7 +162,7 @@ def _json_default(obj):
     return str(obj)
 
 
-def _run_backtest(code, strategy, period, start_date_str, end_date_str):
+def _run_backtest(code, strategy, period, start_date_str, end_date_str, checkpoints_csv=None):
     """
     对单只股票执行回测
     
@@ -155,6 +187,8 @@ def _run_backtest(code, strategy, period, start_date_str, end_date_str):
     
     period_info = BACKTEST_PERIODS.get(period, BACKTEST_PERIODS['1m'])
     max_days = period_info['days']
+
+    checkpoints = _parse_int_list(checkpoints_csv, default=DEFAULT_HORIZONS, min_value=1, max_value=250, max_items=30)
     
     # 计算日期范围
     now = datetime.datetime.now()
@@ -188,7 +222,6 @@ def _run_backtest(code, strategy, period, start_date_str, end_date_str):
     
     # 计算各天收益率
     returns = []
-    checkpoints = [1, 3, 5, 10, 20, 40, 60, 120, 250]
     for days in checkpoints:
         if days > max_days:
             break
@@ -231,6 +264,7 @@ def _run_backtest(code, strategy, period, start_date_str, end_date_str):
         'buy_date': buy_date_actual,
         'buy_price': round(float(buy_price), 2),
         'returns': returns,
+        'checkpoints': checkpoints,
         'max_return': max_return,
         'max_drawdown': max_drawdown,
         'strategy': strategy,
@@ -241,7 +275,7 @@ def _run_backtest(code, strategy, period, start_date_str, end_date_str):
     return result
 
 
-def _run_batch_backtest(strategy_name, period, limit=30):
+def _run_batch_backtest(strategy_name, period, limit=30, horizons=None, success_days=None):
     """
     批量回测：从策略表读取历史选股记录，计算各周期收益
     
@@ -254,6 +288,16 @@ def _run_batch_backtest(strategy_name, period, limit=30):
     """
     period_info = BACKTEST_PERIODS.get(period, BACKTEST_PERIODS['1m'])
     max_days = period_info['days']
+
+    horizon_list = _parse_int_list(horizons, default=DEFAULT_HORIZONS, min_value=1, max_value=MAX_TABLE_HORIZON, max_items=12)
+    if not horizon_list:
+        horizon_list = list(DEFAULT_HORIZONS)
+
+    success_days_list = _parse_int_list(success_days, default=None, min_value=1, max_value=MAX_TABLE_HORIZON, max_items=1)
+    if success_days_list:
+        success_day = success_days_list[0]
+    else:
+        success_day = min(max_days, max(horizon_list))
     
     # 查找策略对应的表名和函数
     table_name = None
@@ -281,21 +325,24 @@ def _run_batch_backtest(strategy_name, period, limit=30):
     if not mdb.checkTableIsExist(table_name):
         # 策略表不存在时，尝试从缓存数据动态计算
         if strategy_func is not None:
-            return _compute_batch_backtest_onthefly(strategy_func, strategy_cn, strategy_name, period_info, limit)
+            return _compute_batch_backtest_onthefly(
+                strategy_func, strategy_cn, strategy_name, period_info, limit,
+                horizon_list=horizon_list, success_day=success_day,
+            )
         else:
             return {"error": f"策略表 {table_name} 不存在，请先运行数据分析任务（streaming_analysis_job.py）"}
     
     # 读取策略表中有回测数据的记录
     try:
-        # 获取每日汇总
-        rate_col = f'rate_{min(max_days, 20)}'
+        # 获取每日汇总（支持用户自定义 horizon_list）
+        select_avgs = []
+        for h in horizon_list:
+            select_avgs.append(f"ROUND(AVG(`rate_{h}`), 2) as avg_{h}d")
+        rate_col = f'rate_{min(success_day, MAX_TABLE_HORIZON)}'
         sql = f"""SELECT `date`, COUNT(*) as stock_count,
-                  ROUND(AVG(`rate_1`), 2) as avg_1d,
-                  ROUND(AVG(`rate_5`), 2) as avg_5d,
-                  ROUND(AVG(`rate_10`), 2) as avg_10d,
-                  ROUND(AVG(`rate_20`), 2) as avg_20d,
+                  {', '.join(select_avgs)},
                   SUM(CASE WHEN `{rate_col}` > 0 THEN 1 ELSE 0 END) as success_count
-                  FROM `{table_name}` 
+                  FROM `{table_name}`
                   WHERE `rate_1` IS NOT NULL
                   GROUP BY `date` ORDER BY `date` DESC LIMIT {limit}"""
         data = pd.read_sql(sql=sql, con=mdb.engine())
@@ -303,13 +350,19 @@ def _run_batch_backtest(strategy_name, period, limit=30):
         # 查询失败（可能是表结构不匹配），尝试动态计算
         if strategy_func is not None:
             logging.warning(f"策略表 {table_name} 查询失败，切换到动态计算模式: {e}")
-            return _compute_batch_backtest_onthefly(strategy_func, strategy_cn, strategy_name, period_info, limit)
+            return _compute_batch_backtest_onthefly(
+                strategy_func, strategy_cn, strategy_name, period_info, limit,
+                horizon_list=horizon_list, success_day=success_day,
+            )
         return {"error": f"查询失败: {e}"}
     
     if data is None or len(data) == 0:
         # 表存在但无回测数据，尝试动态计算
         if strategy_func is not None:
-            return _compute_batch_backtest_onthefly(strategy_func, strategy_cn, strategy_name, period_info, limit)
+            return _compute_batch_backtest_onthefly(
+                strategy_func, strategy_cn, strategy_name, period_info, limit,
+                horizon_list=horizon_list, success_day=success_day,
+            )
         return {"error": "无回测数据，请先执行策略计算和回测"}
     
     # 汇总统计
@@ -321,37 +374,39 @@ def _run_batch_backtest(strategy_name, period, limit=30):
     for _, row in data.iterrows():
         sc = int(row['stock_count'])
         succ = int(row['success_count'])
+        avg_map = {}
+        for h in horizon_list:
+            avg_map[f'avg_{h}d'] = row.get(f'avg_{h}d')
         details.append({
             'date': row['date'],
             'stock_count': sc,
             'success_count': succ,
             'success_rate': round(100 * succ / sc, 2) if sc > 0 else 0,
-            'avg_1d': row['avg_1d'],
-            'avg_5d': row['avg_5d'],
-            'avg_10d': row['avg_10d'],
-            'avg_20d': row['avg_20d'],
+            **avg_map,
         })
     
+    avg_returns = {}
+    for h in horizon_list:
+        col = f'avg_{h}d'
+        avg_returns[f'{h}d'] = round(float(data[col].mean()), 2) if (col in data.columns and not data[col].isna().all()) else 0
+
     result = {
         'strategy': strategy_cn,
         'strategy_name': strategy_name,
         'period': period_info['label'],
+        'horizons': horizon_list,
+        'success_days': success_day,
         'total_stocks': total_stocks,
         'total_days': len(data),
         'success_count': total_success,
         'success_rate': overall_success_rate,
-        'avg_returns': {
-            '1d': round(float(data['avg_1d'].mean()), 2) if not data['avg_1d'].isna().all() else 0,
-            '5d': round(float(data['avg_5d'].mean()), 2) if not data['avg_5d'].isna().all() else 0,
-            '10d': round(float(data['avg_10d'].mean()), 2) if not data['avg_10d'].isna().all() else 0,
-            '20d': round(float(data['avg_20d'].mean()), 2) if not data['avg_20d'].isna().all() else 0,
-        },
+        'avg_returns': avg_returns,
         'details': details,
     }
     return result
 
 
-def _compute_batch_backtest_onthefly(strategy_func, strategy_cn, strategy_name, period_info, limit):
+def _compute_batch_backtest_onthefly(strategy_func, strategy_cn, strategy_name, period_info, limit, horizon_list=None, success_day=None):
     """
     策略表不存在时，从缓存数据动态计算批量回测结果。
     
@@ -364,7 +419,16 @@ def _compute_batch_backtest_onthefly(strategy_func, strategy_cn, strategy_name, 
     import instock.lib.trade_time as trd_mod
 
     max_days = period_info['days']
-    rate_days = min(max_days, 20)
+
+    horizon_list = list(horizon_list) if horizon_list else list(DEFAULT_HORIZONS)
+    horizon_list = [int(h) for h in horizon_list if 1 <= int(h) <= MAX_TABLE_HORIZON]
+    horizon_list = sorted(set(horizon_list))
+    if not horizon_list:
+        horizon_list = list(DEFAULT_HORIZONS)
+
+    if success_day is None:
+        success_day = min(max_days, max(horizon_list))
+    rate_days = min(int(success_day), MAX_TABLE_HORIZON)
 
     # 1. 获取股票代码列表
     try:
@@ -403,8 +467,9 @@ def _compute_batch_backtest_onthefly(strategy_func, strategy_cn, strategy_name, 
     for d in trade_dates:
         ds = d.strftime("%Y-%m-%d")
         date_results[ds] = {
-            'stock_count': 0, 'success_count': 0,
-            'rates_1': [], 'rates_5': [], 'rates_10': [], 'rates_20': []
+            'stock_count': 0,
+            'success_count': 0,
+            'rates': {h: [] for h in horizon_list},
         }
 
     # 5. 定义单只股票处理函数
@@ -437,7 +502,7 @@ def _compute_batch_backtest_onthefly(strategy_func, strategy_cn, strategy_name, 
                 continue
             buy_price = float(future.iloc[0]['close'])
             rates = {}
-            for days in [1, 5, 10, 20]:
+            for days in horizon_list:
                 if days < len(future):
                     sell_price = float(future.iloc[days]['close'])
                     rates[days] = round(100.0 * (sell_price - buy_price) / buy_price, 2)
@@ -456,11 +521,11 @@ def _compute_batch_backtest_onthefly(strategy_func, strategy_cn, strategy_name, 
                         continue
                     dr = date_results[date_str]
                     dr['stock_count'] += 1
-                    for days, key in [(1, 'rates_1'), (5, 'rates_5'), (10, 'rates_10'), (20, 'rates_20')]:
+                    for days in horizon_list:
                         if days in rates:
-                            dr[key].append(rates[days])
-                            if days == rate_days and rates[days] > 0:
-                                dr['success_count'] += 1
+                            dr['rates'][days].append(rates[days])
+                    if rate_days in rates and rates[rate_days] > 0:
+                        dr['success_count'] += 1
             except Exception:
                 continue
 
@@ -468,7 +533,7 @@ def _compute_batch_backtest_onthefly(strategy_func, strategy_cn, strategy_name, 
     details = []
     total_stocks = 0
     total_success = 0
-    all_1d, all_5d, all_10d, all_20d = [], [], [], []
+    all_rates = {h: [] for h in horizon_list}
 
     for d in trade_dates:
         ds = d.strftime("%Y-%m-%d")
@@ -478,24 +543,18 @@ def _compute_batch_backtest_onthefly(strategy_func, strategy_cn, strategy_name, 
             continue
         total_stocks += sc
         total_success += dr['success_count']
-        avg_1d = round(sum(dr['rates_1']) / len(dr['rates_1']), 2) if dr['rates_1'] else None
-        avg_5d = round(sum(dr['rates_5']) / len(dr['rates_5']), 2) if dr['rates_5'] else None
-        avg_10d = round(sum(dr['rates_10']) / len(dr['rates_10']), 2) if dr['rates_10'] else None
-        avg_20d = round(sum(dr['rates_20']) / len(dr['rates_20']), 2) if dr['rates_20'] else None
-        all_1d.extend(dr['rates_1'])
-        all_5d.extend(dr['rates_5'])
-        all_10d.extend(dr['rates_10'])
-        all_20d.extend(dr['rates_20'])
+        avg_map = {}
+        for h in horizon_list:
+            vals = dr['rates'][h]
+            avg_map[f'avg_{h}d'] = round(sum(vals) / len(vals), 2) if vals else None
+            all_rates[h].extend(vals)
 
         details.append({
             'date': d,
             'stock_count': sc,
             'success_count': dr['success_count'],
             'success_rate': round(100.0 * dr['success_count'] / sc, 2) if sc > 0 else 0,
-            'avg_1d': avg_1d,
-            'avg_5d': avg_5d,
-            'avg_10d': avg_10d,
-            'avg_20d': avg_20d,
+            **avg_map,
         })
 
     if not details:
@@ -503,20 +562,22 @@ def _compute_batch_backtest_onthefly(strategy_func, strategy_cn, strategy_name, 
 
     overall_sr = round(100.0 * total_success / total_stocks, 2) if total_stocks > 0 else 0
 
+    avg_returns = {}
+    for h in horizon_list:
+        vals = all_rates[h]
+        avg_returns[f'{h}d'] = round(sum(vals) / len(vals), 2) if vals else 0
+
     return {
         'strategy': f'{strategy_cn}（实时计算）',
         'strategy_name': strategy_name,
         'period': period_info['label'],
+        'horizons': horizon_list,
+        'success_days': rate_days,
         'total_stocks': total_stocks,
         'total_days': len(details),
         'success_count': total_success,
         'success_rate': overall_sr,
-        'avg_returns': {
-            '1d': round(sum(all_1d) / len(all_1d), 2) if all_1d else 0,
-            '5d': round(sum(all_5d) / len(all_5d), 2) if all_5d else 0,
-            '10d': round(sum(all_10d) / len(all_10d), 2) if all_10d else 0,
-            '20d': round(sum(all_20d) / len(all_20d), 2) if all_20d else 0,
-        },
+        'avg_returns': avg_returns,
         'details': details,
     }
 

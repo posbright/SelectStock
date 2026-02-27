@@ -78,7 +78,7 @@ class eastmoney_fetcher:
         :param url: 请求URL
         :param params: 请求参数
         :param retry: 重试次数
-        :param timeout: 超时时间
+        :param timeout: 超时时间（直连时使用；走代理时自动缩短以避免长时间等待失效代理）
         :return: 响应对象
         """
         headers = {
@@ -95,13 +95,15 @@ class eastmoney_fetcher:
             current_proxy = proxy_pool.get_proxies()
             # 记录当前使用的代理URL（用于后续反馈成功/失败）
             proxy_url = current_proxy.get("http") if current_proxy else None
+            # 走代理时使用更短的超时（免费代理不稳定，长等待没有意义）
+            effective_timeout = min(timeout, 15) if proxy_url else timeout
             try:
                 response = session.get(
                     url,
                     headers=headers,
                     proxies=current_proxy,
                     params=params,
-                    timeout=timeout
+                    timeout=effective_timeout
                 )
                 response.raise_for_status()  # 检查HTTP错误
                 # 请求成功，反馈给代理池

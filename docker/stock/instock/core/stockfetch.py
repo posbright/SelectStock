@@ -30,6 +30,7 @@ import instock.core.crawling.stock_hist_sina as shs  # 新浪财经历史K线
 import instock.core.crawling.stock_hist_tencent as sht  # 腾讯财经历史K线
 import time
 import random
+import threading
 
 __author__ = 'InStock'
 
@@ -39,6 +40,101 @@ DATA_SOURCE_RETRY_INTERVAL = int(os.environ.get('DATA_SOURCE_RETRY_INTERVAL', 90
 
 # 历史数据配置（支持环境变量覆盖）
 HIST_DATA_DEFAULT_YEARS = int(os.environ.get('HIST_DATA_DEFAULT_YEARS', 10))  # 默认获取历史数据年数
+
+
+# ══════════════════════════════════════════════
+# 数据源健康度追踪（全局，线程安全）
+# ══════════════════════════════════════════════
+# 当某个数据源在短时间内连续失败时，将其降级处理：
+# - 将该数据源排到列表末尾，优先使用其他数据源
+# - 降级持续 SOURCE_COOLDOWN_SECONDS 秒后自动恢复
+# 这样可以避免在免费代理不可用时反复尝试东方财富浪费大量时间
+_source_health_lock = threading.Lock()
+_source_fail_counts = {}       # {"东方财富": 5, "腾讯财经": 0, ...}
+_source_cooldown_until = {}    # {"东方财富": timestamp, ...}
+
+SOURCE_FAIL_THRESHOLD = 5          # 连续失败 N 次后降级该数据源
+SOURCE_COOLDOWN_SECONDS = 300      # 降级冷却时间（秒）
+
+
+def _report_source_failure(source_name):
+    """报告数据源失败，累积达到阈值时触发降级"""
+    with _source_health_lock:
+        _source_fail_counts[source_name] = _source_fail_counts.get(source_name, 0) + 1
+        if _source_fail_counts[source_name] >= SOURCE_FAIL_THRESHOLD:
+            cooldown_end = time.time() + SOURCE_COOLDOWN_SECONDS
+            _source_cooldown_until[source_name] = cooldown_end
+            logging.warning(
+                f"数据源 [{source_name}] 连续失败 {_source_fail_counts[source_name]} 次，"
+                f"降级 {SOURCE_COOLDOWN_SECONDS} 秒（优先使用其他数据源）"
+            )
+
+
+def _report_source_success(source_name):
+    """报告数据源成功，重置失败计数和冷却状态"""
+    with _source_health_lock:
+        _source_fail_counts[source_name] = 0
+        _source_cooldown_until.pop(source_name, None)
+
+
+def _is_source_degraded(source_name):
+    """检查数据源是否处于降级冷却期"""
+    with _source_health_lock:
+        cooldown_end = _source_cooldown_until.get(source_name)
+        if cooldown_end is None:
+            return False
+        if time.time() >= cooldown_end:
+            # 冷却期已过，自动恢复
+            _source_cooldown_until.pop(source_name, None)
+            _source_fail_counts[source_name] = 0
+            logging.info(f"数据源 [{source_name}] 冷却期结束，已恢复正常优先级")
+            return False
+        return True
+
+
+def _sort_sources_by_health(data_sources):
+    """按健康度排序数据源：降级的数据源排到末尾（仍可用，只是降低优先级）"""
+    healthy = []
+    degraded = []
+    for item in data_sources:
+        if _is_source_degraded(item[0]):
+            degraded.append(item)
+        else:
+            healthy.append(item)
+    return healthy + degraded
+
+
+# ══════════════════════════════════════════════
+# 日志聚合（避免重复的代理失败日志刷屏）
+# ══════════════════════════════════════════════
+_log_agg_lock = threading.Lock()
+_log_agg_counts = {}     # {source_name: count}
+_log_agg_last_time = {}  # {source_name: timestamp}
+_LOG_AGG_INTERVAL = 60   # 每 60 秒输出一次聚合日志
+
+
+def _log_source_failure_aggregated(source_name, code, error_msg):
+    """聚合同一数据源的连续失败日志，避免刷屏
+    
+    对于同一数据源，在 _LOG_AGG_INTERVAL 秒内只输出一条 WARNING 日志，
+    后续的失败只计数，到达间隔后汇总输出。
+    """
+    with _log_agg_lock:
+        now = time.time()
+        last_time = _log_agg_last_time.get(source_name, 0)
+        _log_agg_counts[source_name] = _log_agg_counts.get(source_name, 0) + 1
+        
+        if now - last_time >= _LOG_AGG_INTERVAL:
+            count = _log_agg_counts[source_name]
+            if count > 1:
+                logging.warning(
+                    f"从{source_name}获取数据失败（最近 {_LOG_AGG_INTERVAL}s 内累计 {count} 次）: "
+                    f"最新失败 {code} - {error_msg}"
+                )
+            else:
+                logging.warning(f"从{source_name}获取数据失败: {code} - {error_msg}")
+            _log_agg_counts[source_name] = 0
+            _log_agg_last_time[source_name] = now
 
 
 def _retry_sleep(retry_count, base_interval=None):
@@ -119,6 +215,7 @@ def fetch_etfs(date):
         ("腾讯财经", etc.fund_etf_spot_tencent),
         ("新浪财经", esa.fund_etf_spot_sina),
     ]
+    data_sources = _sort_sources_by_health(data_sources)
     
     for source_name, fetch_func in data_sources:
         try:
@@ -126,9 +223,11 @@ def fetch_etfs(date):
             data = fetch_func()
             if data is not None and len(data.index) > 0:
                 source = source_name
+                _report_source_success(source_name)
                 break
         except Exception as e:
             logging.warning(f"{source_name}ETF数据获取失败：{e}，切换下一个数据源")
+            _report_source_failure(source_name)
             data = None
     
     # 所有数据源都失败
@@ -162,6 +261,7 @@ def fetch_stocks(date):
         ("腾讯财经", stc.stock_zh_a_spot_tencent),
         ("新浪财经", ssa.stock_zh_a_spot_sina),
     ]
+    data_sources = _sort_sources_by_health(data_sources)
     
     for source_name, fetch_func in data_sources:
         try:
@@ -169,9 +269,11 @@ def fetch_stocks(date):
             data = fetch_func()
             if data is not None and len(data.index) > 0:
                 source = source_name
+                _report_source_success(source_name)
                 break
         except Exception as e:
             logging.warning(f"{source_name}数据获取失败：{e}，切换下一个数据源")
+            _report_source_failure(source_name)
             data = None
     
     # 所有数据源都失败
@@ -700,6 +802,9 @@ def _fetch_from_sources(code, fetch_start, date_end, adjust=''):
         ))
     ]
 
+    # 按数据源健康度排序：降级的排到末尾，减少不必要的超时等待
+    data_sources = _sort_sources_by_health(data_sources)
+
     for source_name, fetch_func in data_sources:
         for retry in range(DATA_SOURCE_MAX_RETRIES):
             try:
@@ -708,10 +813,12 @@ def _fetch_from_sources(code, fetch_start, date_end, adjust=''):
                     # 统一列名为 CN_STOCK_HIST_DATA 标准
                     new_data.columns = tuple(tbs.CN_STOCK_HIST_DATA['columns'])
                     logging.debug(f"从{source_name}成功获取数据: {code} ({fetch_start}-{date_end})")
+                    _report_source_success(source_name)
                     return new_data
             except (ConnectionError, ConnectionResetError, ConnectionAbortedError) as e:
                 # 连接级错误（IP封禁/网络不可达）：立即跳到下一个数据源，不浪费时间重试
-                logging.warning(f"从{source_name}获取数据失败(连接错误，跳过重试): {code} - {e}")
+                _log_source_failure_aggregated(source_name, code, str(e))
+                _report_source_failure(source_name)
                 break
             except Exception as e:
                 err_str = str(e)
@@ -720,11 +827,14 @@ def _fetch_from_sources(code, fetch_start, date_end, adjust=''):
                     'RemoteDisconnected', 'Connection aborted', 'ConnectionReset',
                     'SSLError', 'SSLEOFError', 'UNEXPECTED_EOF', 'Max retries exceeded'
                 ]):
-                    logging.warning(f"从{source_name}获取数据失败(连接/SSL错误，跳过重试): {code} - {e}")
+                    _log_source_failure_aggregated(source_name, code, err_str)
+                    _report_source_failure(source_name)
                     break
                 logging.warning(f"从{source_name}获取数据失败(尝试{retry+1}/{DATA_SOURCE_MAX_RETRIES}): {code} - {e}")
                 if retry < DATA_SOURCE_MAX_RETRIES - 1:
                     _retry_sleep(retry)
+                else:
+                    _report_source_failure(source_name)
 
         # 当前数据源所有重试都失败，尝试下一个
     return None
