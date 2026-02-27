@@ -1,14 +1,96 @@
-2026-02-26 14:27:38,310 Uncaught exception GET /favicon.svg (::1)
-HTTPServerRequest(protocol='http', host='localhost:19988', method='GET', uri='/favicon.svg', version='HTTP/1.1', remote_ip='::1')
-Traceback (most recent call last):
-  File "Q:\tools\SelectStock\.venv\Lib\site-packages\tornado\web.py", line 1857, in _execute
-    result = method(*self.path_args, **self.path_kwargs)
-TypeError: StaticFileHandler.get() missing 1 required positional argument: 'path'
-2026-02-26 14:27:38,313 500 GET /favicon.svg (::1) 2.92ms
-2026-02-26 14:30:36,327 Uncaught exception GET /favicon.svg (::1)
-HTTPServerRequest(protocol='http', host='localhost:19988', method='GET', uri='/favicon.svg', version='HTTP/1.1', remote_ip='::1')
-Traceback (most recent call last):
-  File "Q:\tools\SelectStock\.venv\Lib\site-packages\tornado\web.py", line 1857, in _execute
-    result = method(*self.path_args, **self.path_kwargs)
-TypeError: StaticFileHandler.get() missing 1 required positional argument: 'path'
-2026-02-26 14:30:36,328 500 GET /favicon.svg (::1) 1.73ms
+2026-02-26 17:44:51 [INFO] root: 数据库链接信息：mysql+pymysql://root:***@127.0.0.1:3306/instockdb?charset=utf8mb4
+2026-02-26 17:44:53 [INFO] root: 服务已启动，web地址 : http://localhost:9988/
+2026-02-26 17:45:12 [INFO] root: 代理池：正在从免费代理源获取代理...
+2026-02-26 17:47:19 [INFO] root: 代理池：其中 1 个支持 HTTPS 隧道
+2026-02-26 17:47:19 [INFO] root: 代理池：获取 1827 个候选代理，验证 500 个，通过 67 个
+2026-02-26 17:47:19 [INFO] root: 代理池：后台刷新已启动（间隔 600 秒）
+2026-02-26 17:47:19 [INFO] tornado.access: 200 GET /instock/api/trade_date (127.0.0.1) 127163.89ms
+2026-02-26 17:47:19 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_strategy_gpt_value&page=1&page_size=50&date=2026-02-26 (127.0.0.1) 6.80ms
+2026-02-26 17:47:19 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_strategy_gpt_value&page=1&page_size=50&date=2026-02-26 (127.0.0.1) 8.18ms
+2026-02-26 17:50:13 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_spot_buy&page=1&page_size=50&date=2026-02-26 (127.0.0.1) 8.02ms
+2026-02-26 17:50:18 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_spot_buy&page=1&page_size=50&date=2026-02-25 (127.0.0.1) 3.33ms
+2026-02-26 17:50:20 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_strategy_gpt_value&page=1&page_size=50&date=2026-02-25 (127.0.0.1) 2.32ms
+2026-02-26 17:50:27 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_strategy_enter&page=1&page_size=50&date=2026-02-25 (127.0.0.1) 8.42ms
+2026-02-26 17:50:30 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_strategy_keep_increasing&page=1&page_size=50&date=2026-02-25 (127.0.0.1) 8.81ms
+2026-02-26 17:50:32 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_strategy_parking_apron&page=1&page_size=50&date=2026-02-25 (127.0.0.1) 7.57ms
+2026-02-26 17:50:34 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_strategy_backtrace_ma250&page=1&page_size=50&date=2026-02-25 (127.0.0.1) 7.71ms
+2026-02-26 17:50:35 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_strategy_breakthrough_platform&page=1&page_size=50&date=2026-02-25 (127.0.0.1) 8.89ms
+2026-02-26 17:50:37 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_strategy_low_backtrace_increase&page=1&page_size=50&date=2026-02-25 (127.0.0.1) 2.48ms
+2026-02-26 17:50:38 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_strategy_turtle_trade&page=1&page_size=50&date=2026-02-25 (127.0.0.1) 7.41ms
+2026-02-26 17:50:41 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_strategy_low_atr&page=1&page_size=50&date=2026-02-25 (127.0.0.1) 7.64ms
+2026-02-26 17:50:42 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_strategy_climax_limitdown&page=1&page_size=50&date=2026-02-25 (127.0.0.1) 7.43ms
+2026-02-26 17:50:43 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_strategy_trend_pullback&page=1&page_size=50&date=2026-02-25 (127.0.0.1) 25.85ms
+2026-02-26 17:50:46 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_strategy_trend_pullback&page=1&page_size=50&date=2026-02-24 (127.0.0.1) 15.79ms
+2026-02-26 17:50:51 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_strategy_low_atr&page=1&page_size=50&date=2026-02-24 (127.0.0.1) 4.72ms
+2026-02-26 17:50:52 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_strategy_climax_limitdown&page=1&page_size=50&date=2026-02-24 (127.0.0.1) 4.31ms
+2026-02-26 17:50:59 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_spot&page=1&page_size=50&date=2026-02-24 (127.0.0.1) 88.78ms
+2026-02-26 17:50:59 [INFO] tornado.access: 200 GET /instock/api/kline?code=603729&date=2026-02-24&period=daily&name=%E9%BE%99%E9%9F%B5%E8%82%A1%E4%BB%BD (127.0.0.1) 21.65ms
+2026-02-26 17:51:10 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_strategy_breakout_confirm&page=1&page_size=50&date=2026-02-24 (127.0.0.1) 10.86ms
+2026-02-26 17:51:20 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_spot&page=1&page_size=50&date=2026-02-24 (127.0.0.1) 2.04ms
+2026-02-26 17:52:00 [INFO] tornado.access: 200 GET /instock/api/kline?code=603373&date=2026-02-24&period=daily&name=%E5%AE%89%E9%82%A6%E6%8A%A4%E5%8D%AB (127.0.0.1) 40433.15ms
+2026-02-26 17:53:28 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_strategy_oversold_rebound&page=1&page_size=50&date=2026-02-24 (127.0.0.1) 8.79ms
+2026-02-26 17:53:34 [INFO] tornado.access: 200 GET /instock/api_data?name=cn_stock_spot&page=1&page_size=50&date=2026-02-24 (127.0.0.1) 2.19ms
+2026-02-26 17:54:16 [WARNING] root: 从东方财富获取数据失败(连接/SSL错误，跳过重试): 000979 - HTTPConnectionPool(host='38.188.247.12', port=999): Max retries exceeded with url: http://push2his.eastmoney.com/api/qt/stock/kline/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58%2Cf59%2Cf60%2Cf61%2Cf116&ut=7eea3edcaed734bea9cbfc24409ed989&klt=101&fqt=1&secid=0.000979&beg=20160227&end=20160228&_=1623766962675 (Caused by ConnectTimeoutError(<urllib3.connection.HTTPConnection object at 0x7f6e284a07d0>, 'Connection to 38.188.247.12 timed out. (connect timeout=30)'))
+2026-02-26 17:54:58 [WARNING] root: 从东方财富获取数据失败(连接/SSL错误，跳过重试): 000979 - HTTPConnectionPool(host='38.188.247.12', port=999): Max retries exceeded with url: http://push2his.eastmoney.com/api/qt/stock/kline/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58%2Cf59%2Cf60%2Cf61%2Cf116&ut=7eea3edcaed734bea9cbfc24409ed989&klt=101&fqt=1&secid=0.000979&beg=20181228&end=20260224&_=1623766962675 (Caused by ConnectTimeoutError(<urllib3.connection.HTTPConnection object at 0x7f6e2833bbd0>, 'Connection to 38.188.247.12 timed out. (connect timeout=30)'))
+2026-02-26 17:55:23 [INFO] tornado.access: 200 GET /instock/api/kline?code=000979&date=2026-02-24&period=daily&name=%E4%B8%AD%E5%BC%98%E9%80%80 (127.0.0.1) 109402.35ms
+2026-02-26 17:55:25 [WARNING] root: 从东方财富获取数据失败(连接/SSL错误，跳过重试): 000979 - HTTPConnectionPool(host='104.238.30.63', port=63744): Max retries exceeded with url: http://push2his.eastmoney.com/api/qt/stock/kline/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58%2Cf59%2Cf60%2Cf61%2Cf116&ut=7eea3edcaed734bea9cbfc24409ed989&klt=101&fqt=1&secid=0.000979&beg=20160227&end=20160228&_=1623766962675 (Caused by ProxyError('Cannot connect to proxy.', RemoteDisconnected('Remote end closed connection without response')))
+2026-02-26 17:56:04 [WARNING] root: 从东方财富获取数据失败(连接/SSL错误，跳过重试): 000979 - HTTPConnectionPool(host='38.188.247.12', port=999): Max retries exceeded with url: http://push2his.eastmoney.com/api/qt/stock/kline/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58%2Cf59%2Cf60%2Cf61%2Cf116&ut=7eea3edcaed734bea9cbfc24409ed989&klt=101&fqt=1&secid=0.000979&beg=20181228&end=20260224&_=1623766962675 (Caused by ConnectTimeoutError(<urllib3.connection.HTTPConnection object at 0x7f6e28437cd0>, 'Connection to 38.188.247.12 timed out. (connect timeout=30)'))
+2026-02-26 17:56:30 [INFO] tornado.access: 200 GET /instock/api/kline?code=000979&date=2026-02-24&period=weekly&name=%E4%B8%AD%E5%BC%98%E9%80%80 (127.0.0.1) 66815.77ms
+2026-02-26 17:56:51 [WARNING] root: 从东方财富获取数据失败(尝试1/2): 000979 - 503 Server Error: Service Unavailable for url: http://push2his.eastmoney.com/api/qt/stock/kline/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58%2Cf59%2Cf60%2Cf61%2Cf116&ut=7eea3edcaed734bea9cbfc24409ed989&klt=101&fqt=1&secid=0.000979&beg=20181228&end=20260224&_=1623766962675
+2026-02-26 17:56:51 [INFO] root: 等待115秒后重试...
+2026-02-26 17:57:54 [INFO] root: 代理池：重新验证完成，移除 15 个失效代理，剩余 51 个
+2026-02-26 17:58:48 [WARNING] root: 从东方财富获取数据失败(连接/SSL错误，跳过重试): 000979 - HTTPConnectionPool(host='174.136.204.40', port=80): Max retries exceeded with url: http://push2his.eastmoney.com/api/qt/stock/kline/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58%2Cf59%2Cf60%2Cf61%2Cf116&ut=7eea3edcaed734bea9cbfc24409ed989&klt=101&fqt=1&secid=0.000979&beg=20181228&end=20260224&_=1623766962675 (Caused by ProxyError('Cannot connect to proxy.', RemoteDisconnected('Remote end closed connection without response')))
+2026-02-26 17:59:14 [INFO] tornado.access: 200 GET /instock/api/kline?code=000979&date=2026-02-24&period=monthly&name=%E4%B8%AD%E5%BC%98%E9%80%80 (127.0.0.1) 164432.36ms
+2026-02-26 17:59:15 [WARNING] root: 从东方财富获取数据失败(连接/SSL错误，跳过重试): 000979 - HTTPConnectionPool(host='147.45.159.213', port=48206): Max retries exceeded with url: http://push2his.eastmoney.com/api/qt/stock/kline/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58%2Cf59%2Cf60%2Cf61%2Cf116&ut=7eea3edcaed734bea9cbfc24409ed989&klt=101&fqt=1&secid=0.000979&beg=20160227&end=20160228&_=1623766962675 (Caused by ProxyError('Cannot connect to proxy.', NewConnectionError('<urllib3.connection.HTTPConnection object at 0x7f6e2a3c2090>: Failed to establish a new connection: [Errno 111] Connection refused')))
+2026-02-26 17:59:52 [INFO] tornado.access: 200 GET /instock/api/kline?code=000979&date=2026-02-24&period=quarterly&name=%E4%B8%AD%E5%BC%98%E9%80%80 (127.0.0.1) 37101.71ms
+2026-02-26 18:00:41 [INFO] tornado.access: 200 GET /instock/api/kline?code=000979&date=2026-02-24&period=quarterly&name=%E4%B8%AD%E5%BC%98%E9%80%80 (127.0.0.1) 49170.22ms
+2026-02-26 18:02:10 [WARNING] root: 从东方财富获取数据失败(连接/SSL错误，跳过重试): 000979 - HTTPConnectionPool(host='104.238.30.63', port=63744): Max retries exceeded with url: http://push2his.eastmoney.com/api/qt/stock/kline/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58%2Cf59%2Cf60%2Cf61%2Cf116&ut=7eea3edcaed734bea9cbfc24409ed989&klt=101&fqt=1&secid=0.000979&beg=20160227&end=20160228&_=1623766962675 (Caused by ProxyError('Cannot connect to proxy.', RemoteDisconnected('Remote end closed connection without response')))
+2026-02-26 18:02:54 [INFO] tornado.access: 200 GET /instock/api/kline?code=000979&date=2026-02-24&period=monthly&name=%E4%B8%AD%E5%BC%98%E9%80%80 (127.0.0.1) 44919.52ms
+2026-02-26 18:08:34 [INFO] root: 代理池：重新验证完成，移除 11 个失效代理，剩余 40 个
+2026-02-26 18:19:05 [INFO] root: 代理池：重新验证完成，移除 3 个失效代理，剩余 37 个
+2026-02-26 18:29:33 [INFO] root: 代理池：重新验证完成，移除 4 个失效代理，剩余 33 个
+2026-02-26 18:40:06 [INFO] root: 代理池：重新验证完成，移除 3 个失效代理，剩余 30 个
+2026-02-26 19:01:01 [INFO] root: 代理池：重新验证完成，移除 5 个失效代理，剩余 25 个
+2026-02-26 19:11:22 [INFO] root: 代理池：重新验证完成，移除 1 个失效代理，剩余 24 个
+2026-02-26 19:21:34 [INFO] root: 代理池：重新验证完成，移除 2 个失效代理，剩余 22 个
+2026-02-26 19:42:17 [INFO] root: 代理池：重新验证完成，移除 2 个失效代理，剩余 20 个
+2026-02-26 19:52:45 [INFO] root: 代理池：重新验证完成，移除 2 个失效代理，剩余 18 个
+2026-02-26 20:03:14 [INFO] root: 代理池：重新验证完成，移除 1 个失效代理，剩余 17 个
+2026-02-26 20:13:37 [INFO] root: 代理池：重新验证完成，移除 1 个失效代理，剩余 16 个
+2026-02-26 20:34:16 [INFO] root: 代理池：重新验证完成，移除 1 个失效代理，剩余 15 个
+2026-02-26 20:38:27 [INFO] tornado.access: 200 GET / (185.247.137.122) 2.75ms
+2026-02-26 20:38:29 [INFO] tornado.access: 200 GET /favicon.svg (185.247.137.168) 2.65ms
+2026-02-26 20:44:28 [INFO] root: 代理池：重新验证完成，移除 1 个失效代理，剩余 14 个
+2026-02-26 21:04:56 [INFO] root: 代理池：重新验证完成，移除 3 个失效代理，剩余 11 个
+2026-02-26 22:33:20 [INFO] tornado.access: 200 GET / (59.82.83.45) 3.43ms
+2026-02-26 23:07:51 [INFO] root: 代理池：重新验证完成，移除 3 个失效代理，剩余 8 个
+2026-02-26 23:16:11 [INFO] tornado.access: 200 GET / (147.185.133.7) 0.59ms
+2026-02-26 23:18:03 [INFO] root: 代理池：重新验证完成，移除 1 个失效代理，剩余 7 个
+2026-02-26 23:28:16 [INFO] root: 代理池：重新验证完成，移除 1 个失效代理，剩余 6 个
+2026-02-27 00:29:08 [INFO] root: 代理池：重新验证完成，移除 1 个失效代理，剩余 5 个
+2026-02-27 01:41:40 [INFO] tornado.access: 200 GET / (113.215.189.144) 6.58ms
+2026-02-27 02:20:37 [INFO] root: 代理池：重新验证完成，移除 1 个失效代理，剩余 4 个
+2026-02-27 05:08:18 [WARNING] tornado.access: 404 GET /robots.txt (40.77.167.184) 2.79ms
+2026-02-27 05:08:24 [WARNING] tornado.access: 404 GET /static/js/ace-elements.min.js (40.77.167.5) 1.48ms
+2026-02-27 05:08:25 [INFO] tornado.access: 200 GET /static/css/font-awesome.min-4.5.0.css (40.77.167.5) 2.82ms
+2026-02-27 05:08:25 [WARNING] tornado.access: 404 GET /static/js/bootstrap-datepicker.min.js (40.77.167.5) 0.45ms
+2026-02-27 05:08:25 [WARNING] tornado.access: 404 GET /static/css/ace.min.css (40.77.167.5) 0.46ms
+2026-02-27 05:08:26 [WARNING] tornado.access: 404 GET /static/js/bootstrap-datepicker.zh-CN.min.js (40.77.167.5) 0.50ms
+2026-02-27 05:08:26 [WARNING] tornado.access: 404 GET /static/js/gc.spread.excelio.min.js (40.77.167.5) 0.45ms
+2026-02-27 05:08:30 [WARNING] tornado.access: 404 GET /static/js/FileSaver.js (157.55.39.16) 0.47ms
+2026-02-27 05:08:30 [INFO] tornado.access: 200 GET /static/js/bootstrap.min-3.4.1.js (157.55.39.16) 1.87ms
+2026-02-27 05:08:31 [WARNING] tornado.access: 404 GET /static/js/gc.spread.sheets.tablesheet.min.js (157.55.39.16) 0.50ms
+2026-02-27 05:08:35 [INFO] tornado.access: 200 GET /static/css/bootstrap.min-3.4.1.css (40.77.167.73) 2.51ms
+2026-02-27 05:08:36 [WARNING] tornado.access: 404 GET /static/css/gc.spread.sheets.excel2013white.css (40.77.167.73) 0.49ms
+2026-02-27 05:08:36 [WARNING] tornado.access: 404 GET /static/js/gc.spread.sheets.resources.zh.min.js (40.77.167.73) 0.53ms
+2026-02-27 05:08:37 [INFO] tornado.access: 200 GET /static/js/jquery.min-3.7.1.js (40.77.167.73) 2.49ms
+2026-02-27 05:08:37 [WARNING] tornado.access: 404 GET /static/js/ace.min.js (40.77.167.73) 0.52ms
+2026-02-27 05:08:37 [WARNING] tornado.access: 404 GET /static/css/bootstrap-datepicker3.min.css (40.77.167.73) 0.43ms
+2026-02-27 05:08:38 [WARNING] tornado.access: 404 GET /static/js/gc.spread.sheets.all.min.js (40.77.167.73) 0.42ms
+2026-02-27 05:08:38 [WARNING] tornado.access: 404 GET /static/css/ace-skins.min.css (40.77.167.73) 0.51ms
+2026-02-27 05:08:39 [WARNING] tornado.access: 404 GET /static/js/ace-extra.min.js (40.77.167.73) 0.44ms
+2026-02-27 05:24:18 [INFO] tornado.access: 200 GET /static/css/font-awesome.min-4.5.0.css (65.55.210.203) 0.80ms
+2026-02-27 05:24:18 [WARNING] tornado.access: 404 GET /static/js/bootstrap-datepicker.min.js (65.55.210.203) 0.51ms
+2026-02-27 05:24:18 [WARNING] tornado.access: 404 GET /static/js/gc.spread.excelio.min.js (65.55.210.203) 0.58ms
+2026-02-27 05:24:18 [WARNING] tornado.access: 404 GET /static/js/gc.spread.sheets.all.min.js (65.55.210.203) 0.51ms
+2026-02-27 05:24:24 [INFO] tornado.access: 200 GET /static/fonts/fontawesome-webfont.woff2?v=4.5.0 (65.55.210.203) 2.89ms
