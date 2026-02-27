@@ -151,11 +151,13 @@ def summarize_backtest():
             
             try:
                 # 统计所有选股记录（无论是否有回测数据）
+                # backtested_count: 已回测的记录数（rate_5 IS NOT NULL）
+                # success_count: 回测 rate_5 > 0 的记录数
+                # stock_count: 全部选股数量
                 sql = f"""SELECT `date`, 
                     COUNT(*) as stock_count,
-                    SUM(CASE WHEN `rate_5` > 0 THEN 1 
-                             WHEN `rate_5` IS NULL THEN NULL
-                             ELSE 0 END) as success_count,
+                    SUM(CASE WHEN `rate_5` IS NOT NULL THEN 1 ELSE 0 END) as backtested_count,
+                    SUM(CASE WHEN `rate_5` > 0 THEN 1 ELSE 0 END) as success_count,
                     ROUND(AVG(`rate_1`), 4) as avg_rate_1,
                     ROUND(AVG(`rate_3`), 4) as avg_rate_3,
                     ROUND(AVG(`rate_5`), 4) as avg_rate_5,
@@ -163,8 +165,7 @@ def summarize_backtest():
                     ROUND(AVG(`rate_20`), 4) as avg_rate_20
                     FROM `{table_name}` 
                     GROUP BY `date`
-                    ORDER BY `date` DESC
-                    LIMIT 30"""
+                    ORDER BY `date` DESC"""
                 
                 data = pd.read_sql(sql=sql, con=mdb.engine())
                 if data is None or len(data) == 0:
@@ -172,13 +173,14 @@ def summarize_backtest():
                 
                 # 添加策略名称（使用表名作为唯一标识，dashboard API 依赖此值匹配策略）
                 data['strategy_name'] = table_name
-                # success_count 可能全为 NULL（未回测），先转数值类型
-                data['success_count'] = pd.to_numeric(data['success_count'], errors='coerce')
-                data['stock_count'] = pd.to_numeric(data['stock_count'], errors='coerce')
-                has_backtest = data['success_count'].notna()
+                # 转数值类型
+                for nc in ('success_count', 'backtested_count', 'stock_count'):
+                    data[nc] = pd.to_numeric(data[nc], errors='coerce').fillna(0).astype(int)
+                # 成功率 = 成功数 / 已回测数 * 100（除以已回测数，而非全部选股数）
+                has_backtest = data['backtested_count'] > 0
                 if has_backtest.any():
                     data.loc[has_backtest, 'success_rate'] = (
-                        data.loc[has_backtest, 'success_count'] / data.loc[has_backtest, 'stock_count'] * 100
+                        data.loc[has_backtest, 'success_count'] / data.loc[has_backtest, 'backtested_count'] * 100
                     ).round(2)
                 if (~has_backtest).any():
                     data.loc[~has_backtest, 'success_rate'] = None

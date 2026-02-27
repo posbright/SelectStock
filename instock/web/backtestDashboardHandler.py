@@ -284,9 +284,10 @@ def _resolve_date_range(handler: webBase.BaseHandler, table_name: str, default_d
 def _get_strategy_map():
     """strategy_key -> {table, cn, type}
 
-    支持两种 key 查找：
+    支持多种 key 查找：
     1. 表名（主键）：如 'cn_stock_strategy_enter'
     2. 中文名（兼容旧数据）：如 '放量上涨'
+    3. 别名：如 'indicators_buy'
     """
     mapping = {}
     for s in tbs.TABLE_CN_STOCK_STRATEGIES:
@@ -315,6 +316,30 @@ def _get_strategy_map():
     if tbs.TABLE_CN_STOCK_STRATEGY_GPT_VALUE['cn'] != tbs.TABLE_CN_STOCK_STRATEGY_GPT_VALUE['name']:
         mapping[tbs.TABLE_CN_STOCK_STRATEGY_GPT_VALUE['cn']] = gpt_entry
     return mapping
+
+
+def _resolve_strategy(strategy_key: str, strategy_map: dict = None):
+    """查找策略，支持精确匹配 + strip 容错。
+
+    Returns: (meta_dict, None) on success, (None, error_msg) on failure.
+    """
+    if not strategy_key or not strategy_key.strip():
+        return None, '缺少 strategy 参数'
+    key = strategy_key.strip()
+    if strategy_map is None:
+        strategy_map = _get_strategy_map()
+    meta = strategy_map.get(key)
+    if meta:
+        return meta, None
+    # 尝试去掉可能的前缀/后缀空格或不可见字符
+    key_clean = key.strip('\t\n\r\x00\ufeff')
+    if key_clean != key:
+        meta = strategy_map.get(key_clean)
+        if meta:
+            return meta, None
+    # 列出可用策略供诊断
+    available = sorted(set(v['table'] for v in strategy_map.values()))
+    return None, f"未知 strategy: '{key}'，可用策略: {', '.join(available)}"
 
 
 def _get_recent_date_range(table_name: str, trade_days: int):
@@ -397,7 +422,13 @@ class DashboardOverviewHandler(webBase.BaseHandler, ABC):
                 best_day = str(df.loc[best_idx, 'date'])
                 worst_day = str(df.loc[worst_idx, 'date'])
 
-            meta = strategy_map.get(strategy_name, {'cn': strategy_name, 'type': 'unknown'})
+            meta = strategy_map.get(strategy_name)
+            if not meta:
+                # 尝试 strip 容错
+                meta = strategy_map.get(str(strategy_name).strip())
+            if not meta:
+                logging.warning(f"回测看板Overview: 跳过未知 strategy_name='{strategy_name}'")
+                continue
             items.append({
                 'strategy_name': strategy_name,
                 'strategy_cn': meta.get('cn', strategy_name),
@@ -507,10 +538,9 @@ class StrategyDetailHandler(webBase.BaseHandler, ABC):
         page = self.get_argument('page', default='1', strip=True)
         page_size = self.get_argument('page_size', default='50', strip=True)
 
-        strategy_map = _get_strategy_map()
-        meta = strategy_map.get(strategy)
-        if not meta:
-            self.write(json.dumps({'error': '未知 strategy'}, ensure_ascii=False))
+        meta, err = _resolve_strategy(strategy)
+        if err:
+            self.write(json.dumps({'error': err}, ensure_ascii=False))
             return
 
         table_name = meta['table']
@@ -590,10 +620,9 @@ class ReturnDistributionHandler(webBase.BaseHandler, ABC):
         days = self.get_argument('days', default='60', strip=True)
         horizon = self.get_argument('horizon', default='5', strip=True)
 
-        strategy_map = _get_strategy_map()
-        meta = strategy_map.get(strategy)
-        if not meta:
-            self.write(json.dumps({'error': '未知 strategy'}, ensure_ascii=False))
+        meta, err = _resolve_strategy(strategy)
+        if err:
+            self.write(json.dumps({'error': err}, ensure_ascii=False))
             return
 
         table_name = meta['table']
@@ -668,10 +697,9 @@ class TradePairHandler(webBase.BaseHandler, ABC):
         page_size = self.get_argument('page_size', default='50', strip=True)
         max_hold = self.get_argument('max_hold', default='100', strip=True)
 
-        strategy_map = _get_strategy_map()
-        meta = strategy_map.get(strategy)
-        if not meta:
-            self.write(json.dumps({'error': '未知 strategy'}, ensure_ascii=False))
+        meta, err = _resolve_strategy(strategy)
+        if err:
+            self.write(json.dumps({'error': err}, ensure_ascii=False))
             return
 
         buy_table = meta['table']
