@@ -282,18 +282,38 @@ def _resolve_date_range(handler: webBase.BaseHandler, table_name: str, default_d
 
 
 def _get_strategy_map():
-    """strategy_key -> {table_name, cn, type}"""
+    """strategy_key -> {table, cn, type}
+
+    支持两种 key 查找：
+    1. 表名（主键）：如 'cn_stock_strategy_enter'
+    2. 中文名（兼容旧数据）：如 '放量上涨'
+    """
     mapping = {}
     for s in tbs.TABLE_CN_STOCK_STRATEGIES:
-        mapping[s['name']] = {'table': s['name'], 'cn': s['cn'], 'type': 'strategy'}
+        entry = {'table': s['name'], 'cn': s['cn'], 'type': 'strategy'}
+        mapping[s['name']] = entry
+        # 中文名反向映射（兼容旧版 cn_stock_backtest 中 strategy_name 为中文的数据）
+        if s['cn'] and s['cn'] != s['name']:
+            mapping[s['cn']] = entry
 
-    mapping['indicators_buy'] = {'table': tbs.TABLE_CN_STOCK_INDICATORS_BUY['name'], 'cn': '指标买入信号', 'type': 'indicator'}
-    mapping['indicators_sell'] = {'table': tbs.TABLE_CN_STOCK_INDICATORS_SELL['name'], 'cn': '指标卖出信号', 'type': 'indicator'}
-    mapping[tbs.TABLE_CN_STOCK_STRATEGY_GPT_VALUE['name']] = {
+    buy_entry = {'table': tbs.TABLE_CN_STOCK_INDICATORS_BUY['name'], 'cn': '指标买入信号', 'type': 'indicator'}
+    mapping[tbs.TABLE_CN_STOCK_INDICATORS_BUY['name']] = buy_entry
+    mapping['indicators_buy'] = buy_entry
+    mapping['指标买入信号'] = buy_entry
+
+    sell_entry = {'table': tbs.TABLE_CN_STOCK_INDICATORS_SELL['name'], 'cn': '指标卖出信号', 'type': 'indicator'}
+    mapping[tbs.TABLE_CN_STOCK_INDICATORS_SELL['name']] = sell_entry
+    mapping['indicators_sell'] = sell_entry
+    mapping['指标卖出信号'] = sell_entry
+
+    gpt_entry = {
         'table': tbs.TABLE_CN_STOCK_STRATEGY_GPT_VALUE['name'],
         'cn': tbs.TABLE_CN_STOCK_STRATEGY_GPT_VALUE['cn'],
         'type': 'strategy',
     }
+    mapping[tbs.TABLE_CN_STOCK_STRATEGY_GPT_VALUE['name']] = gpt_entry
+    if tbs.TABLE_CN_STOCK_STRATEGY_GPT_VALUE['cn'] != tbs.TABLE_CN_STOCK_STRATEGY_GPT_VALUE['name']:
+        mapping[tbs.TABLE_CN_STOCK_STRATEGY_GPT_VALUE['cn']] = gpt_entry
     return mapping
 
 

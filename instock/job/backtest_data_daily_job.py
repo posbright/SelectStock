@@ -170,8 +170,8 @@ def summarize_backtest():
                 if data is None or len(data) == 0:
                     continue
                 
-                # 添加策略名称和成功率
-                data['strategy_name'] = table.get('cn', table_name)
+                # 添加策略名称（使用表名作为唯一标识，dashboard API 依赖此值匹配策略）
+                data['strategy_name'] = table_name
                 # success_count 可能全为 NULL（未回测），先转数值类型
                 data['success_count'] = pd.to_numeric(data['success_count'], errors='coerce')
                 data['stock_count'] = pd.to_numeric(data['stock_count'], errors='coerce')
