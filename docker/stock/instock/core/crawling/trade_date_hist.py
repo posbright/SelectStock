@@ -304,6 +304,42 @@ function d(t) {
 """
 
 
+def _request_with_ssl_retry(url, proxies=None, timeout=30, max_retries=2):
+    """
+    请求 URL，遇到 SSL 错误时自动降级重试：
+    1. 正常请求（verify=True）
+    2. 如果 SSL 失败且使用了代理，换直连重试
+    3. 最终降级为 verify=False
+    """
+    import urllib3
+    last_exc = None
+    attempts = []
+
+    # 尝试 1：正常请求
+    attempts.append(('proxy+verify', proxies, True))
+    # 尝试 2：直连（如果之前用了代理）
+    if proxies:
+        attempts.append(('direct+verify', None, True))
+    # 尝试 3：直连 + 跳过 SSL 验证
+    attempts.append(('direct+no_verify', None, False))
+
+    for label, proxy, verify in attempts:
+        for retry in range(max_retries):
+            try:
+                r = requests.get(url, proxies=proxy, timeout=timeout, verify=verify)
+                r.raise_for_status()
+                if not verify:
+                    logging.warning(f"trade_date_hist: 使用 verify=False 成功（{label}）")
+                return r
+            except (requests.exceptions.SSLError, requests.exceptions.ConnectionError) as e:
+                last_exc = e
+                logging.warning(f"trade_date_hist请求失败({label}, retry {retry+1}/{max_retries}): {type(e).__name__}")
+            except Exception as e:
+                last_exc = e
+                break  # 非 SSL/连接错误，不重试同一组合
+    raise last_exc
+
+
 def tool_trade_date_hist_sina() -> pd.DataFrame:
     """
     交易日历-历史数据
@@ -316,7 +352,7 @@ def tool_trade_date_hist_sina() -> pd.DataFrame:
     current_proxy = proxy_pool.get_proxies()
     proxy_url = current_proxy.get("http") if current_proxy else None
     try:
-        r = requests.get(url, proxies=current_proxy, timeout=30)
+        r = _request_with_ssl_retry(url, proxies=current_proxy, timeout=30)
         proxy_pool.report_success(proxy_url)
     except Exception as e:
         proxy_pool.report_failure(proxy_url)
