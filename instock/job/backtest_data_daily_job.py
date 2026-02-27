@@ -127,15 +127,25 @@ def main():
 def _migrate_summary_columns(summary_table, horizons):
     """检查 cn_stock_backtest 表是否缺少 avg_rate_N 列，缺少则自动添加。"""
     try:
-        existing = mdb.executeSql(f"SHOW COLUMNS FROM `{summary_table}`")
-        existing_names = {row[0] for row in existing} if existing else set()
-        for h in horizons:
-            col = f'avg_rate_{h}'
-            if col not in existing_names:
-                mdb.executeSql(f"ALTER TABLE `{summary_table}` ADD COLUMN `{col}` FLOAT NULL")
-                logging.info(f"Auto-migrated: added column `{col}` to `{summary_table}`")
+        rows = mdb.executeSqlFetch(f"SHOW COLUMNS FROM `{summary_table}`")
+        existing_names = {row[0] for row in rows} if rows else set()
     except Exception as e:
-        logging.error(f"Migration check failed for {summary_table}: {e}")
+        logging.error(f"Migration SHOW COLUMNS failed for {summary_table}: {e}")
+        existing_names = set()
+
+    for h in horizons:
+        col = f'avg_rate_{h}'
+        if existing_names and col in existing_names:
+            continue
+        try:
+            mdb.executeSql(f"ALTER TABLE `{summary_table}` ADD COLUMN `{col}` FLOAT NULL")
+            logging.info(f"Auto-migrated: added column `{col}` to `{summary_table}`")
+        except Exception as e:
+            # 1060 = Duplicate column name — column already exists, safe to ignore
+            if '1060' in str(e):
+                pass
+            else:
+                logging.error(f"Migration ADD COLUMN `{col}` failed: {e}")
 
 
 def summarize_backtest():
