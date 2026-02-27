@@ -76,12 +76,18 @@ export interface BacktestParams {
   period?: string
   start_date?: string
   end_date?: string
+  /** 回测输出点（逗号分隔，如 1,3,5,10,20） */
+  checkpoints?: string
 }
 
 export interface BatchBacktestParams {
   strategy: string
   period?: string
   limit?: number
+  /** 批量汇总使用的持有天数列表（逗号分隔，如 1,3,5,10,20） */
+  horizons?: string
+  /** 成功定义使用的持有天数（对应 rate_N > 0） */
+  success_days?: number
 }
 
 /** 获取回测配置（可选周期、策略列表） */
@@ -97,6 +103,71 @@ export function runBacktest(params: BacktestParams) {
 /** 批量回测（策略历史验证） */
 export function runBatchBacktest(params: BatchBacktestParams) {
   return request({ url: '/api/backtest/batch', method: 'get', params })
+}
+
+// ============= 回测看板 API =============
+
+export interface DashboardOverviewParams {
+  days?: number
+  metric?: number
+  start_date?: string
+  end_date?: string
+}
+
+export function getBacktestDashboardOverview(params: DashboardOverviewParams) {
+  return request({ url: '/api/backtest/dashboard/overview', method: 'get', params })
+}
+
+export interface DashboardTimelineParams {
+  strategies?: string
+  days?: number
+  horizon?: number
+  start_date?: string
+  end_date?: string
+}
+
+export function getBacktestDashboardTimeline(params: DashboardTimelineParams) {
+  return request({ url: '/api/backtest/dashboard/timeline', method: 'get', params })
+}
+
+export interface DashboardStrategyDetailParams {
+  strategy: string
+  days?: number
+  horizons?: string
+  page?: number
+  page_size?: number
+  start_date?: string
+  end_date?: string
+}
+
+export function getBacktestDashboardStrategyDetail(params: DashboardStrategyDetailParams) {
+  return request({ url: '/api/backtest/dashboard/strategy_detail', method: 'get', params })
+}
+
+export interface DashboardDistributionParams {
+  strategy: string
+  days?: number
+  horizon?: number
+  start_date?: string
+  end_date?: string
+}
+
+export function getBacktestDashboardDistribution(params: DashboardDistributionParams) {
+  return request({ url: '/api/backtest/dashboard/distribution', method: 'get', params })
+}
+
+export interface DashboardTradePairsParams {
+  strategy: string
+  days?: number
+  page?: number
+  page_size?: number
+  max_hold?: number
+  start_date?: string
+  end_date?: string
+}
+
+export function getBacktestDashboardTradePairs(params: DashboardTradePairsParams) {
+  return request({ url: '/api/backtest/dashboard/trade_pairs', method: 'get', params })
 }
 
 // ============= K线数据 API =============

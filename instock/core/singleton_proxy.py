@@ -39,6 +39,7 @@ PROXY_REFRESH_INTERVAL = 600        # 后台刷新间隔（秒），默认10分�
 PROXY_MIN_POOL_SIZE = 3             # 代理池最少保有量，低于此数触发紧急补充
 PROXY_FETCH_WORKERS = 20            # 并发验证线程数
 PROXY_MAX_FAIL_COUNT = 3            # 连续失败次数阈值，超过则移除
+PROXY_STALE_SECONDS = 600           # 代理验证新鲜度阈值（秒），超过此时间未验证的代理权重降低
 
 
 class proxys(metaclass=singleton_type):
@@ -84,8 +85,10 @@ class proxys(metaclass=singleton_type):
         logging.info("代理池：正在从免费代理源获取代理...")
         candidates = self._fetch_from_sources()
         if candidates:
-            # 初始化时只验证前500个，加速启动；后台刷新时会验证更多
-            batch = candidates[:500]
+            # 初始化时验证前800个，加速启动；后台刷新时会验证更多
+            # 随机打乱以混合不同来源的代理，避免总是验证同一批
+            random.shuffle(candidates)
+            batch = candidates[:800]
             verified = self._batch_validate(batch)
             logging.info(f"代理池：获取 {len(candidates)} 个候选代理，验证 {len(batch)} 个，通过 {len(verified)} 个")
         else:
@@ -111,7 +114,10 @@ class proxys(metaclass=singleton_type):
         随机返回一个可用代理。
 
         策略：
-        - 30% 概率返回 None（直连），避免全部请求都走代理导致代理过载
+        - 代理池充足时（>= 10）：30% 直连概率
+        - 代理池偏少时（3~9）：60% 直连概率（避免少量代理被过度使用导致全部封禁）
+        - 代理池极少时（< 3）：80% 直连概率（几乎全部直连，代理仅偶尔使用）
+        - 优先选择最近验证时间较新的代理（过期太久的代理可能已失效）
         - 有 HTTPS 可用代理时，50% 概率选 HTTPS 代理（支持所有流量）
         - 否则返回 HTTP-only 代理（仅代理 HTTP 请求，HTTPS 走直连）
 
@@ -124,35 +130,55 @@ class proxys(metaclass=singleton_type):
         if not all_available:
             return None
 
-        # 30% 概率直连，分散请求压力
-        if random.random() < 0.3:
+        # 根据代理池大小动态调整直连概率
+        pool_count = len(all_available)
+        if pool_count >= 10:
+            direct_probability = 0.3
+        elif pool_count >= PROXY_MIN_POOL_SIZE:
+            direct_probability = 0.6
+        else:
+            direct_probability = 0.8
+
+        if random.random() < direct_probability:
             return None
 
+        # 过滤掉验证时间过久的代理（超过 PROXY_STALE_SECONDS 秒未验证的降低权重）
+        now = time.time()
+
         # 分离 HTTPS 可用和 HTTP-only 代理
-        https_proxies = [p for p, info in all_available if info.get("https_ok")]
-        http_only_proxies = [p for p, info in all_available if not info.get("https_ok")]
+        https_proxies = [(p, info) for p, info in all_available if info.get("https_ok")]
+        http_only_proxies = [(p, info) for p, info in all_available if not info.get("https_ok")]
 
         # 如果有 HTTPS 代理，50% 概率优先用（避免少量HTTPS代理被过度使用）
         if https_proxies and (not http_only_proxies or random.random() < 0.5):
-            proxy = random.choice(https_proxies)
+            proxy = self._freshness_weighted_choice(https_proxies, now)
             return {"http": proxy, "https": proxy}
 
         # 使用 HTTP-only 代理：仅代理 HTTP 流量，HTTPS 走直连
-        all_http = [p for p, _ in all_available]
-        if all_http:
-            proxy = self._weighted_choice(all_http)
+        if all_available:
+            proxy = self._freshness_weighted_choice(all_available, now)
             return {"http": proxy}
 
         return None
 
-    def _weighted_choice(self, available):
-        """加权随机选择：失败次数越少权重越高"""
+    def _freshness_weighted_choice(self, available_with_info, now):
+        """加权随机选择：失败次数越少 + 验证时间越新 → 权重越高
+        
+        权重 = (MAX_FAIL - fail_count) * freshness_factor
+        freshness_factor:
+          - 验证在 PROXY_STALE_SECONDS 秒之内: 1.0
+          - 超过 PROXY_STALE_SECONDS 秒: 0.3（大幅降低但不为零，仍可被选中）
+        """
         weights = []
-        for p in available:
-            info = self._pool.get(p, {})
+        for p, info in available_with_info:
             fail = info.get("fail_count", 0)
-            weights.append(max(1, PROXY_MAX_FAIL_COUNT - fail))
-        return random.choices(available, weights=weights, k=1)[0]
+            base_weight = max(1, PROXY_MAX_FAIL_COUNT - fail)
+            # 新鲜度衰减
+            age = now - info.get("last_verified", 0)
+            freshness = 1.0 if age < PROXY_STALE_SECONDS else 0.3
+            weights.append(base_weight * freshness)
+        proxies = [p for p, _ in available_with_info]
+        return random.choices(proxies, weights=weights, k=1)[0]
 
     def report_failure(self, proxy_url):
         """
@@ -193,25 +219,41 @@ class proxys(metaclass=singleton_type):
     # ══════════════════════════════════════════════
 
     def _fetch_from_sources(self):
-        """从多个免费代理源抓取候选代理，返回去重列表"""
+        """从多个免费代理源并发抓取候选代理，返回去重列表
+        
+        每个代理源独立抓取，单个源失败不影响其他源。
+        使用线程池并发抓取以加速启动。
+        """
         candidates = set()
         fetchers = [
             ("proxylist.geonode.com", self._fetch_geonode),
             ("www.fate0.com/proxylist", self._fetch_fate0),
-            ("raw.githubusercontent.com/proxifly", self._fetch_proxifly),
-            ("raw.githubusercontent.com/TheSpeedX", self._fetch_thespeedx),
-            ("raw.githubusercontent.com/monosans", self._fetch_monosans),
+            ("proxifly/free-proxy-list", self._fetch_proxifly),
+            ("TheSpeedX/PROXY-List", self._fetch_thespeedx),
+            ("monosans/proxy-list", self._fetch_monosans),
+            ("clarketm/proxy-list", self._fetch_clarketm),
+            ("mmpx12/proxy-list", self._fetch_mmpx12),
+            ("roosterkid/openproxylist", self._fetch_roosterkid),
+            ("sunny9577/proxy-scraper", self._fetch_sunny9577),
+            ("MuRongPIG/Proxy-Master", self._fetch_murongpig),
+            ("rdavydov/proxy-list", self._fetch_rdavydov),
+            ("proxy-list.download", self._fetch_proxy_list_download),
         ]
 
-        for name, fetcher in fetchers:
-            try:
-                proxies = fetcher()
-                if proxies:
-                    candidates.update(proxies)
-                    logging.debug(f"代理池：从 {name} 获取 {len(proxies)} 个候选")
-            except Exception as e:
-                logging.debug(f"代理池：从 {name} 获取失败: {e}")
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(fetchers), 10)) as executor:
+            future_to_name = {executor.submit(fetcher): name for name, fetcher in fetchers}
+            for future in concurrent.futures.as_completed(future_to_name):
+                name = future_to_name[future]
+                try:
+                    proxies = future.result()
+                    if proxies:
+                        candidates.update(proxies)
+                        logging.debug(f"代理池：从 {name} 获取 {len(proxies)} 个候选")
+                except Exception as e:
+                    logging.debug(f"代理池：从 {name} 获取失败: {e}")
 
+        logging.info(f"代理池：共从 {len(fetchers)} 个来源获取 {len(candidates)} 个候选代理")
         return list(candidates)
 
     def _fetch_geonode(self):
@@ -291,11 +333,11 @@ class proxys(metaclass=singleton_type):
         proxies = []
         try:
             url = "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt"
-            r = requests.get(url, timeout=10, headers=self._ua_headers())
+            r = requests.get(url, timeout=15, headers=self._ua_headers())
             if r.status_code == 200:
                 lines = r.text.strip().split("\n")
-                # 只取前200个，避免太多
-                for line in lines[:200]:
+                # 取前500个（该源通常有5000+个，全部验证太慢）
+                for line in lines[:500]:
                     p = self._normalize_proxy(line, "http")
                     if p:
                         proxies.append(p)
@@ -308,15 +350,140 @@ class proxys(metaclass=singleton_type):
         proxies = []
         try:
             url = "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt"
-            r = requests.get(url, timeout=10, headers=self._ua_headers())
+            r = requests.get(url, timeout=15, headers=self._ua_headers())
             if r.status_code == 200:
                 lines = r.text.strip().split("\n")
-                for line in lines[:200]:
+                for line in lines[:500]:
                     p = self._normalize_proxy(line, "http")
                     if p:
                         proxies.append(p)
         except Exception:
             pass
+        return proxies
+
+    def _fetch_clarketm(self):
+        """从 clarketm/proxy-list GitHub 获取"""
+        proxies = []
+        try:
+            url = "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt"
+            r = requests.get(url, timeout=15, headers=self._ua_headers())
+            if r.status_code == 200:
+                for line in r.text.strip().split("\n")[:300]:
+                    p = self._normalize_proxy(line, "http")
+                    if p:
+                        proxies.append(p)
+        except Exception:
+            pass
+        return proxies
+
+    def _fetch_mmpx12(self):
+        """从 mmpx12/proxy-list GitHub 获取（HTTP + HTTPS）"""
+        proxies = []
+        urls = [
+            "https://raw.githubusercontent.com/mmpx12/proxy-list/master/http.txt",
+            "https://raw.githubusercontent.com/mmpx12/proxy-list/master/https.txt",
+        ]
+        for url in urls:
+            try:
+                r = requests.get(url, timeout=15, headers=self._ua_headers())
+                if r.status_code == 200:
+                    proto = "https" if "https.txt" in url else "http"
+                    for line in r.text.strip().split("\n")[:300]:
+                        p = self._normalize_proxy(line, proto)
+                        if p:
+                            proxies.append(p)
+            except Exception:
+                continue
+        return proxies
+
+    def _fetch_roosterkid(self):
+        """从 roosterkid/openproxylist GitHub 获取"""
+        proxies = []
+        try:
+            url = "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt"
+            r = requests.get(url, timeout=15, headers=self._ua_headers())
+            if r.status_code == 200:
+                for line in r.text.strip().split("\n")[:300]:
+                    p = self._normalize_proxy(line, "https")
+                    if p:
+                        proxies.append(p)
+        except Exception:
+            pass
+        return proxies
+
+    def _fetch_sunny9577(self):
+        """从 sunny9577/proxy-scraper GitHub 获取"""
+        proxies = []
+        urls = [
+            "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/generated/http_proxies.txt",
+            "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/generated/https_proxies.txt",
+        ]
+        for url in urls:
+            try:
+                r = requests.get(url, timeout=15, headers=self._ua_headers())
+                if r.status_code == 200:
+                    proto = "https" if "https_proxies" in url else "http"
+                    for line in r.text.strip().split("\n")[:300]:
+                        p = self._normalize_proxy(line, proto)
+                        if p:
+                            proxies.append(p)
+            except Exception:
+                continue
+        return proxies
+
+    def _fetch_murongpig(self):
+        """从 MuRongPIG/Proxy-Master GitHub 获取"""
+        proxies = []
+        try:
+            url = "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/http.txt"
+            r = requests.get(url, timeout=15, headers=self._ua_headers())
+            if r.status_code == 200:
+                for line in r.text.strip().split("\n")[:300]:
+                    p = self._normalize_proxy(line, "http")
+                    if p:
+                        proxies.append(p)
+        except Exception:
+            pass
+        return proxies
+
+    def _fetch_rdavydov(self):
+        """从 rdavydov/proxy-list GitHub 获取"""
+        proxies = []
+        urls = [
+            "https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies/http.txt",
+            "https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies/https.txt",
+        ]
+        for url in urls:
+            try:
+                r = requests.get(url, timeout=15, headers=self._ua_headers())
+                if r.status_code == 200:
+                    proto = "https" if "https.txt" in url else "http"
+                    for line in r.text.strip().split("\n")[:300]:
+                        p = self._normalize_proxy(line, proto)
+                        if p:
+                            proxies.append(p)
+            except Exception:
+                continue
+        return proxies
+
+    def _fetch_proxy_list_download(self):
+        """从 proxy-list.download 获取（API接口）"""
+        proxies = []
+        urls = [
+            "https://www.proxy-list.download/api/v1/get?type=http",
+            "https://www.proxy-list.download/api/v1/get?type=https",
+        ]
+        for url in urls:
+            try:
+                r = requests.get(url, timeout=15, headers=self._ua_headers())
+                if r.status_code == 200:
+                    proto = "https" if "type=https" in url else "http"
+                    for line in r.text.strip().split("\r\n"):
+                        p = self._normalize_proxy(line.strip(), proto)
+                        if p:
+                            proxies.append(p)
+            except Exception:
+                continue
         return proxies
 
     # ══════════════════════════════════════════════

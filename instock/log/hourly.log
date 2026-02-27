@@ -1,4 +1,0 @@
-[2026-02-26 17:28:59] 开始执行 basic_data_daily_job
-WARNING:root:东方财富数据获取失败：('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))，切换下一个数据源
-WARNING:root:东方财富ETF数据获取失败：('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))，切换下一个数据源
-[2026-02-26 17:34:00] 执行完成 (成功)

@@ -447,7 +447,9 @@ GET /instock/api/backtest/config
 ```json
 {
   "periods": [{"value": "1w", "label": "1周", "days": 5}, ...],
-  "strategies": [{"name": "cn_stock_strategy_enter", "cn": "放量上涨", "type": "strategy"}, ...]
+    "strategies": [{"name": "cn_stock_strategy_enter", "cn": "放量上涨", "type": "strategy"}, ...],
+    "default_horizons": [1, 3, 5, 10, 20],
+    "max_table_horizon": 100
 }
 ```
 
@@ -462,7 +464,9 @@ GET /instock/api/backtest/run
 | code | string | 是 | 股票代码（如 000001） |
 | strategy | string | 否 | 策略名称 |
 | period | string | 否 | 回测周期（1w/2w/1m/3m/6m/1y），默认 1m |
-| start_date | string | 否 | 买入日期（YYYY-MM-DD），默认自动选择 |
+| start_date | string | 否 | 开始日期（YYYY-MM-DD），默认自动选择 |
+| end_date | string | 否 | 结束日期（YYYY-MM-DD），默认自动选择 |
+| checkpoints | string | 否 | 回测输出点（逗号分隔，如 1,3,5,10,20），默认使用系统默认值 |
 
 **响应**: 返回买入价、各周期收益率、最大涨幅/回撤、策略命中、关键指标
 
@@ -477,8 +481,246 @@ GET /instock/api/backtest/batch
 | strategy | string | 是 | 策略名称 |
 | period | string | 否 | 回测周期，默认 1m |
 | limit | int | 否 | 统计天数，默认 30 |
+| horizons | string | 否 | 汇总使用的持有天数列表（逗号分隔，如 1,3,5,10,20） |
+| success_days | int | 否 | 成功定义使用的持有天数（对应 rate_N > 0） |
 
 **响应**: 返回策略按日汇总的选股数量、成功率、平均收益
+
+---
+
+## 回测看板 API
+
+> 用于 Vue 前端菜单：选股验证 → 回测看板。
+
+### 日期区间参数说明
+
+看板相关接口统一支持以下区间参数：
+
+- `start_date` / `end_date`：显式日期区间（优先级最高）
+- `days`：最近 N 个交易日窗口（未传显式区间时生效）
+
+日期格式建议使用 `YYYY-MM-DD`。
+
+看板接口兼容：`YYYYMMDD` / `YYYY/MM/DD` / `YYYY.MM.DD`。
+
+> 说明：若传入了 `start_date` 或 `end_date` 但格式不合法，接口将返回 `error`。
+
+错误响应示例：
+
+```json
+{
+    "error": "start_date 格式不正确，支持 YYYY-MM-DD 或 YYYYMMDD"
+}
+```
+
+### 跨策略总览
+
+```
+GET /instock/api/backtest/dashboard/overview
+```
+
+| 参数 | 类型 | 必填 | 说明 |
+|-----|------|-----|------|
+| days | int | 否 | 最近 N 个交易日窗口，默认 60 |
+| start_date | string | 否 | 显式区间开始日期 |
+| end_date | string | 否 | 显式区间结束日期 |
+| metric | int | 否 | 排名指标持有天数（仅支持 1/3/5/10/20），默认 5 |
+
+**响应**: 返回每个策略的信号数、平均成功率、各 horizon 的平均收益、最佳/最差日期。
+
+示例：
+
+```json
+{
+    "date_range": {"start": "2026-01-02", "end": "2026-02-27", "count": 40},
+    "horizons": [1, 3, 5, 10, 20],
+    "metric_horizon": 5,
+    "items": [
+        {
+            "strategy_name": "cn_stock_strategy_enter",
+            "strategy_cn": "放量上涨",
+            "type": "strategy",
+            "total_signals": 123,
+            "avg_success_rate": 56.78,
+            "avg_returns": {"1d": 0.12, "3d": 0.56, "5d": 1.23, "10d": 2.34, "20d": 3.21},
+            "best_day": "2026-02-10",
+            "worst_day": "2026-01-13"
+        }
+    ]
+}
+```
+
+### 策略表现时间序列（按信号日）
+
+```
+GET /instock/api/backtest/dashboard/timeline
+```
+
+| 参数 | 类型 | 必填 | 说明 |
+|-----|------|-----|------|
+| strategies | string | 否 | 策略列表（逗号分隔），为空表示全部 |
+| days | int | 否 | 最近 N 个交易日窗口，默认 90 |
+| start_date | string | 否 | 显式区间开始日期 |
+| end_date | string | 否 | 显式区间结束日期 |
+| horizon | int | 否 | 收益周期（仅支持 1/3/5/10/20），默认 5 |
+
+**响应**: 返回每个策略的时间序列点（date/value）。
+
+示例：
+
+```json
+{
+    "date_range": {"start": "2026-01-02", "end": "2026-02-27", "count": 40},
+    "horizon": 5,
+    "series": [
+        {
+            "strategy_name": "cn_stock_strategy_enter",
+            "strategy_cn": "放量上涨",
+            "data": [
+                {"date": "2026-02-25", "value": 1.23},
+                {"date": "2026-02-26", "value": 0.56},
+                {"date": "2026-02-27", "value": null}
+            ]
+        }
+    ]
+}
+```
+
+### 单策略明细（选股列表）
+
+```
+GET /instock/api/backtest/dashboard/strategy_detail
+```
+
+| 参数 | 类型 | 必填 | 说明 |
+|-----|------|-----|------|
+| strategy | string | 是 | 策略名称 |
+| days | int | 否 | 最近 N 个交易日窗口，默认 30 |
+| start_date | string | 否 | 显式区间开始日期 |
+| end_date | string | 否 | 显式区间结束日期 |
+| horizons | string | 否 | 明细收益周期列表（逗号分隔，支持 1..100），默认 1,3,5,10,20 |
+| page | int | 否 | 页码，默认 1 |
+| page_size | int | 否 | 每页数量，默认 50 |
+
+**响应**: 返回分页 rows，包含 `rate_{h}` 列。
+
+示例：
+
+```json
+{
+    "strategy_name": "cn_stock_strategy_enter",
+    "strategy_cn": "放量上涨",
+    "date_range": {"start": "2026-02-01", "end": "2026-02-27", "count": 20},
+    "horizons": [1, 3, 5, 10, 20],
+    "page": 1,
+    "page_size": 50,
+    "total": 321,
+    "rows": [
+        {
+            "date": "2026-02-27",
+            "code": "000001",
+            "name": "平安银行",
+            "rate_1": 0.12,
+            "rate_3": 0.56,
+            "rate_5": 1.23,
+            "rate_10": 2.34,
+            "rate_20": 3.21
+        }
+    ]
+}
+```
+
+### 收益分布
+
+```
+GET /instock/api/backtest/dashboard/distribution
+```
+
+| 参数 | 类型 | 必填 | 说明 |
+|-----|------|-----|------|
+| strategy | string | 是 | 策略名称 |
+| days | int | 否 | 最近 N 个交易日窗口，默认 60 |
+| start_date | string | 否 | 显式区间开始日期 |
+| end_date | string | 否 | 显式区间结束日期 |
+| horizon | int | 否 | 收益周期（支持 1..100），默认 5 |
+
+**响应**: 返回分箱统计 bins（range/count/percentage）。
+
+示例：
+
+```json
+{
+    "strategy_name": "cn_stock_strategy_enter",
+    "strategy_cn": "放量上涨",
+    "date_range": {"start": "2026-01-02", "end": "2026-02-27", "count": 40},
+    "horizon": 5,
+    "bins": [
+        {"range": "<-10%", "count": 3, "percentage": 1.2},
+        {"range": "-10%~-5%", "count": 12, "percentage": 4.8},
+        {"range": "-5%~0%", "count": 88, "percentage": 35.2},
+        {"range": "0%~5%", "count": 110, "percentage": 44.0},
+        {"range": "5%~10%", "count": 30, "percentage": 12.0},
+        {"range": ">10%", "count": 7, "percentage": 2.8}
+    ],
+    "total": 250
+}
+```
+
+### 买入-卖出配对明细
+
+```
+GET /instock/api/backtest/dashboard/trade_pairs
+```
+
+| 参数 | 类型 | 必填 | 说明 |
+|-----|------|-----|------|
+| strategy | string | 是 | 策略名称（买入信号来源） |
+| days | int | 否 | 最近 N 个交易日窗口，默认 60 |
+| start_date | string | 否 | 显式区间开始日期 |
+| end_date | string | 否 | 显式区间结束日期 |
+| max_hold | int | 否 | 最大持有天数（无卖点时超时退出），默认 100 |
+| page | int | 否 | 页码，默认 1 |
+| page_size | int | 否 | 每页数量，默认 50 |
+
+**响应**: 返回 buy/sell 日期、价格、持有天数、收益率与退出类型（signal/timeout）。
+
+示例：
+
+```json
+{
+    "strategy_name": "cn_stock_strategy_enter",
+    "strategy_cn": "放量上涨",
+    "date_range": {"start": "2026-01-02", "end": "2026-02-27", "count": 40},
+    "page": 1,
+    "page_size": 50,
+    "total": 321,
+    "max_hold": 100,
+    "rows": [
+        {
+            "buy_date": "2026-02-10",
+            "sell_date": "2026-02-18",
+            "code": "000001",
+            "name": "平安银行",
+            "hold_days": 6,
+            "buy_price": 12.34,
+            "sell_price": 13.21,
+            "return_rate": 7.05,
+            "exit_type": "signal"
+        },
+        {
+            "buy_date": "2026-02-12",
+            "sell_date": "2026-02-27",
+            "code": "000002",
+            "name": "万科A",
+            "hold_days": 11,
+            "buy_price": 9.87,
+            "sell_price": 9.55,
+            "return_rate": -3.24,
+            "exit_type": "timeout"
+        }
+    ]
+}
+```
 
 ---
 

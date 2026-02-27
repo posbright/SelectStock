@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted, onActivated } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getBacktestConfig, runBacktest, runBatchBacktest } from '@/api/stock'
 
 const route = useRoute()
+const router = useRouter()
 
 // 配置数据
 const periods = ref<any[]>([])
@@ -17,6 +18,9 @@ const backtestForm = ref({
   strategy: '',
   period: '1m',
   start_date: '',
+  checkpoints: [1, 3, 5, 10, 20] as any[],
+  horizons: [1, 3, 5, 10, 20] as any[],
+  success_days: 5,
 })
 
 // 结果
@@ -31,6 +35,12 @@ onMounted(async () => {
     if (config) {
       periods.value = config.periods || []
       strategies.value = config.strategies || []
+
+      const defaults = config.default_horizons || [1, 3, 5, 10, 20]
+      if (Array.isArray(defaults) && defaults.length) {
+        backtestForm.value.checkpoints = defaults
+        backtestForm.value.horizons = defaults
+      }
     }
   } catch {
     ElMessage.error('加载回测配置失败')
@@ -54,6 +64,13 @@ const _applyQueryParams = () => {
   if (q.strategy) {
     backtestForm.value.strategy = q.strategy as string
   }
+}
+
+const joinNumbers = (arr: any[]) => {
+  return (arr || [])
+    .map(v => Number(v))
+    .filter(v => Number.isFinite(v) && v > 0)
+    .join(',')
 }
 
 // 执行回测
@@ -82,6 +99,7 @@ const runSingleBacktest = async () => {
       strategy: backtestForm.value.strategy || undefined,
       period: backtestForm.value.period,
       start_date: backtestForm.value.start_date || undefined,
+      checkpoints: joinNumbers(backtestForm.value.checkpoints),
     })
     if (res.error) {
       ElMessage.error(res.error)
@@ -103,6 +121,8 @@ const runBatchBacktestAction = async () => {
       strategy: backtestForm.value.strategy,
       period: backtestForm.value.period,
       limit: 30,
+      horizons: joinNumbers(backtestForm.value.horizons),
+      success_days: Number(backtestForm.value.success_days) || 5,
     })
     if (res.error) {
       ElMessage.error(res.error)
@@ -114,6 +134,23 @@ const runBatchBacktestAction = async () => {
   } finally {
     loading.value = false
   }
+}
+
+const goDashboard = () => {
+  router.push({ path: '/backtest/dashboard' })
+}
+
+const goIndicatorDetail = () => {
+  if (!singleResult.value?.code) return
+  router.push({
+    path: '/indicator/detail',
+    query: {
+      code: singleResult.value.code,
+      name: singleResult.value.name,
+      date: singleResult.value.buy_date,
+      strategy: backtestForm.value.strategy || undefined,
+    }
+  })
 }
 
 const formatRate = (val: any) => {
@@ -133,7 +170,10 @@ const getRateClass = (val: any) => {
     <!-- 配置面板 -->
     <el-card shadow="never" class="config-card">
       <template #header>
-        <span class="card-title">自定义回测</span>
+        <div class="header-row">
+          <span class="card-title">自定义回测</span>
+          <el-button link type="primary" @click="goDashboard">回测看板</el-button>
+        </div>
       </template>
       
       <el-form :model="backtestForm" label-width="100px" inline>
@@ -164,6 +204,23 @@ const getRateClass = (val: any) => {
           <el-date-picker v-model="backtestForm.start_date" type="date" placeholder="默认最新" 
             format="YYYY-MM-DD" value-format="YYYY-MM-DD" clearable style="width: 160px" />
         </el-form-item>
+
+        <el-form-item v-if="backtestForm.mode === 'single'" label="收益周期">
+          <el-select v-model="backtestForm.checkpoints" multiple filterable allow-create default-first-option :reserve-keyword="false" style="width: 260px">
+            <el-option v-for="h in backtestForm.checkpoints" :key="h" :label="`${h}日`" :value="h" />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item v-if="backtestForm.mode === 'batch'" label="收益周期">
+          <el-select v-model="backtestForm.horizons" multiple filterable allow-create default-first-option :reserve-keyword="false" style="width: 260px">
+            <el-option v-for="h in backtestForm.horizons" :key="h" :label="`${h}日`" :value="h" />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item v-if="backtestForm.mode === 'batch'" label="成功判定">
+          <el-input-number v-model="backtestForm.success_days" :min="1" :max="100" />
+          <span style="margin-left: 6px; color: var(--el-text-color-secondary)">日收益 &gt; 0</span>
+        </el-form-item>
         
         <el-form-item>
           <el-button type="primary" :loading="loading" @click="handleRun">
@@ -176,7 +233,10 @@ const getRateClass = (val: any) => {
     <!-- 单股回测结果 -->
     <el-card v-if="singleResult" shadow="never" class="result-card">
       <template #header>
-        <span class="card-title">回测结果：{{ singleResult.name }}（{{ singleResult.code }}）</span>
+        <div class="header-row">
+          <span class="card-title">回测结果：{{ singleResult.name }}（{{ singleResult.code }}）</span>
+          <el-button link type="primary" @click="goIndicatorDetail">查看K线指标</el-button>
+        </div>
       </template>
       
       <!-- 概要信息 -->
@@ -236,17 +296,8 @@ const getRateClass = (val: any) => {
             {{ batchResult.success_rate }}%
           </span>
         </el-descriptions-item>
-        <el-descriptions-item label="平均1日收益">
-          <span :class="getRateClass(batchResult.avg_returns?.['1d'])">{{ formatRate(batchResult.avg_returns?.['1d']) }}</span>
-        </el-descriptions-item>
-        <el-descriptions-item label="平均5日收益">
-          <span :class="getRateClass(batchResult.avg_returns?.['5d'])">{{ formatRate(batchResult.avg_returns?.['5d']) }}</span>
-        </el-descriptions-item>
-        <el-descriptions-item label="平均10日收益">
-          <span :class="getRateClass(batchResult.avg_returns?.['10d'])">{{ formatRate(batchResult.avg_returns?.['10d']) }}</span>
-        </el-descriptions-item>
-        <el-descriptions-item label="平均20日收益">
-          <span :class="getRateClass(batchResult.avg_returns?.['20d'])">{{ formatRate(batchResult.avg_returns?.['20d']) }}</span>
+        <el-descriptions-item v-for="h in (batchResult.horizons || [])" :key="h" :label="`平均${h}日收益`">
+          <span :class="getRateClass(batchResult.avg_returns?.[`${h}d`])">{{ formatRate(batchResult.avg_returns?.[`${h}d`]) }}</span>
         </el-descriptions-item>
       </el-descriptions>
 
@@ -261,24 +312,9 @@ const getRateClass = (val: any) => {
             <span :class="row.success_rate >= 50 ? 'text-up' : 'text-down'">{{ row.success_rate }}%</span>
           </template>
         </el-table-column>
-        <el-table-column label="1日收益" width="100" align="right">
+        <el-table-column v-for="h in (batchResult.horizons || [])" :key="h" :label="`${h}日收益`" width="110" align="right">
           <template #default="{ row }">
-            <span :class="getRateClass(row.avg_1d)">{{ formatRate(row.avg_1d) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="5日收益" width="100" align="right">
-          <template #default="{ row }">
-            <span :class="getRateClass(row.avg_5d)">{{ formatRate(row.avg_5d) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="10日收益" width="100" align="right">
-          <template #default="{ row }">
-            <span :class="getRateClass(row.avg_10d)">{{ formatRate(row.avg_10d) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="20日收益" width="100" align="right">
-          <template #default="{ row }">
-            <span :class="getRateClass(row.avg_20d)">{{ formatRate(row.avg_20d) }}</span>
+            <span :class="getRateClass(row[`avg_${h}d`])">{{ formatRate(row[`avg_${h}d`]) }}</span>
           </template>
         </el-table-column>
       </el-table>
@@ -302,6 +338,12 @@ const getRateClass = (val: any) => {
 .card-title {
   font-size: 16px;
   font-weight: 600;
+}
+
+.header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .text-up {

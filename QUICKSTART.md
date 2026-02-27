@@ -62,6 +62,13 @@ run_web.bat
 
 ## 📊 常用操作
 
+### 回测看板（Vue前端）
+
+启动 Web 服务后，在页面左侧菜单进入：**选股验证 → 回测看板**。
+
+- 支持跨策略总览、时间序列、单策略明细、收益分布、买入-卖出配对
+- 支持两种区间方式：最近 N 个交易日（days）或显式日期区间（start_date/end_date）
+
 ### 手动拉取历史数据
 
 ```bash
@@ -196,3 +203,4 @@ python execute_daily_job.py
 - [Docker部署说明](docker/DOCKER_DEPLOY.md)
 - [定时任务说明](cron/README.md)
 - [历史数据缓存说明](document/hist_cache_incremental.md)
+- [回测看板计划（对齐当前实现）](document/backtest_dashboard_plan.md)

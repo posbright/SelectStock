@@ -282,6 +282,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '选股验证', icon: 'DataAnalysis' },
     children: [
       {
+        path: 'dashboard',
+        name: 'BacktestDashboard',
+        component: () => import('@/views/backtest/dashboard.vue'),
+        meta: { title: '回测看板' }
+      },
+      {
         path: 'custom',
         name: 'BacktestCustom',
         component: () => import('@/views/backtest/index.vue'),
