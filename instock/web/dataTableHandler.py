@@ -75,6 +75,7 @@ class GetStockDataHandler(webBase.BaseHandler, ABC):
         query_params = []
         conditions = []
         actual_date = date  # 实际使用的日期（可能回退）
+        table_missing = False  # 表是否不存在
         if date is not None:
             conditions.append("`date` = %s")
             query_params.append(date)
@@ -153,6 +154,7 @@ class GetStockDataHandler(webBase.BaseHandler, ABC):
             if "doesn't exist" in error_msg or "not found" in error_msg.lower():
                 data = []
                 total = 0
+                table_missing = True  # 标记表不存在，跳过后续日期回退
             elif "Unknown column" in error_msg and order_by:
                 # ORDER BY 引用了不存在的列（如新增列尚未同步到表），去掉排序重试
                 logging.warning(f"GetStockDataHandler: ORDER BY 列不存在，去掉排序重试: {error_msg}")
@@ -178,7 +180,8 @@ class GetStockDataHandler(webBase.BaseHandler, ABC):
 
         # 返回包含列定义和数据的响应
         # 日期回退：如果按指定日期查无数据（可能作业尚未完成），自动回退到最近有数据的日期
-        if total == 0 and date is not None and not keyword:
+        # 表不存在时跳过回退，避免再次触发 1146 错误
+        if total == 0 and date is not None and not keyword and not table_missing:
             try:
                 fallback_result = self.db.query(
                     f"SELECT MAX(`date`) AS latest FROM `{web_module_data.table_name}`"
