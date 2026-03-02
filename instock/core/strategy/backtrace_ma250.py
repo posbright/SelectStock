@@ -44,7 +44,7 @@ def check(code_name, data, date=None, threshold=60):
             highest_row[0] = _close
             highest_row[1] = _volume
             highest_row[2] = _date
-        elif _close < lowest_row[0]:
+        if _close < lowest_row[0]:
             lowest_row[0] = _close
             lowest_row[1] = _volume
             lowest_row[2] = _date
@@ -72,12 +72,16 @@ def check(code_name, data, date=None, threshold=60):
                 recent_lowest_row[1] = _volume
                 recent_lowest_row[2] = _date
 
+    if not recent_lowest_row[2] or not highest_row[2]:
+        return False
     date_diff = datetime.date(datetime.strptime(recent_lowest_row[2], '%Y-%m-%d')) - \
                 datetime.date(datetime.strptime(highest_row[2], '%Y-%m-%d'))
 
     if not (timedelta(days=10) <= date_diff <= timedelta(days=50)):
         return False
     # 回踩伴随缩量
+    if recent_lowest_row[1] <= 0:
+        return False
     vol_ratio = highest_row[1] / recent_lowest_row[1]
     back_ratio = recent_lowest_row[0] / highest_row[0]
 

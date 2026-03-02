@@ -48,7 +48,7 @@ def prepare(date):
         dataKey.columns = _columns
 
         dataVal = pd.DataFrame(results.values())
-        dataVal.drop('date', axis=1, inplace=True)  # 删除日期字段，然后和原始数据合并。
+        dataVal.drop('date', axis=1, inplace=True, errors='ignore')  # 删除日期字段，然后和原始数据合并。
 
         data = pd.merge(dataKey, dataVal, on=['code'], how='left')
         # data.set_index('code', inplace=True)

@@ -178,11 +178,12 @@ class HighTightFlagStrategy(PatternStrategy):
             return False
         
         data = data.tail(n=self.threshold)
+        current_close = data.iloc[-1]['close']  # 保存当日收盘价
         data = data.tail(n=24)
         data = data.head(n=14)
         
         low = data['low'].values.min()
-        ratio_increase = data.iloc[-1]['high'] / low
+        ratio_increase = current_close / low  # 当日收盘价/区间最低价
         if ratio_increase < 1.9:
             return False
         
@@ -234,7 +235,7 @@ class LowBacktraceIncreaseStrategy(PatternStrategy):
         
         # 回撤检查
         previous_p_change = 100.0
-        previous_open = -1000000.0
+        previous_open = data.iloc[0]['open']  # 用首日开盘价初始化，避免-1000000导致首次迭代永远返回False
         for _p_change, _close, _open in zip(data['p_change'].values, data['close'].values, data['open'].values):
             if (_p_change < -7 or 
                 (_close - _open) / _open * 100 < -7 or

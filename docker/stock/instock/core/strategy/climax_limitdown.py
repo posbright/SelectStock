@@ -49,6 +49,9 @@ def check(code_name, data, date=None, threshold=60):
 
     mean_vol = data.iloc[-1]['vol_ma5']
 
+    if mean_vol <= 0:
+        return False
+
     vol_ratio = last_vol / mean_vol
     if vol_ratio >= 4:
         return True

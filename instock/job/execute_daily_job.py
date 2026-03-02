@@ -148,7 +148,7 @@ def _data_health_check(pipeline_start):
             ('cn_stock_kline_pattern', 'K线形态'),
             ('cn_stock_strategy_enter', '放量上涨(策略)'),
             ('cn_stock_strategy_gpt_value', 'GPT综合选股'),
-            ('cn_stock_backtest_summary', '回测汇总'),
+            ('cn_stock_backtest', '回测汇总'),
         ]
         results = []
         for table, label in tables_to_check:

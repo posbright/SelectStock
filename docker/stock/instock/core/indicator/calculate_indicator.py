@@ -69,6 +69,7 @@ def get_indicators(data, end_date=None, threshold=120, calc_threshold=None):
 
             # cr
             data.loc[:, 'm_price'] = data['amount'].values / data['volume'].values
+            _fill_nan_inf(data, 'm_price')  # volume=0 时产生 inf，需清理
             data.loc[:, 'm_price_sf1'] = data['m_price'].shift(1, fill_value=0.0).values
             data.loc[:, 'h_m'] = data['high'].values - data[['m_price_sf1', 'high']].values.min(axis=1)
             data.loc[:, 'm_l'] = data['m_price_sf1'].values - data[['m_price_sf1', 'low']].values.min(axis=1)
@@ -324,9 +325,9 @@ def get_indicators(data, end_date=None, threshold=120, calc_threshold=None):
             data.loc[:, 'phl_avg'] = (data['prev_high'].values + data['prev_low'].values) / 2.0
             data.loc[:, 'emva_em'] = (data['hl_avg'].values - data['phl_avg'].values) * data['h_l'].values / data['amount'].values
             data.loc[:, 'emv'] = tl.SUM(data['emva_em'].values, timeperiod=14)
-            _fillna(data, 'emv')
+            _fill_nan_inf(data, 'emv')
             data.loc[:, 'emva'] = tl.MA(data['emv'].values, timeperiod=9)
-            _fillna(data, 'emva')
+            _fill_nan_inf(data, 'emva')
 
             # BIAS
             data.loc[:, 'ma6'] = tl.MA(data['close'].values, timeperiod=6)
@@ -356,7 +357,7 @@ def get_indicators(data, end_date=None, threshold=120, calc_threshold=None):
             data.loc[:, 'hcp_lcp'] = tl.MAX(data['close'].values, timeperiod=28) - tl.MIN(data['close'].values, timeperiod=28)
             _fillna(data, 'hcp_lcp')
             data.loc[:, 'vhf'] = np.divide(data['hcp_lcp'].values, tl.SUM(abs(data['close'].values - data['prev_close'].values), timeperiod=28))
-            _fillna(data, 'vhf')
+            _fill_nan_inf(data, 'vhf')
 
             # RVI
             data.loc[:, 'rvi_x'] = ((data['close'].values - data['open'].values) +
