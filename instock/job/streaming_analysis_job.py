@@ -24,6 +24,7 @@
 
 import logging
 import time
+import datetime
 import gc
 import concurrent.futures
 import pandas as pd
@@ -49,6 +50,62 @@ __date__ = '2026/02/14'
 BATCH_SIZE = 200
 
 
+def _get_stock_list_from_db(date):
+    """
+    从数据库 cn_stock_spot 表获取股票列表（零API调用）。
+    当 analysis_daily_job 独立运行时，不应发起外部请求获取股票列表，
+    而是使用 fetch_daily_job 已经入库的行情数据。
+
+    Returns:
+        pd.DataFrame | None: 包含 date/code/name 列的 DataFrame
+    """
+    table_name = tbs.TABLE_CN_STOCK_SPOT['name']
+    date_str = date.strftime("%Y-%m-%d")
+    try:
+        if not mdb.checkTableIsExist(table_name):
+            return None
+        fk_cols = list(tbs.TABLE_CN_STOCK_FOREIGN_KEY['columns'].keys())
+        sql = f"SELECT `{'`,`'.join(fk_cols)}` FROM `{table_name}` WHERE `date` = %s"
+        data = pd.read_sql(sql, mdb.engine(), params=(date_str,))
+        if data is not None and len(data) > 0:
+            return data
+        # 当天没有数据时，尝试使用最近一天的数据
+        sql_latest = f"SELECT `{'`,`'.join(fk_cols)}` FROM `{table_name}` WHERE `date` = (SELECT MAX(`date`) FROM `{table_name}`)"
+        data = pd.read_sql(sql_latest, mdb.engine())
+        if data is not None and len(data) > 0:
+            logging.info(f"流式分析：使用最近入库日期的股票列表（{len(data)} 只）")
+            # 替换日期为当前分析日期
+            data['date'] = date_str
+            return data
+    except Exception as e:
+        logging.warning(f"从数据库获取股票列表异常：{e}")
+    return None
+
+
+def _get_stock_tops_from_db(date):
+    """
+    从数据库 cn_stock_fund_flow（龙虎榜）表获取机构参与的股票列表。
+    如果表不存在或无数据，返回 None（不发起外部API请求）。
+
+    Returns:
+        set | None: 龙虎榜上有机构参与的股票代码集合
+    """
+    try:
+        table_name = 'stock_lhb_stock_statistic_em'
+        if not mdb.checkTableIsExist(table_name):
+            return None
+        date_str = date.strftime("%Y-%m-%d")
+        run_date = date + datetime.timedelta(days=-90)
+        start_str = run_date.strftime("%Y-%m-%d")
+        sql = f"SELECT `code` FROM `{table_name}` WHERE `date` >= %s AND `date` <= %s"
+        data = pd.read_sql(sql, mdb.engine(), params=(start_str, date_str))
+        if data is not None and len(data) > 0:
+            return set(data['code'].values)
+    except Exception:
+        pass
+    return None
+
+
 def streaming_analysis(date):
     """
     流式分析主函数：单次遍历所有股票，同时计算指标、K线形态和策略
@@ -60,22 +117,25 @@ def streaming_analysis(date):
     date_str = date.strftime("%Y-%m-%d")
     logging.info(f"===== Phase 4: 流式分析开始 [{date_str}] =====")
 
-    # 1. 获取股票列表
-    try:
-        spot = stock_data(date).get_data()
-        if spot is None:
-            # 单例可能缓存了上次 API 失败的 None，释放后重试一次
-            logging.warning("流式分析：stock_data 首次返回 None，释放单例后重试")
-            stock_data.release()
-            import time as _time
-            _time.sleep(3)  # 短暂等待，避免立即重试同样失败
+    # 1. 获取股票列表 — 优先从数据库读取（零API），单例作为降级方案
+    spot = _get_stock_list_from_db(date)
+    if spot is not None:
+        logging.info(f"流式分析：从数据库获取股票列表（{len(spot)} 只，零API调用）")
+    else:
+        logging.info("流式分析：数据库无股票列表，降级为 stock_data 单例（可能发起API）")
+        try:
             spot = stock_data(date).get_data()
-        if spot is None:
-            logging.error("流式分析：stock_data 重试后仍返回 None，无法获取股票列表")
+            if spot is None:
+                stock_data.release()
+                import time as _time
+                _time.sleep(3)
+                spot = stock_data(date).get_data()
+            if spot is None:
+                logging.error("流式分析：stock_data 重试后仍返回 None，无法获取股票列表")
+                return
+        except Exception as e:
+            logging.error(f"流式分析：获取股票列表异常", exc_info=True)
             return
-    except Exception as e:
-        logging.error(f"流式分析：获取股票列表异常", exc_info=True)
-        return
 
     _subset = spot[list(tbs.TABLE_CN_STOCK_FOREIGN_KEY['columns'])]
     stocks = [tuple(x) for x in _subset.values]
@@ -98,14 +158,18 @@ def streaming_analysis(date):
 
     # 策略列表 + 龙虎榜数据（check_high_tight 需要）
     strategies = tbs.TABLE_CN_STOCK_STRATEGIES
-    stock_tops = None
-    for strategy in strategies:
-        if strategy['func'].__name__ == 'check_high_tight':
-            try:
-                stock_tops = fetch_stock_top_entity_data(date)
-            except Exception as e:
-                logging.warning(f"获取龙虎榜数据异常（不影响其他策略）：{e}")
-            break
+    stock_tops = _get_stock_tops_from_db(date)
+    if stock_tops is None:
+        # 数据库无龙虎榜数据时，降级从 API 获取
+        for strategy in strategies:
+            if strategy['func'].__name__ == 'check_high_tight':
+                try:
+                    stock_tops = fetch_stock_top_entity_data(date)
+                except Exception as e:
+                    logging.warning(f"获取龙虎榜数据异常（不影响其他策略）：{e}")
+                break
+    else:
+        logging.info(f"流式分析：从数据库获取龙虎榜数据（{len(stock_tops)} 只，零API调用）")
 
     # 4. 验证数据库表 schema（旧版表列数不足时自动重建）
     _ensure_table_schema(tbs.TABLE_CN_STOCK_INDICATORS['name'], tbs.TABLE_CN_STOCK_INDICATORS['columns'])
