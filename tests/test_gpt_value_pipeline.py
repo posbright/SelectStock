@@ -143,8 +143,8 @@ class TestCheckGptValue:
         assert check_gpt_value_from_selection(row, _DEFAULT_PARAMS) is False
 
     def test_roe_below_threshold_fails(self):
-        """ROE=14.9 不通过 (< 15)"""
-        row = pd.Series(_make_stock_row(roe_weight=14.9))
+        """ROE=9.9 不通过 (< 10)"""
+        row = pd.Series(_make_stock_row(roe_weight=9.9))
         assert check_gpt_value_from_selection(row, _DEFAULT_PARAMS) is False
 
     def test_pe_zero_fails(self):
@@ -162,20 +162,21 @@ class TestCheckGptValue:
         row = pd.Series(_make_stock_row(pe9=51))
         assert check_gpt_value_from_selection(row, _DEFAULT_PARAMS) is False
 
-    def test_nan_debt_ratio_fails(self):
-        """NaN值不通过"""
+    def test_nan_debt_ratio_soft_pass(self):
+        """NaN值时跳过该项检查（soft-pass），不因缺数据而淘汰"""
         row = pd.Series(_make_stock_row(debt_asset_ratio=float('nan')))
-        assert check_gpt_value_from_selection(row, _DEFAULT_PARAMS) is False
+        assert check_gpt_value_from_selection(row, _DEFAULT_PARAMS) is True
 
-    def test_none_roe_fails(self):
-        """None值不通过"""
+    def test_none_roe_soft_pass(self):
+        """None ROE时跳过该项检查（需要PE有效才能通过最低数据质量要求）"""
         row = pd.Series(_make_stock_row(roe_weight=None))
-        assert check_gpt_value_from_selection(row, _DEFAULT_PARAMS) is False
+        assert check_gpt_value_from_selection(row, _DEFAULT_PARAMS) is True
 
-    def test_missing_field_fails(self):
-        """缺少关键字段时不通过"""
+    def test_both_roe_and_pe_missing_fails(self):
+        """ROE和PE都缺失时不通过（最低数据质量要求）"""
         data = _make_stock_row()
-        del data['roe_weight']  # 删掉ROE字段
+        data['roe_weight'] = None
+        data['pe9'] = None
         row = pd.Series(data)
         assert check_gpt_value_from_selection(row, _DEFAULT_PARAMS) is False
 
@@ -315,3 +316,144 @@ class TestPrepareLogic:
             # 验证传入了 cols_type（因为目标表不存在，需要创建）
             args, kwargs = mock_insert.call_args
             assert args[2] is not None, "表不存在时 cols_type 应非 None（用于创建表）"
+
+
+# ==================== low_atr 策略 Bug 修复验证 ====================
+
+class TestLowAtrBugFixes:
+    """验证 low_atr.py 中的两个关键 bug 已被修复"""
+
+    def test_lowest_row_tracks_correctly_for_rising_prices(self):
+        """修复 if/elif bug: 单调上涨序列中 lowest_row 应正确追踪"""
+        from instock.core.strategy.low_atr import check_low_increase
+
+        # 构造数据：250天历史 + 最后10天单调上涨（从50涨到55）
+        dates = pd.date_range('2025-01-01', periods=260, freq='B')
+        data = pd.DataFrame({
+            'date': [d.strftime('%Y-%m-%d') for d in dates],
+            'open': [50.0] * 260,
+            'high': [51.0] * 260,
+            'low': [49.5] * 260,
+            'close': [50.0] * 250 + [50 + i * 0.5 for i in range(10)],
+            'volume': [1000000] * 260,
+            'p_change': [0.5] * 250 + [1.0] * 10,
+        })
+        stock = ('2026-03-02', '000001', '平安银行')
+        # 最后10天：close 从 50.0 到 54.5
+        # 幅度 = (54.5 - 50.0) / 50.0 = 0.09 < 0.1 → False（但至少不会因为bug给ratio=-999999）
+        # 修复前 lowest_row=1000000 → ratio=(54.5-1000000)/1000000 ≈ -1 → False (bug)
+        # 修复后 lowest_row=50.0 → ratio=(54.5-50.0)/50.0 = 0.09 → False（正确的False）
+        result = check_low_increase(stock, data, date=datetime.datetime(2026, 3, 2))
+        # 这个用例的关键是：修复后不会因为 lowest_row=1000000 而产生错误的 ratio
+        assert result is False  # 0.09 < 0.1, 正确的 False
+
+    def test_low_atr_matches_with_valid_range(self):
+        """有效的低波动+适度涨幅应返回 True"""
+        from instock.core.strategy.low_atr import check_low_increase
+
+        dates = pd.date_range('2025-01-01', periods=260, freq='B')
+        # 最后10天：从50涨到56（12%涨幅），日均波动小
+        last_10_prices = [50, 50.5, 51, 51.5, 52, 53, 54, 54.5, 55, 56]
+        last_10_changes = [1.0, 1.0, 1.0, 1.0, 1.9, 1.9, 0.9, 0.9, 1.8, 1.8]
+        data = pd.DataFrame({
+            'date': [d.strftime('%Y-%m-%d') for d in dates],
+            'open': [50.0] * 260,
+            'high': [51.0] * 260,
+            'low': [49.5] * 260,
+            'close': [50.0] * 250 + last_10_prices,
+            'volume': [1000000] * 260,
+            'p_change': [0.5] * 250 + last_10_changes,
+        })
+        stock = ('2026-03-02', '000001', '平安银行')
+        # ratio = (56-50)/50 = 0.12 > 0.1 ✓, ATR = sum(changes)/10 ≈ 1.22 < 10 ✓
+        result = check_low_increase(stock, data, date=datetime.datetime(2026, 3, 2))
+        assert result is True, "12%涨幅且低ATR应返回True"
+
+    def test_ratio_threshold_is_10_percent(self):
+        """验证 ratio 阈值已从 1.1 (110%) 修正为 0.1 (10%)"""
+        from instock.core.strategy.low_atr import check_low_increase
+
+        dates = pd.date_range('2025-01-01', periods=260, freq='B')
+        # 最后10天：从50涨到55.5（11%涨幅）
+        data = pd.DataFrame({
+            'date': [d.strftime('%Y-%m-%d') for d in dates],
+            'open': [50.0] * 260,
+            'high': [51.0] * 260,
+            'low': [49.5] * 260,
+            'close': [50.0] * 250 + [50, 50.5, 51, 51.5, 52, 52.5, 53, 53.5, 54, 55.5],
+            'volume': [1000000] * 260,
+            'p_change': [0.5] * 250 + [0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.9, 1.5, 2.8],
+        })
+        stock = ('2026-03-02', '000001', '平安银行')
+        # ratio = (55.5-50)/50 = 0.11 > 0.1 ✓
+        result = check_low_increase(stock, data, date=datetime.datetime(2026, 3, 2))
+        assert result is True, "11%涨幅应满足0.1阈值"
+
+
+# ==================== GPT筛选逐层通过率诊断 ====================
+
+class TestGptFilterDiagnostic:
+    """
+    模拟真实市场数据场景，诊断每层筛选的"杀伤力"。
+    验证修复后：
+    - 各层不会因 NaN 产生不合理淘汰
+    - 合理的股票能通过
+    """
+
+    @staticmethod
+    def _make_realistic_stock(
+        debt=45, cashflow=2.0, curr=1.5, speed=1.0,
+        roe=12, gpr=20, npr=8, roa=5,
+        rev3y=5, prof3y=6, deduct=3,
+        pe=25, pb=4
+    ):
+        """构建一只较为真实的 A 股股票数据"""
+        return pd.Series({
+            'date': '2026-03-02', 'code': '000001', 'name': '测试股票',
+            'debt_asset_ratio': debt, 'per_netcash_operate': cashflow,
+            'current_ratio': curr, 'speed_ratio': speed,
+            'roe_weight': roe, 'sale_gpr': gpr, 'sale_npr': npr, 'jroa': roa,
+            'income_growthrate_3y': rev3y, 'netprofit_growthrate_3y': prof3y,
+            'deduct_netprofit_growthrate': deduct,
+            'pe9': pe, 'pbnewmrq': pb,
+        })
+
+    def test_typical_good_stock_passes(self):
+        """典型的好股票：ROE=12%, GPR=20%, 3Y增长5% — 旧逻辑会拒绝，新逻辑应通过"""
+        row = self._make_realistic_stock()
+        assert check_gpt_value_from_selection(row, _DEFAULT_PARAMS) is True
+
+    def test_stock_with_missing_3y_growth_passes(self):
+        """3年增长率缺失（新上市公司）：旧逻辑直接拒绝，新逻辑跳过该检查"""
+        row = self._make_realistic_stock()
+        row['income_growthrate_3y'] = None
+        row['netprofit_growthrate_3y'] = None
+        assert check_gpt_value_from_selection(row, _DEFAULT_PARAMS) is True
+
+    def test_stock_with_all_nan_financials_fails(self):
+        """所有财务数据为NaN时：ROE和PE都缺失，最低数据质量不达标"""
+        row = pd.Series({
+            'date': '2026-03-02', 'code': '000001', 'name': '空壳公司',
+            'debt_asset_ratio': None, 'per_netcash_operate': None,
+            'current_ratio': None, 'speed_ratio': None,
+            'roe_weight': None, 'sale_gpr': None, 'sale_npr': None, 'jroa': None,
+            'income_growthrate_3y': None, 'netprofit_growthrate_3y': None,
+            'deduct_netprofit_growthrate': None,
+            'pe9': None, 'pbnewmrq': None,
+        })
+        assert check_gpt_value_from_selection(row, _DEFAULT_PARAMS) is False
+
+    def test_mediocre_manufacturer_passes(self):
+        """制造业公司：毛利率18%（低于旧阈值25%，高于新阈值15%）"""
+        row = self._make_realistic_stock(gpr=18, roe=11, rev3y=4, prof3y=4)
+        assert check_gpt_value_from_selection(row, _DEFAULT_PARAMS) is True
+
+    def test_high_debt_still_rejected(self):
+        """高负债公司仍应被拒绝（硬约束不变）"""
+        row = self._make_realistic_stock(debt=75)
+        assert check_gpt_value_from_selection(row, _DEFAULT_PARAMS) is False
+
+    def test_negative_pe_still_rejected(self):
+        """亏损公司（PE<0）仍应被拒绝"""
+        row = self._make_realistic_stock(pe=-15)
+        assert check_gpt_value_from_selection(row, _DEFAULT_PARAMS) is False

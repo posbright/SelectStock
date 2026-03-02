@@ -28,13 +28,13 @@ _DEFAULT_PARAMS = {
     "current_ratio_min": 1.0,
     "speed_ratio_min": 0.7,
     # 第二层：盈利能力
-    "roe_weight_min": 15,
-    "sale_gpr_min": 25,
-    "sale_npr_min": 8,
-    "jroa_min": 4,
+    "roe_weight_min": 10,
+    "sale_gpr_min": 15,
+    "sale_npr_min": 5,
+    "jroa_min": 3,
     # 第三层：成长质量
-    "income_growthrate_3y_min": 8,
-    "netprofit_growthrate_3y_min": 8,
+    "income_growthrate_3y_min": 3,
+    "netprofit_growthrate_3y_min": 3,
     "deduct_netprofit_growthrate_min": 0,
     # 第五层：估值约束
     "pe_min": 0,
@@ -96,12 +96,13 @@ def check_gpt_value_from_selection(stock_row, params=None):
 
     try:
         # ===== 第一层：财务安全过滤 =====
+        # 所有字段统一逻辑：数据缺失时跳过该项检查（不因缺数据而淘汰）
         debt_ratio = stock_row.get('debt_asset_ratio', None)
-        if not _is_valid_number(debt_ratio) or debt_ratio >= params["debt_asset_ratio_max"]:
+        if _is_valid_number(debt_ratio) and debt_ratio >= params["debt_asset_ratio_max"]:
             return False
         
         cashflow = stock_row.get('per_netcash_operate', None)
-        if not _is_valid_number(cashflow) or cashflow <= params["per_netcash_operate_min"]:
+        if _is_valid_number(cashflow) and cashflow <= params["per_netcash_operate_min"]:
             return False
         
         current_r = stock_row.get('current_ratio', None)
@@ -114,28 +115,28 @@ def check_gpt_value_from_selection(stock_row, params=None):
         
         # ===== 第二层：盈利能力筛选 =====
         roe = stock_row.get('roe_weight', None)
-        if not _is_valid_number(roe) or roe < params["roe_weight_min"]:
+        if _is_valid_number(roe) and roe < params["roe_weight_min"]:
             return False
         
         gpr = stock_row.get('sale_gpr', None)
-        if not _is_valid_number(gpr) or gpr < params["sale_gpr_min"]:
+        if _is_valid_number(gpr) and gpr < params["sale_gpr_min"]:
             return False
         
         npr = stock_row.get('sale_npr', None)
-        if not _is_valid_number(npr) or npr < params["sale_npr_min"]:
+        if _is_valid_number(npr) and npr < params["sale_npr_min"]:
             return False
         
         roa = stock_row.get('jroa', None)
-        if _is_valid_number(roa) and roa < params.get("jroa_min", 4):
+        if _is_valid_number(roa) and roa < params.get("jroa_min", 3):
             return False
         
         # ===== 第三层：成长质量筛选 =====
         revenue_growth = stock_row.get('income_growthrate_3y', None)
-        if not _is_valid_number(revenue_growth) or revenue_growth <= params["income_growthrate_3y_min"]:
+        if _is_valid_number(revenue_growth) and revenue_growth <= params["income_growthrate_3y_min"]:
             return False
         
         profit_growth = stock_row.get('netprofit_growthrate_3y', None)
-        if not _is_valid_number(profit_growth) or profit_growth <= params["netprofit_growthrate_3y_min"]:
+        if _is_valid_number(profit_growth) and profit_growth <= params["netprofit_growthrate_3y_min"]:
             return False
         
         deduct_growth = stock_row.get('deduct_netprofit_growthrate', None)
@@ -144,11 +145,18 @@ def check_gpt_value_from_selection(stock_row, params=None):
         
         # ===== 第五层：估值约束 =====
         pe = stock_row.get('pe9', None)
-        if not _is_valid_number(pe) or pe <= params["pe_min"] or pe > params["pe_max"]:
+        if _is_valid_number(pe) and (pe <= params["pe_min"] or pe > params["pe_max"]):
             return False
         
         pb = stock_row.get('pbnewmrq', None)
         if _is_valid_number(pb) and pb > params.get("pbnewmrq_max", 10):
+            return False
+        
+        # ===== 最低数据质量要求 =====
+        # 至少要有 ROE 或 PE 中的一个有效值，否则数据太差不入选
+        has_roe = _is_valid_number(stock_row.get('roe_weight', None))
+        has_pe = _is_valid_number(stock_row.get('pe9', None))
+        if not has_roe and not has_pe:
             return False
         
         # 通过所有筛选

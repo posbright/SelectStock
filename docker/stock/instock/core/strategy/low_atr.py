@@ -48,7 +48,7 @@ def check_low_increase(code_name, data, date=None, ma_short=30, ma_long=250, thr
 
         if _close > highest_row:
             highest_row = _close
-        elif _close < lowest_row:
+        if _close < lowest_row:
             lowest_row = _close
 
     atr = total_change / days_count
@@ -57,7 +57,7 @@ def check_low_increase(code_name, data, date=None, ma_short=30, ma_long=250, thr
 
     ratio = (highest_row - lowest_row) / lowest_row
 
-    if ratio > 1.1:
+    if ratio > 0.1:
         return True
 
     return False
