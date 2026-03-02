@@ -702,32 +702,39 @@ def fetch_stock_limitup_reason(date):
         logging.error(f"stockfetch.fetch_stock_limitup_reason处理异常", exc_info=True)
     return None
 
-# 读取股票历史数据
+# 读取ETF历史数据（多数据源 + 缓存支持）
+# ETF code_id_map 依赖东方财富的在线API（@lru_cache），当API不可用时直接降级到腾讯/新浪
+# 腾讯和新浪使用市场前缀规则（5开头→sh，1开头→sz），无需在线code_id_map
 def fetch_etf_hist(data_base, date_start=None, date_end=None, adjust='qfq'):
     date = data_base[0]
     code = data_base[1]
 
     if date_start is None:
-        date_start, is_cache = trd.get_trade_hist_interval(date)  # 提高运行效率，只运行一次
-    try:
-        if date_end is not None:
-            data = fee.fund_etf_hist_em(symbol=code, period="daily", start_date=date_start, end_date=date_end,
-                                        adjust=adjust)
-        else:
-            data = fee.fund_etf_hist_em(symbol=code, period="daily", start_date=date_start, adjust=adjust)
+        date_start, is_cache = trd.get_trade_hist_interval(date)
+    else:
+        is_cache = True
 
-        if data is None or len(data.index) == 0:
-            return None
-        data.columns = tuple(tbs.CN_STOCK_HIST_DATA['columns'])
-        data = data.sort_index()  # 将数据按照日期排序下。
+    if date_end is None:
+        if isinstance(date, str):
+            date_end = date.replace("-", "")
+        else:
+            date_end = date.strftime("%Y%m%d")
+
+    try:
+        # 复用股票的增量缓存 + 多数据源回退机制
+        # ETF代码以1或5开头，_fetch_from_sources 中的三个数据源均已支持：
+        # - 东方财富: code_id_map 已扩展支持1/5前缀
+        # - 腾讯财经: _get_market_prefix 已修正 5→sh, 1→sz
+        # - 新浪财经: 同上
+        data = stock_hist_cache_incremental(code, date_start, date_end, is_cache, 'qfq')
         if data is not None:
-            data = data.copy()  # 创建副本避免只读数组问题
+            data = data.copy()
             data['p_change'] = tl.ROC(data['close'].values, 1)
             data['p_change'] = data['p_change'].fillna(0.0)
             data['volume'] = data['volume'].astype('double') * 100  # 成交量单位从手变成股。
         return data
     except Exception as e:
-        logging.error(f"stockfetch.fetch_etf_hist处理异常", exc_info=True)
+        logging.error(f"stockfetch.fetch_etf_hist处理异常: {code}", exc_info=True)
     return None
 
 

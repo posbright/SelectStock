@@ -229,14 +229,14 @@ class _CodeIdMapProxy(dict):
     
     @staticmethod
     def _get_market_id(symbol):
-        """根据股票代码前缀推断市场ID"""
+        """根据股票/ETF代码前缀推断市场ID"""
         if not symbol or len(symbol) < 1:
             raise KeyError(symbol)
         prefix = symbol[0]
-        if prefix == '6':
-            return 1  # 上交所
-        elif prefix in ('0', '3', '4', '8'):
-            return 0  # 深交所/北交所
+        if prefix in ('6', '5'):
+            return 1  # 上交所（含5开头的沪市ETF: 510xxx, 511xxx, 512xxx, 515xxx等）
+        elif prefix in ('0', '1', '3', '4', '8'):
+            return 0  # 深交所/北交所（含1开头的深市ETF: 159xxx）
         else:
             raise KeyError(f"未知股票代码前缀: {symbol}")
 
