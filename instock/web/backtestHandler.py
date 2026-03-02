@@ -21,6 +21,7 @@ import instock.core.indicator.calculate_indicator as idr
 import instock.core.pattern.pattern_recognitions as kpr
 import instock.lib.trade_time as trd
 import instock.lib.database as mdb
+from instock.core.backtest.rate_stats import ROUND_TRIP_COST_PCT
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
@@ -212,35 +213,48 @@ def _run_backtest(code, strategy, period, start_date_str, end_date_str, checkpoi
     
     # 获取买入日及之后的数据
     mask = hist['date'] >= buy_date
-    future_data = hist.loc[mask].head(max_days + 1)
+    future_data = hist.loc[mask].head(max_days + 2)  # +2: 信号日(T) + 执行日(T+1) + max_days
     
     if len(future_data) <= 1:
         return {"error": f"买入日 {buy_date} 之后无足够交易数据"}
     
-    buy_price = future_data.iloc[0]['close']
-    buy_date_actual = future_data.iloc[0]['date']
+    # 修正: 使用T+1开盘价作为买入价（信号在T日收盘后产生，最早T+1开盘买入）
+    if len(future_data) >= 2 and 'open' in future_data.columns:
+        buy_price = future_data.iloc[1]['open']  # T+1 开盘价
+        buy_date_actual = future_data.iloc[1]['date']  # 实际买入日
+        # 涨停检测: T+1开盘涨停则无法买入
+        t_close = future_data.iloc[0]['close']
+        if buy_price > 0 and t_close > 0 and (buy_price - t_close) / t_close >= 0.095:
+            return {"error": f"买入日 {buy_date_actual} 开盘涨停，无法买入"}
+        future_for_calc = future_data.iloc[1:]  # 从T+1开始
+    else:
+        buy_price = future_data.iloc[0]['close']
+        buy_date_actual = future_data.iloc[0]['date']
+        future_for_calc = future_data
     
-    # 计算各天收益率
+    # 计算各天收益率（扣除交易成本）
     returns = []
     for days in checkpoints:
         if days > max_days:
             break
-        if days < len(future_data):
-            sell_price = future_data.iloc[days]['close']
-            rate = round(100 * (sell_price - buy_price) / buy_price, 2)
-            sell_date = future_data.iloc[days]['date']
+        if days < len(future_for_calc):
+            sell_price = future_for_calc.iloc[days]['close']
+            raw_rate = round(100 * (sell_price - buy_price) / buy_price, 2)
+            rate = round(raw_rate - ROUND_TRIP_COST_PCT, 2)
+            sell_date = future_for_calc.iloc[days]['date']
             returns.append({
                 'days': days,
                 'rate': rate,
+                'raw_rate': raw_rate,  # 未扣费收益（供参考）
                 'price': round(float(sell_price), 2),
                 'date': sell_date
             })
     
     # 计算区间最高/最低
-    if len(future_data) > 1:
-        high_price = float(future_data['high'].max())
-        low_price = float(future_data['low'].min())
-        max_return = round(100 * (high_price - buy_price) / buy_price, 2)
+    if len(future_for_calc) > 1:
+        high_price = float(future_for_calc['high'].max())
+        low_price = float(future_for_calc['low'].min())
+        max_return = round(100 * (high_price - buy_price) / buy_price - ROUND_TRIP_COST_PCT, 2)
         max_drawdown = round(100 * (low_price - buy_price) / buy_price, 2)
     else:
         max_return = 0
@@ -495,17 +509,30 @@ def _compute_batch_backtest_onthefly(strategy_func, strategy_cn, strategy_name, 
             except Exception:
                 continue
 
-            # 计算各周期收益率
+            # 计算各周期收益率（使用T+1开盘价买入，扣除交易成本）
             mask = hist['date'] >= date_str
             future = hist.loc[mask]
-            if len(future) < 2:
+            if len(future) < 3:  # 至少需要T, T+1, T+2
                 continue
-            buy_price = float(future.iloc[0]['close'])
+            # T+1开盘价作为买入价
+            if 'open' in future.columns:
+                buy_price = float(future.iloc[1]['open'])
+                # 涨停检测
+                t_close = float(future.iloc[0]['close'])
+                if buy_price > 0 and t_close > 0 and (buy_price - t_close) / t_close >= 0.095:
+                    continue  # 涨停无法买入
+                future_from_buy = future.iloc[1:]  # 从T+1开始
+            else:
+                buy_price = float(future.iloc[0]['close'])
+                future_from_buy = future
+            if buy_price <= 0:
+                continue
             rates = {}
             for days in horizon_list:
-                if days < len(future):
-                    sell_price = float(future.iloc[days]['close'])
-                    rates[days] = round(100.0 * (sell_price - buy_price) / buy_price, 2)
+                if days < len(future_from_buy):
+                    sell_price = float(future_from_buy.iloc[days]['close'])
+                    raw_rate = round(100.0 * (sell_price - buy_price) / buy_price, 2)
+                    rates[days] = round(raw_rate - ROUND_TRIP_COST_PCT, 2)
             results.append((date_str, rates))
         return results
 

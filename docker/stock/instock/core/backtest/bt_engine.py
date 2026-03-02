@@ -312,6 +312,8 @@ def calculate_simple_returns(data: pd.DataFrame,
     """
     计算简单收益率（兼容旧版本）
     
+    修正：使用T+1开盘价作为买入基准，扣除交易成本。
+    
     Args:
         data: 股票数据
         signal_date: 信号日期
@@ -320,22 +322,35 @@ def calculate_simple_returns(data: pd.DataFrame,
     Returns:
         各天数对应的收益率
     """
+    from .rate_stats import ROUND_TRIP_COST_PCT
+
     if days is None:
         days = [1, 3, 5, 10, 20, 60]
     
     mask = data['date'] >= signal_date
     future_data = data.loc[mask].copy()
     
+    # 至少需要信号日(T) + 执行日(T+1) = 2行
     if len(future_data) <= 1:
         return {d: None for d in days}
     
-    base_close = future_data.iloc[0]['close']
+    # 使用T+1开盘价作为买入基准
+    if 'open' in future_data.columns and len(future_data) >= 2:
+        base_price = future_data.iloc[1]['open']
+    else:
+        base_price = future_data.iloc[0]['close']
+    
+    if base_price <= 0 or np.isnan(base_price):
+        return {d: None for d in days}
+    
     results = {}
     
     for d in days:
+        # d=1 → future_data.iloc[1] → T+1 close（与 rate_stats.rate_1 一致）
         if len(future_data) > d:
             future_close = future_data.iloc[d]['close']
-            results[d] = round((future_close - base_close) / base_close * 100, 2)
+            raw_rate = round((future_close - base_price) / base_price * 100, 2)
+            results[d] = round(raw_rate - ROUND_TRIP_COST_PCT, 2)
         else:
             results[d] = None
     

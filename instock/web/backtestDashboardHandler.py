@@ -23,6 +23,7 @@ import instock.core.tablestructure as tbs
 import instock.lib.trade_time as trd
 import instock.lib.database as mdb
 import instock.web.base as webBase
+from instock.core.backtest.rate_stats import ROUND_TRIP_COST_PCT
 
 __author__ = 'InStock'
 __date__ = '2026/02/27'
@@ -818,7 +819,19 @@ class TradePairHandler(webBase.BaseHandler, ABC):
             if not idxs:
                 continue
             buy_idx = int(idxs[0])
-            buy_price = float(hist.loc[buy_idx, 'close'])
+
+            # 修正: 使用T+1开盘价作为买入价（信号在T日收盘后产生）
+            if buy_idx + 1 < len(hist) and 'open' in hist.columns:
+                exec_idx = buy_idx + 1
+                buy_price = float(hist.loc[hist.index[exec_idx], 'open'])
+                # 涨停检测
+                t_close = float(hist.loc[buy_idx, 'close'])
+                if buy_price > 0 and t_close > 0 and (buy_price - t_close) / t_close >= 0.095:
+                    continue  # T+1开盘涨停，无法买入
+                buy_date = _to_dash_ymd_loose(hist.loc[hist.index[exec_idx], 'date'])
+                buy_idx = exec_idx  # 更新buy_idx为实际执行日
+            else:
+                buy_price = float(hist.loc[buy_idx, 'close'])
 
             if sell_date:
                 sell_idxs = hist.index[hist['date_key'] == sell_key].tolist() if sell_key else []
@@ -834,7 +847,8 @@ class TradePairHandler(webBase.BaseHandler, ABC):
 
             sell_price = float(hist.loc[sell_idx, 'close'])
             hold_days = max(0, sell_idx - buy_idx)
-            return_rate = round(100.0 * (sell_price - buy_price) / buy_price, 2) if buy_price else 0
+            raw_return = round(100.0 * (sell_price - buy_price) / buy_price, 2) if buy_price else 0
+            return_rate = round(raw_return - ROUND_TRIP_COST_PCT, 2)
 
             buy_rows.append({
                 'buy_date': buy_date,
