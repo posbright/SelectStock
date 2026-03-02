@@ -21,10 +21,10 @@ def stock_cpbd_em(symbol: str = "688041") -> pd.DataFrame:
     :rtype: pandas.DataFrame
     """
     url = "https://emweb.securities.eastmoney.com/PC_HSF10/OperationsRequired/PageAjax"
-    if symbol.startswith("6"):
-        symbol = f"SH{symbol}"
+    if symbol.startswith(('6', '5', '9')):
+        symbol = f"SH{symbol}"  # 上交所（含5开头的沪市ETF: 510xxx等）
     else:
-        symbol = f"SZ{symbol}"
+        symbol = f"SZ{symbol}"  # 深交所/北交所（含1开头的深市ETF: 159xxx）
     params = {"code": symbol}
 
     r =  fetcher.make_request(url, params=params)
@@ -112,10 +112,10 @@ def stock_zjlx_em(symbol: str = "688041") -> pd.DataFrame:
     :rtype: pandas.DataFrame
     """
     url = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get"
-    if symbol.startswith("6"):
-        symbol = f"1.{symbol}"
+    if symbol.startswith(('6', '5', '9')):
+        symbol = f"1.{symbol}"  # 上交所（含5开头的沪市ETF: 510xxx等）
     else:
-        symbol = f"0.{symbol}"
+        symbol = f"0.{symbol}"  # 深交所/北交所（含1开头的深市ETF: 159xxx）
     params = {
         "lmt": "0",
         "klt": "1",

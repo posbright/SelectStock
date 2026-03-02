@@ -236,10 +236,10 @@ def get_plot_kline(code, stock, date, stock_name):
                 width=47)
 
         # 东方财富股票页面
-        if code.startswith("6"):
-            code_name = f"SH{code}"
+        if code.startswith(('6', '5', '9')):
+            code_name = f"SH{code}"  # 上交所（含5开头的沪市ETF: 510xxx等）
         else:
-            code_name = f"SZ{code}"
+            code_name = f"SZ{code}"  # 深交所/北交所（含1开头的深市ETF: 159xxx）
         div_dfcf_hq = Div(
             text=f"""<a href="https://quote.eastmoney.com/{code_name}.html" target="_blank">{code}{stock_name}行情</a>""",
             width=150)
