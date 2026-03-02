@@ -52,29 +52,57 @@ HIST_DATA_DEFAULT_YEARS = int(os.environ.get('HIST_DATA_DEFAULT_YEARS', 10))  # 
 _source_health_lock = threading.Lock()
 _source_fail_counts = {}       # {"东方财富": 5, "腾讯财经": 0, ...}
 _source_cooldown_until = {}    # {"东方财富": timestamp, ...}
+_source_degrade_count = {}     # {"东方财富": 3, ...}  累计降级次数（用于渐进退避）
+_source_is_degraded = {}       # {"东方财富": True, ...}  是否已处于降级状态（控制日志只输出一次）
 
 SOURCE_FAIL_THRESHOLD = 5          # 连续失败 N 次后降级该数据源
-SOURCE_COOLDOWN_SECONDS = 300      # 降级冷却时间（秒）
+SOURCE_COOLDOWN_SECONDS = 300      # 基础降级冷却时间（秒）
+SOURCE_MAX_COOLDOWN_SECONDS = 3600 # 最大冷却时间（秒），渐进退避上限
 
 
 def _report_source_failure(source_name):
-    """报告数据源失败，累积达到阈值时触发降级"""
+    """报告数据源失败，累积达到阈值时触发降级
+    
+    优化：
+    - 仅在首次触发降级时输出 WARNING，后续只累计计数不重复输出
+    - 渐进冷却：反复降级的数据源冷却时间翻倍（上限 SOURCE_MAX_COOLDOWN_SECONDS）
+    """
     with _source_health_lock:
         _source_fail_counts[source_name] = _source_fail_counts.get(source_name, 0) + 1
         if _source_fail_counts[source_name] >= SOURCE_FAIL_THRESHOLD:
-            cooldown_end = time.time() + SOURCE_COOLDOWN_SECONDS
-            _source_cooldown_until[source_name] = cooldown_end
-            logging.warning(
-                f"数据源 [{source_name}] 连续失败 {_source_fail_counts[source_name]} 次，"
-                f"降级 {SOURCE_COOLDOWN_SECONDS} 秒（优先使用其他数据源）"
-            )
+            already_degraded = _source_is_degraded.get(source_name, False)
+            if not already_degraded:
+                # 首次触发降级（或冷却恢复后再次降级）
+                _source_is_degraded[source_name] = True
+                degrade_n = _source_degrade_count.get(source_name, 0) + 1
+                _source_degrade_count[source_name] = degrade_n
+                # 渐进退避：每次降级冷却时间翻倍（300s → 600s → 1200s → ... → 最大3600s）
+                cooldown = min(SOURCE_COOLDOWN_SECONDS * (2 ** (degrade_n - 1)), SOURCE_MAX_COOLDOWN_SECONDS)
+                cooldown_end = time.time() + cooldown
+                _source_cooldown_until[source_name] = cooldown_end
+                logging.warning(
+                    f"数据源 [{source_name}] 连续失败 {_source_fail_counts[source_name]} 次，"
+                    f"降级 {cooldown} 秒（第{degrade_n}次降级，优先使用其他数据源）"
+                )
+            else:
+                # 已处于降级状态，只刷新冷却计时器，不重复输出日志
+                degrade_n = _source_degrade_count.get(source_name, 1)
+                cooldown = min(SOURCE_COOLDOWN_SECONDS * (2 ** (degrade_n - 1)), SOURCE_MAX_COOLDOWN_SECONDS)
+                _source_cooldown_until[source_name] = time.time() + cooldown
 
 
 def _report_source_success(source_name):
     """报告数据源成功，重置失败计数和冷却状态"""
     with _source_health_lock:
+        was_degraded = _source_is_degraded.get(source_name, False)
+        old_fail_count = _source_fail_counts.get(source_name, 0)
         _source_fail_counts[source_name] = 0
         _source_cooldown_until.pop(source_name, None)
+        _source_is_degraded[source_name] = False
+        # 降级恢复且曾失败过 → 输出一条汇总日志
+        if was_degraded and old_fail_count > 0:
+            _source_degrade_count[source_name] = 0  # 成功后重置渐进退避
+            logging.info(f"数据源 [{source_name}] 恢复正常（此前连续失败 {old_fail_count} 次）")
 
 
 def _is_source_degraded(source_name):
@@ -84,10 +112,11 @@ def _is_source_degraded(source_name):
         if cooldown_end is None:
             return False
         if time.time() >= cooldown_end:
-            # 冷却期已过，自动恢复
+            # 冷却期已过，自动恢复（但不重置渐进退避计数，需要成功请求才重置）
             _source_cooldown_until.pop(source_name, None)
             _source_fail_counts[source_name] = 0
-            logging.info(f"数据源 [{source_name}] 冷却期结束，已恢复正常优先级")
+            _source_is_degraded[source_name] = False
+            logging.info(f"数据源 [{source_name}] 冷却期结束，尝试恢复")
             return False
         return True
 
@@ -840,10 +869,13 @@ def _fetch_from_sources(code, fetch_start, date_end, adjust=''):
                 break
             except Exception as e:
                 err_str = str(e)
-                # 检查是否为连接类错误（可能被包装在其他异常中）
+                # 检查是否为连接类错误或服务端过载（可能被包装在其他异常中）
+                # 503/504 表示服务端暂时不可用，重试同一源无意义，应立即换源
                 if any(keyword in err_str for keyword in [
                     'RemoteDisconnected', 'Connection aborted', 'ConnectionReset',
-                    'SSLError', 'SSLEOFError', 'UNEXPECTED_EOF', 'Max retries exceeded'
+                    'SSLError', 'SSLEOFError', 'UNEXPECTED_EOF', 'Max retries exceeded',
+                    '503 Server Error', '504 Server Error', '502 Server Error',
+                    'Service Unavailable', 'Gateway Time-out', 'Bad Gateway',
                 ]):
                     _log_source_failure_aggregated(source_name, code, err_str)
                     _report_source_failure(source_name)

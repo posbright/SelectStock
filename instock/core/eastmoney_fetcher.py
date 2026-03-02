@@ -113,11 +113,13 @@ class eastmoney_fetcher:
                 # 请求失败，反馈给代理池（累积失败次数，达阈值后自动移除）
                 proxy_pool.report_failure(proxy_url)
                 err_str = str(e)
-                # 连接级错误（服务器拒绝/断开）：不重试，立即抛出让上层换数据源
+                # 连接级错误（服务器拒绝/断开/过载）：不重试，立即抛出让上层换数据源
                 is_connection_error = any(kw in err_str for kw in [
                     'RemoteDisconnected', 'Connection aborted', 'ConnectionReset',
                     'Connection refused', 'Max retries exceeded',
-                    'SSLError', 'SSLEOFError'
+                    'SSLError', 'SSLEOFError',
+                    '503 Server Error', '504 Server Error', '502 Server Error',
+                    'Service Unavailable', 'Gateway Time-out', 'Bad Gateway',
                 ])
                 if is_connection_error:
                     logging.debug(f"请求连接错误(不重试): {e}")
