@@ -613,7 +613,7 @@ def fetch_stock_blocktrade_data(date):
         columns.insert(0, 'index')
         data.columns = columns
         data = data.loc[data['code'].apply(is_a_stock)]
-        data.drop('index', axis=1, inplace=True)
+        data.drop('index', axis=1, inplace=True, errors='ignore')
         return data
     except TypeError:
         logging.warning("目前还没有大宗交易数据，请17:00点后再获取")

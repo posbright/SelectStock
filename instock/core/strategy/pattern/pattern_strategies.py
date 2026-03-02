@@ -69,7 +69,9 @@ class BreakthroughPlatformStrategy(PatternStrategy):
         
         data_front = data.loc[(data['date'] < breakthrough_row) & (data['ma60'] > 0)]
         for _close, _ma60 in zip(data_front['close'].values, data_front['ma60'].values):
-            if not (-0.05 < ((_ma60 - _close) / _ma60) < 0.2):
+            # 收盘价与60日均线偏离在-5%~20%之间
+            deviation = (_close - _ma60) / _ma60
+            if not (-0.05 < deviation < 0.2):
                 return False
         
         return True

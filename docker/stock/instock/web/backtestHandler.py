@@ -507,6 +507,7 @@ def _compute_batch_backtest_onthefly(strategy_func, strategy_cn, strategy_name, 
                 if not matched:
                     continue
             except Exception:
+                logging.debug(f"批量回测策略检测异常：{code} {date_str}", exc_info=True)
                 continue
 
             # 计算各周期收益率（使用T+1开盘价买入，扣除交易成本）
@@ -554,6 +555,7 @@ def _compute_batch_backtest_onthefly(strategy_func, strategy_cn, strategy_name, 
                     if rate_days in rates and rates[rate_days] > 0:
                         dr['success_count'] += 1
             except Exception:
+                logging.warning(f"批量回测线程结果异常：{future_map.get(future, '?')}", exc_info=True)
                 continue
 
     # 7. 聚合结果
@@ -645,6 +647,7 @@ def _calc_key_indicators(hist_data, buy_date):
             'atr': _safe_round(row.get('atr')),
         }
     except Exception:
+        logging.debug("计算关键技术指标异常", exc_info=True)
         return {}
 
 
@@ -665,5 +668,5 @@ def _get_stock_name(code):
             if result is not None and len(result) > 0:
                 return result.iloc[0]['name']
     except Exception:
-        pass
+        logging.debug(f"查询股票名称异常：{code}", exc_info=True)
     return code

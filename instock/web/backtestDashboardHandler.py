@@ -220,6 +220,7 @@ def _get_table_trade_date_count(table_name: str, start_date: str, end_date: str)
     try:
         return int(df.iloc[0]['cnt']) if df is not None and len(df) > 0 else 0
     except Exception:
+        logging.debug(f"_get_table_trade_date_count 解析异常：{table_name}", exc_info=True)
         return 0
 
 
@@ -361,7 +362,13 @@ class DashboardOverviewHandler(webBase.BaseHandler, ABC):
 
     def get(self):
         self.set_header('Content-Type', 'application/json;charset=UTF-8')
+        try:
+            self._handle()
+        except Exception:
+            logging.error("回测看板Overview处理异常", exc_info=True)
+            self.write(json.dumps({'error': '服务器内部错误'}, ensure_ascii=False))
 
+    def _handle(self):
         days = self.get_argument('days', default='60', strip=True)
         metric = self.get_argument('metric', default='5', strip=True)  # best/worst 基于哪个 horizon
 
@@ -464,7 +471,13 @@ class PerformanceTimelineHandler(webBase.BaseHandler, ABC):
 
     def get(self):
         self.set_header('Content-Type', 'application/json;charset=UTF-8')
+        try:
+            self._handle()
+        except Exception:
+            logging.error("回测看板Timeline处理异常", exc_info=True)
+            self.write(json.dumps({'error': '服务器内部错误'}, ensure_ascii=False))
 
+    def _handle(self):
         strategies_csv = self.get_argument('strategies', default='', strip=True)
         days = self.get_argument('days', default='90', strip=True)
         horizon = self.get_argument('horizon', default='5', strip=True)
@@ -538,7 +551,13 @@ class StrategyDetailHandler(webBase.BaseHandler, ABC):
 
     def get(self):
         self.set_header('Content-Type', 'application/json;charset=UTF-8')
+        try:
+            self._handle()
+        except Exception:
+            logging.error("回测看板StrategyDetail处理异常", exc_info=True)
+            self.write(json.dumps({'error': '服务器内部错误'}, ensure_ascii=False))
 
+    def _handle(self):
         strategy = self.get_argument('strategy', default='', strip=True)
         days = self.get_argument('days', default='30', strip=True)
         horizons_csv = self.get_argument('horizons', default='', strip=True)
@@ -622,7 +641,13 @@ class ReturnDistributionHandler(webBase.BaseHandler, ABC):
 
     def get(self):
         self.set_header('Content-Type', 'application/json;charset=UTF-8')
+        try:
+            self._handle()
+        except Exception:
+            logging.error("回测看板ReturnDistribution处理异常", exc_info=True)
+            self.write(json.dumps({'error': '服务器内部错误'}, ensure_ascii=False))
 
+    def _handle(self):
         strategy = self.get_argument('strategy', default='', strip=True)
         days = self.get_argument('days', default='60', strip=True)
         horizon = self.get_argument('horizon', default='5', strip=True)
@@ -706,7 +731,13 @@ class TradePairHandler(webBase.BaseHandler, ABC):
 
     def get(self):
         self.set_header('Content-Type', 'application/json;charset=UTF-8')
+        try:
+            self._handle()
+        except Exception:
+            logging.error("回测看板TradePair处理异常", exc_info=True)
+            self.write(json.dumps({'error': '服务器内部错误'}, ensure_ascii=False))
 
+    def _handle(self):
         strategy = self.get_argument('strategy', default='', strip=True)
         days = self.get_argument('days', default='60', strip=True)
         page = self.get_argument('page', default='1', strip=True)

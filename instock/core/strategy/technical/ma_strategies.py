@@ -93,7 +93,7 @@ class MA250PullbackStrategy(TechnicalStrategy):
         for _close, _volume, _date in zip(data['close'].values, data['volume'].values, data['date'].values):
             if _close > highest_row[0]:
                 highest_row = [_close, _volume, _date]
-            elif _close < lowest_row[0]:
+            if _close < lowest_row[0]:
                 lowest_row = [_close, _volume, _date]
         
         if lowest_row[1] == 0 or highest_row[1] == 0:

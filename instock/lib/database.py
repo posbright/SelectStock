@@ -143,7 +143,7 @@ def insert_other_db_from_df(to_db, data, table_name, cols_type, write_index, pri
         pk_cols = ipt.get_pk_constraint(table_name)['constrained_columns']
         has_primary_key = bool(pk_cols)
     except Exception:
-        pass  # 表不存在时忽略，首次创建会在后面处理
+        logging.debug(f"检查主键约束异常（表可能不存在，首次创建）：{table_name}", exc_info=True)
 
     # 选择插入方法：有主键时使用upsert避免重复插入错误，否则普通append
     insert_method = _mysql_upsert if has_primary_key else None
@@ -169,7 +169,7 @@ def insert_other_db_from_df(to_db, data, table_name, cols_type, write_index, pri
                 try:
                     engine_mysql.dispose()
                 except Exception:
-                    pass
+                    logging.debug(f"database.insert_other_db_from_df: dispose引擎异常", exc_info=True)
                 # 重新获取engine（单例模式下dispose后需要重建）
                 if to_db is None:
                     global _engine_instance

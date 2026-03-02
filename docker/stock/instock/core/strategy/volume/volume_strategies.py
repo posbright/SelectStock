@@ -60,6 +60,9 @@ class VolumeIncreaseStrategy(VolumeStrategy):
         data = data.head(n=self.threshold)
         mean_vol = data.iloc[-1]['vol_ma5']
         
+        if mean_vol <= 0:
+            return False
+        
         # 量比>=2
         vol_ratio = last_vol / mean_vol
         return vol_ratio >= 2

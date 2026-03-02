@@ -89,7 +89,7 @@ def main():
             stock_data.release()
             logging.warning("Phase 2 stock_data 返回 None，已释放单例以允许 Phase 4 重试")
     except Exception:
-        pass
+        logging.debug("释放 stock_data 单例异常", exc_info=True)
 
     # ================================================================
     # Phase 4: 数据分析（流式处理 — 低内存模式）
