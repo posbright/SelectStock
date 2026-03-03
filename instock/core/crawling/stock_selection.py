@@ -1,6 +1,7 @@
 # -*- coding:utf-8 -*-
 # !/usr/bin/env python
 
+import logging
 import math
 import random
 import time
@@ -20,10 +21,14 @@ def stock_selection() -> pd.DataFrame:
     https://data.eastmoney.com/xuangu/
     :return: 选股器
     :rtype: pandas.DataFrame
+
+    API 支持的最大 page_size 约为 2000~3000；
+    使用 500 每页 → ≈10 页即可获取全部 A 股，
+    比原来 50 每页 × 92 页减少 90% 请求量，大幅降低因代理不稳定导致的整体失败概率。
+    每页独立 try/except + 重试，部分失败仍返回已获取的数据。
     """
     cols = tbs.TABLE_CN_STOCK_SELECTION['columns']
-    page_size = 50
-    page_current = 1
+    page_size = 500
     sty = ""  # 初始值 "SECUCODE,SECURITY_CODE,SECURITY_NAME_ABBR,CHANGE_RATE"
     for k in cols:
         if 'map' in cols[k]:
@@ -32,7 +37,7 @@ def stock_selection() -> pd.DataFrame:
     params = {
         "sty": sty[1:],
         "filter": "(MARKET+in+(\"上交所主板\",\"深交所主板\",\"深交所创业板\"))(NEW_PRICE>0)",
-        "p": page_current,
+        "p": 1,
         "ps": page_size,
         "source": "SELECT_SECURITIES",
         "client": "WEB"
@@ -45,17 +50,33 @@ def stock_selection() -> pd.DataFrame:
         return pd.DataFrame()
 
     data_count = data_json["result"]["count"]
-    page_count = math.ceil(data_count/page_size)
-    while page_count > 1:
-        # 添加随机延迟，避免爬取过快
-        time.sleep(random.uniform(1, 1.5))
-        page_current = page_current + 1
-        params["p"] = page_current
-        r = fetcher.make_request(url, params=params)
-        data_json = r.json()
-        _data = data_json["result"]["data"]
-        data.extend(_data)
-        page_count =page_count - 1
+    total_pages = math.ceil(data_count / page_size)
+    failed_pages = []
+
+    for page in range(2, total_pages + 1):
+        # 随机延迟，降低被限流的风险
+        time.sleep(random.uniform(0.5, 1.5))
+        params["p"] = page
+        page_ok = False
+        for attempt in range(3):  # 每页最多重试 3 次
+            try:
+                r = fetcher.make_request(url, params=params)
+                page_json = r.json()
+                page_data = page_json["result"]["data"]
+                if page_data:
+                    data.extend(page_data)
+                page_ok = True
+                break
+            except Exception as e:
+                logging.warning(f"选股器第 {page}/{total_pages} 页获取失败(第{attempt+1}次): {e}")
+                if attempt < 2:
+                    time.sleep(random.uniform(2, 4))
+        if not page_ok:
+            failed_pages.append(page)
+
+    if failed_pages:
+        logging.warning(f"选股器有 {len(failed_pages)} 页获取失败: {failed_pages}，"
+                        f"已获取 {len(data)}/{data_count} 条数据")
 
     temp_df = pd.DataFrame(data)
 

@@ -25,15 +25,17 @@ def save_nph_stock_selection_data(date, before=True):
 
     try:
         data = stf.fetch_stock_selection()
-        if data is None:
+        if data is None or len(data) == 0:
             # 首次获取失败，等待后重试一次（可能是瞬时网络问题）
-            logging.warning("selection_data: 首次获取选股数据失败，5秒后重试")
+            logging.warning("selection_data: 首次获取选股数据失败，10秒后重试")
             import time as _time
-            _time.sleep(5)
+            _time.sleep(10)
             data = stf.fetch_stock_selection()
-        if data is None:
+        if data is None or len(data) == 0:
             logging.error("selection_data: 重试后仍无法获取选股数据，跳过本次更新")
             return
+
+        logging.info(f"selection_data: 获取到 {len(data)} 条选股数据")
 
         table_name = tbs.TABLE_CN_STOCK_SELECTION['name']
         # 获取数据中的日期，用于删除老数据
@@ -51,6 +53,7 @@ def save_nph_stock_selection_data(date, before=True):
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_SELECTION['columns'])
 
         mdb.insert_db_from_df(data, table_name, cols_type, False, "`date`,`code`")
+        logging.info(f"selection_data: 成功写入 {len(data)} 条数据, date={_date}")
     except Exception as e:
         logging.error(f"selection_data_daily_job.save_nph_stock_selection_data处理异常", exc_info=True)
 
