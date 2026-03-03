@@ -41,7 +41,6 @@ import instock.core.stockfetch as stf
 import instock.core.indicator.calculate_indicator as idr
 import instock.core.pattern.pattern_recognitions as kpr
 from instock.core.singleton_stock import stock_data
-from instock.core.stockfetch import fetch_stock_top_entity_data
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
@@ -160,14 +159,10 @@ def streaming_analysis(date):
     strategies = tbs.TABLE_CN_STOCK_STRATEGIES
     stock_tops = _get_stock_tops_from_db(date)
     if stock_tops is None:
-        # 数据库无龙虎榜数据时，降级从 API 获取
-        for strategy in strategies:
-            if strategy['func'].__name__ == 'check_high_tight':
-                try:
-                    stock_tops = fetch_stock_top_entity_data(date)
-                except Exception as e:
-                    logging.warning(f"获取龙虎榜数据异常（不影响其他策略）：{e}")
-                break
+        # 数据采集和数据分析分离：分析管道不发起API请求
+        # 龙虎榜数据由 basic_data_other_daily_job（fetch管道）负责入库
+        logging.warning(f"流式分析：数据库无龙虎榜数据，check_high_tight 策略将跳过。"
+                        f"请确认 fetch_daily_job / basic_data_other_daily_job 已正常运行")
     else:
         logging.info(f"流式分析：从数据库获取龙虎榜数据（{len(stock_tops)} 只，零API调用）")
 

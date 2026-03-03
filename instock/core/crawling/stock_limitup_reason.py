@@ -110,10 +110,15 @@ def stock_limitup_detail(row):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36"
     }
+    proxy_pool = proxys()
+    current_proxy = proxy_pool.get_proxies()
+    proxy_url = current_proxy.get("http") if current_proxy else None
     try:
-        r = requests.get(url, proxies=proxys().get_proxies(), headers=headers, timeout=15)
+        r = requests.get(url, proxies=current_proxy, headers=headers, timeout=15)
+        proxy_pool.report_success(proxy_url)
         data_text = r.text
     except Exception as e:
+        proxy_pool.report_failure(proxy_url)
         logging.debug(f"stock_limitup_detail请求失败: {row['ID']} - {e}")
         return ""
 

@@ -206,14 +206,11 @@ class GetKlineDataHandler(webBase.BaseHandler, ABC):
             if date is None:
                 date = datetime.datetime.now().strftime('%Y-%m-%d')
 
-            # 获取历史K线
-            if code.startswith(('1', '5')):
-                stock = stf.fetch_etf_hist((date, code))
-            else:
-                stock = stf.fetch_stock_hist((date, code))
+            # 获取历史K线（仅从本地缓存读取，不发起外部API请求）
+            stock = stf.read_hist_from_cache((date, code))
 
             if stock is None or stock.empty:
-                self.write(json.dumps({"error": "无K线数据", "code": code}, ensure_ascii=False))
+                self.write(json.dumps({"error": "无K线数据（缓存未命中，请确认数据采集任务已运行）", "code": code}, ensure_ascii=False))
                 return
 
             # 根据 period 重采样

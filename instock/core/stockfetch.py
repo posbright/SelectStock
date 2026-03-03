@@ -1340,6 +1340,33 @@ def update_all_caches(stocks, date_start, date_end, workers=2):
     return success + skip, fail
 
 
+def read_hist_from_cache(data_base, years=None):
+    """
+    从缓存读取历史数据（Web层专用，零API调用）。
+
+    与 fetch_stock_hist / fetch_etf_hist 接口兼容（接受 (date, code) 元组），
+    但绝不发起外部 API 请求。适用于：
+    - Web handler 展示 K 线 / 指标
+    - 任何需要"只读缓存、缺失则报告"的场景
+
+    缺失数据时返回 None 并写 warning 日志。
+    """
+    date = data_base[0]
+    code = data_base[1]
+    if years is None:
+        years = HIST_DATA_DEFAULT_YEARS
+    date_start, _ = trd.get_trade_hist_interval(date, years)
+    if isinstance(date, str):
+        date_end = date.replace("-", "")
+    else:
+        date_end = date.strftime("%Y%m%d")
+    data = read_stock_hist_from_cache(code, date_start, date_end)
+    if data is None:
+        logging.warning(f"read_hist_from_cache: {code} 缓存无数据（{date_start}~{date_end}），"
+                        f"请确认 fetch_daily_job 已正常运行")
+    return data
+
+
 def read_stock_hist_from_cache(code, date_start, date_end):
     """
     从缓存文件读取单只股票的历史数据（流式处理用）

@@ -23,11 +23,10 @@ class GetDataIndicatorsHandler(webBase.BaseHandler, ABC):
         try:
             if code is None:
                 return
-            if code.startswith(('1', '5')):
-                stock = stf.fetch_etf_hist((date, code))
-            else:
-                stock = stf.fetch_stock_hist((date, code))
+            # 仅从本地缓存读取历史数据，不发起外部API请求
+            stock = stf.read_hist_from_cache((date, code))
             if stock is None:
+                logging.warning(f"指标页面：{code} 缓存无数据，请确认数据采集任务已运行")
                 return
 
             pk = vis.get_plot_kline(code, stock, date, name)
