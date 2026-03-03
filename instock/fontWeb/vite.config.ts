@@ -21,6 +21,12 @@ export default defineConfig({
       '/instock': {
         target: 'http://115.29.213.22:9988',
         changeOrigin: true
+      },
+      // 支持 /stock/ 前缀的代理（与生产环境 nginx 一致）
+      '/stock/instock': {
+        target: 'http://115.29.213.22:9988',
+        changeOrigin: true,
+        rewrite: (path: string) => path.replace(/^\/stock/, '')
       }
     }
   },

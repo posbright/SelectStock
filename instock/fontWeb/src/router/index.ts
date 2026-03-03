@@ -317,8 +317,20 @@ const routes: RouteRecordRaw[] = [
   }
 ]
 
+/**
+ * 动态检测基础路径，支持通过 nginx 反向代理 /stock/ 前缀访问
+ * 以及直接通过 Tornado 端口访问
+ */
+function detectBasePath(): string {
+  const path = window.location.pathname
+  if (path.startsWith('/stock')) {
+    return '/stock/'
+  }
+  return '/'
+}
+
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory(detectBasePath()),
   routes
 })
 
