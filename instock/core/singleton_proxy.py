@@ -128,6 +128,8 @@ class proxys(metaclass=singleton_type):
                              if info["fail_count"] < PROXY_MAX_FAIL_COUNT]
 
         if not all_available:
+            # 代理池已耗尽，触发异步紧急补充（不阻塞当前请求）
+            self._trigger_emergency_refresh()
             return None
 
         # 根据代理池大小动态调整直连概率
@@ -212,6 +214,21 @@ class proxys(metaclass=singleton_type):
 
     def force_refresh(self):
         """手动触发刷新"""
+        threading.Thread(target=self._refresh_cycle, daemon=True).start()
+
+    def _trigger_emergency_refresh(self):
+        """
+        代理池耗尽时触发紧急补充（异步，不阻塞调用方）。
+        
+        防抖：60秒内最多触发一次，避免并发请求同时触发大量刷新线程。
+        """
+        now = time.time()
+        with self._lock:
+            last = getattr(self, '_last_emergency_refresh', 0)
+            if now - last < 60:
+                return  # 60秒内已触发过，跳过
+            self._last_emergency_refresh = now
+        logging.warning("代理池：可用代理已耗尽，触发紧急补充（异步）")
         threading.Thread(target=self._refresh_cycle, daemon=True).start()
 
     # ══════════════════════════════════════════════
