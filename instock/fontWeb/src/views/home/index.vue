@@ -54,7 +54,7 @@ const stats = ref([
             识别K线各种形态，综合选股，内置多种选股策略，支持选股验证回测。
           </p>
           <div class="welcome-actions">
-            <el-button type="primary" size="large" @click="$router.push('/stock/selection')">
+            <el-button type="primary" size="large" @click="$router.push('/selection')">
               <el-icon><Search /></el-icon>
               开始选股
             </el-button>
@@ -101,7 +101,7 @@ const stats = ref([
     
     <el-row :gutter="20">
       <el-col :xs="24" :sm="12" :md="6">
-        <el-card class="quick-link" shadow="hover" @click="$router.push('/stock/selection')">
+        <el-card class="quick-link" shadow="hover" @click="$router.push('/selection')">
           <el-icon size="40" color="#409eff"><Monitor /></el-icon>
           <span>综合选股</span>
         </el-card>
