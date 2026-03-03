@@ -219,18 +219,12 @@ def is_open_with_line(price):
     return price != '-'
 
 
-# 读取股票交易日历数据（Sina API → DB fallback）
+# 读取股票交易日历数据（DB 优先 → Sina API fallback）
+# 设计原则：数据采集和数据分析分离。交易日历数据一旦入库就很少变动，
+# 优先从 DB 读取可避免触发代理池初始化（~11分钟），让 Web 服务器和分析作业
+# 不依赖外部 API / 代理即可获得交易日历。
 def fetch_stocks_trade_date():
-    # 首选：Sina API（包含完整的历史交易日历）
-    try:
-        data = tdh.tool_trade_date_hist_sina()
-        if data is not None and len(data.index) > 0:
-            data_date = set(data['trade_date'].values.tolist())
-            return data_date
-    except Exception as e:
-        logging.error(f"stockfetch.fetch_stocks_trade_date处理异常", exc_info=True)
-
-    # 降级：从数据库 cn_stock_spot 表提取历史交易日期
+    # 首选：从数据库 cn_stock_spot 表提取历史交易日期（零代理、零API）
     try:
         import instock.lib.database as mdb
         if mdb.checkTableIsExist('cn_stock_spot'):
@@ -240,12 +234,20 @@ def fetch_stocks_trade_date():
             if df is not None and len(df) > 0:
                 dates = set(pd.to_datetime(df['date']).dt.date.tolist())
                 if len(dates) > 30:
-                    logging.info(f"fetch_stocks_trade_date: Sina不可用，从DB获取{len(dates)}个交易日（降级模式）")
                     return dates
                 else:
-                    logging.warning(f"fetch_stocks_trade_date: DB仅有{len(dates)}个交易日，数据不足")
-    except Exception as e2:
-        logging.warning(f"fetch_stocks_trade_date: DB降级也失败: {e2}")
+                    logging.warning(f"fetch_stocks_trade_date: DB仅有{len(dates)}个交易日，数据不足，降级到Sina API")
+    except Exception as e:
+        logging.warning(f"fetch_stocks_trade_date: DB查询失败: {e}")
+
+    # 降级：Sina API（需要代理，会触发代理池初始化）
+    try:
+        data = tdh.tool_trade_date_hist_sina()
+        if data is not None and len(data.index) > 0:
+            data_date = set(data['trade_date'].values.tolist())
+            return data_date
+    except Exception as e:
+        logging.error(f"stockfetch.fetch_stocks_trade_date处理异常", exc_info=True)
 
     return None
 
