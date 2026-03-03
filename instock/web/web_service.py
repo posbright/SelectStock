@@ -86,21 +86,6 @@ class Application(tornado.web.Application):
             # 所有非 API 路径 fallback 到 Vue SPA 的 index.html（支持前端路由）
             (r"/(.*)", SPAHandler, {"static_path": static_path}),
         ]
-
-        # ── 为 nginx 反向代理 /stock/ 前缀生成镜像路由 ──
-        # 当通过 nginx 代理访问 http://host/stock/... 时，Tornado 可能收到
-        # 带 /stock 前缀的请求（取决于 nginx 配置），此处添加对应的路由处理
-        stock_handlers = []
-        for h in handlers[1:-1]:  # 跳过 robots.txt（第一个）和 catch-all（最后一个）
-            stock_handlers.append((r"/stock" + h[0],) + tuple(h[1:]))
-        # /stock/(.*) catch-all：Vue SPA fallback
-        stock_handlers.append(
-            (r"/stock/(.*)", SPAHandler, {"static_path": static_path})
-        )
-
-        # 最终路由顺序：robots.txt → /stock/ 前缀路由 → 原始路由
-        all_handlers = [handlers[0]] + stock_handlers + handlers[1:]
-
         settings = dict(  # 配置
             template_path=os.path.join(os.path.dirname(__file__), "templates"),
             static_path=static_path,
@@ -109,7 +94,7 @@ class Application(tornado.web.Application):
             cookie_secret="027bb1b670eddf0392cdda8709268a17b58b7",
             debug=False,
         )
-        super(Application, self).__init__(all_handlers, **settings)
+        super(Application, self).__init__(handlers, **settings)
         # Have one global connection to the blog DB across all handlers
         self.db = torndb.Connection(**mdb.MYSQL_CONN_TORNDB)
 

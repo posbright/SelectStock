@@ -1,20 +1,9 @@
 import axios, { AxiosInstance, InternalAxiosRequestConfig, AxiosResponse } from 'axios'
 import { ElMessage } from 'element-plus'
 
-/**
- * 动态检测 API 基础 URL
- * 当通过 /stock/ 前缀访问时，API 请求也需要带上前缀
- */
-function getApiBaseURL(): string {
-  if (window.location.pathname.startsWith('/stock')) {
-    return '/stock/instock'
-  }
-  return '/instock'
-}
-
 // 创建 axios 实例
 const service: AxiosInstance = axios.create({
-  baseURL: getApiBaseURL(),
+  baseURL: '/instock',
   timeout: 60000,
   headers: {
     'Content-Type': 'application/json;charset=UTF-8'
