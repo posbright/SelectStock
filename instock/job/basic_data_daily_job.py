@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import datetime
 import logging
 import os.path
 import sys
@@ -12,6 +13,7 @@ import instock.lib.run_template as runt
 import instock.core.tablestructure as tbs
 import instock.lib.database as mdb
 import instock.core.stockfetch as stf
+import instock.lib.trade_time as trd
 from instock.core.singleton_stock import stock_data
 
 __author__ = 'InStock'
@@ -75,8 +77,32 @@ def save_nph_etf_spot_data(date, before=True):
 
 
 def main():
-    runt.run_with_args(save_nph_stock_spot_data)
-    runt.run_with_args(save_nph_etf_spot_data)
+    if len(sys.argv) > 1:
+        # 批量模式（指定日期/日期范围）— 由 run_with_args 逐日期解析
+        runt.run_with_args(save_nph_stock_spot_data)
+        runt.run_with_args(save_nph_etf_spot_data)
+    else:
+        # 当前时间模式（hourly cron / execute_daily_job 调用）
+        # 确定日期一次，stock和ETF共享同一日期，
+        # 避免两次独立 get_trade_date_last() 在 09:30/15:00 边界产生不同日期
+        _init_logging()
+        run_date, run_date_nph = trd.get_trade_date_last()
+        logging.info(f"basic_data_daily_job 当前时间模式: run_date_nph={run_date_nph}")
+        save_nph_stock_spot_data(run_date_nph, False)
+        save_nph_etf_spot_data(run_date_nph, False)
+
+
+def _init_logging():
+    """独立运行时初始化日志（execute_daily_job 调用时已有 handler，不会重复）"""
+    if not logging.getLogger().handlers:
+        try:
+            from instock.lib.log_config import setup_logging
+            setup_logging('basic')
+        except Exception:
+            logging.basicConfig(
+                format='%(asctime)s [%(levelname)s] %(message)s',
+                level=logging.INFO,
+            )
 
 
 # main函数入口
