@@ -36,16 +36,21 @@
 ### 技术特点
 
 - **多数据源支持**：东方财富 → 腾讯财经 → 新浪财经，自动容错切换
+- **数据源健康度追踪**：连续失败自动降级，渐进退避（300s→3600s），恢复后自动提升
 - **增量缓存**：历史数据以天为单位增量更新，提高效率
 - **多线程处理**：采用并发处理，提高数据抓取和计算效率
+- **流式分析**：单次遍历4900只股票完成指标+K线+策略分析，峰值内存<100MB（替代旧版~1670MB）
+- **数据采集/分析分离**：Fetch管道负责API调用，Analysis/Web管道零API调用，仅读DB/缓存
+- **代理池管理**：12个免费代理源自动抓取、验证、刷新，支持紧急补充机制
 - **Web可视化**：Tornado + Bootstrap实现的Web界面
 - **前端Vue版本**：提供现代化的Vue 3 + TypeScript前端
 - **Docker支持**：提供Docker镜像，一键部署
-- **代理支持**：支持多代理IP，应对反爬虫限制
 
 ---
 
 ## 系统架构
+
+### 总体架构
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -67,9 +72,14 @@
 ├─────────────────────────────────────────────────────────────────┤
 │               stockfetch.py (多数据源调度)                        │
 │  ┌─────────────┬─────────────┬─────────────┐                    │
-│  │  新浪财经    │   腾讯财经   │   东方财富   │                    │
+│  │  东方财富    │   腾讯财经   │   新浪财经   │                    │
 │  │ (优先级: 1)  │  (优先级: 2) │  (优先级: 3) │                    │
 │  └─────────────┴─────────────┴─────────────┘                    │
+│               singleton_proxy.py (代理池管理)                     │
+│  ┌─────────────────────────────────────────┐                    │
+│  │ 12个免费代理源 → 验证 → 池管理 → 动态直连  │                    │
+│  │ 仅东方财富使用代理，腾讯/新浪直连无需代理    │                    │
+│  └─────────────────────────────────────────┘                    │
 └─────────────────────────────────────────────────────────────────┘
                                     │
 ┌─────────────────────────────────────────────────────────────────┐
@@ -77,6 +87,47 @@
 ├─────────────────────────────────────────────────────────────────┤
 │   MySQL Database (instockdb)    │    File Cache (cache/hist/)   │
 └─────────────────────────────────────────────────────────────────┘
+```
+
+### 数据采集/分析分离原则
+
+系统严格遵循"数据采集和数据分析分离"原则：
+
+| 管道 | 职责 | API调用 | 数据来源 |
+|------|------|---------|---------|
+| **Fetch管道** | 从外部数据源获取数据 | 是（东方财富/腾讯/新浪） | API → DB/缓存 |
+| **Analysis管道** | 计算指标、识别形态、策略选股 | 否 | DB + 缓存 → DB |
+| **Web管道** | 展示数据、K线图表 | 否 | DB + 缓存 → 前端 |
+
+```
+Fetch管道（有API调用）:
+  fetch_daily_job → init_job → fetch_data_job → basic_data_daily_job
+                  → selection_data_daily_job → basic_data_other_daily_job
+                  → basic_data_after_close_daily_job
+
+Analysis管道（零API调用）:
+  analysis_daily_job → gpt_value_data_job → streaming_analysis_job
+                     → backtest_data_daily_job
+
+Web管道（零API调用）:
+  klineHandler.py → read_hist_from_cache()  # 缓存只读
+  dataIndicatorsHandler.py → read_hist_from_cache()  # 缓存只读
+```
+
+### 代理池架构
+
+```
+singleton_proxy.py (单例模式，线程安全)
+├── 12个免费GitHub代理源并发抓取
+├── 20线程并发验证（HTTP+HTTPS双重验证）
+├── 后台600秒定时刷新
+├── 紧急补充机制（池耗尽时60秒防抖异步补充）
+├── 动态直连概率调整：
+│   ├── 池≥10个：30%直连
+│   ├── 池3~9个：60%直连
+│   └── 池<3个：80%直连
+├── 代理健康管理：连续3次失败自动移除
+└── 仅东方财富API使用代理，腾讯/新浪直连
 ```
 
 ---
@@ -104,10 +155,13 @@ SelectStock/
 │   │   └── trade_client.json   # 交易客户端配置
 │   │
 │   ├── core/                    # 🧠 核心业务模块
-│   │   ├── stockfetch.py       # 数据获取核心（多数据源调度）
+│   │   ├── stockfetch.py       # 数据获取核心（多数据源调度+增量缓存）
+│   │   ├── eastmoney_fetcher.py # 东方财富HTTP客户端（代理轮换+Session管理）
+│   │   ├── singleton_proxy.py  # 代理池管理单例（12源+紧急补充+动态直连）
 │   │   ├── tablestructure.py   # 数据库表结构定义
 │   │   ├── singleton_stock.py  # 股票数据单例
-│   │   ├── singleton_trade_date.py # 交易日历单例
+│   │   ├── singleton_trade_date.py # 交易日历单例（DB优先→新浪回退）
+│   │   ├── singleton_stock_web_module_data.py # Web模块数据单例
 │   │   ├── web_module_data.py  # Web模块数据配置
 │   │   │
 │   │   ├── crawling/           # 🕷️ 数据爬取模块
@@ -173,17 +227,20 @@ SelectStock/
 │   │
 │   ├── job/                     # ⏰ 定时作业
 │   │   ├── execute_daily_job.py    # 整体作业调度（5阶段流水线）
-│   │   ├── fetch_data_job.py       # 数据获取作业（Phase 1，支持独立运行）
+│   │   ├── fetch_daily_job.py      # 数据获取管道（Phase 1-3 + 收盘后，可独立运行）
+│   │   ├── analysis_daily_job.py   # 分析管道（GPT + 流式分析 + 回测，零API调用）
+│   │   ├── streaming_analysis_job.py # Phase 4 流式分析（替代 indicators/klinepattern/strategy）
 │   │   ├── init_job.py             # 初始化（创建数据库）
+│   │   ├── fetch_data_job.py       # 数据获取作业（实时行情+历史K线+缓存清理）
 │   │   ├── basic_data_daily_job.py # 基础数据实时作业
-│   │   ├── basic_data_other_daily_job.py # 其他基础数据
-│   │   ├── basic_data_after_close_daily_job.py # 收盘后数据
+│   │   ├── basic_data_other_daily_job.py # 其他基础数据（龙虎榜/资金流向/分红等）
+│   │   ├── basic_data_after_close_daily_job.py # 收盘后数据（大宗交易/尾盘抢筹）
 │   │   ├── selection_data_daily_job.py # 综合选股数据
-│   │   ├── indicators_data_daily_job.py # 指标数据作业
-│   │   ├── klinepattern_data_daily_job.py # K线形态作业
-│   │   ├── strategy_data_daily_job.py # 策略选股作业
-│   │   ├── gpt_value_data_job.py   # GPT综合选股作业
-│   │   └── backtest_data_daily_job.py # 回测数据作业
+│   │   ├── gpt_value_data_job.py   # GPT综合选股作业（DB only，7天回退）
+│   │   ├── backtest_data_daily_job.py # 回测数据作业
+│   │   ├── indicators_data_daily_job.py # [旧版] 指标数据作业（已被streaming替代）
+│   │   ├── klinepattern_data_daily_job.py # [旧版] K线形态作业（已被streaming替代）
+│   │   └── strategy_data_daily_job.py # [旧版] 策略选股作业（已被streaming替代）
 │   │
 │   │   
 │   ├── web/                     # 🌐 Web服务
@@ -248,6 +305,7 @@ SelectStock/
 │
 ├── document/                    # 📖 文档目录
 │   ├── database_schema.md      # 数据库设计文档
+│   ├── API_REFERENCE.md        # API接口参考文档
 │   └── hist_cache_incremental.md # 增量缓存说明
 │
 └── img/                         # 🖼️ 截图资源
@@ -437,7 +495,7 @@ docker-compose -f docker-compose.remote-db.yml up -d
 | Phase 1 | 数据获取（API调用集中在此阶段） | `fetch_data_job.py` |
 | Phase 2 | 基础数据入库 | `basic_data_daily_job.py` + `selection_data_daily_job.py` |
 | Phase 3 | 扩展数据入库 | `basic_data_other_daily_job.py` + `gpt_value_data_job.py` |
-| Phase 4 | 数据分析（纯计算，无API调用） | `indicators` + `klinepattern` + `strategy` |
+| Phase 4 | 数据分析（纯计算，无API调用） | `streaming_analysis_job.py`（整合指标+K线+策略，单次遍历） |
 | Phase 5 | 回测与收尾 | `backtest_data_daily_job.py` + `basic_data_after_close_daily_job.py` |
 
 ```bash
@@ -459,29 +517,37 @@ python execute_daily_job.py 2024-01-01,2024-01-15,2024-01-31
 ### 2. 单独运行模块
 
 ```bash
-# 数据获取（Phase 1，预加载实时行情 + 历史K线 + 缓存清理）
+# ── 推荐：拆分运行（数据获取 + 数据分析分离） ──
+# 数据获取管道（Phase 1-3 + 收盘后，包含所有API调用）
+python fetch_daily_job.py
+
+# 数据分析管道（GPT + 流式分析 + 回测，零API调用）
+python analysis_daily_job.py
+
+# ── 细粒度运行 ──
+# 数据获取（实时行情 + 历史K线 + 缓存清理）
 python fetch_data_job.py
 
-# 基础数据（实时行情）
+# 基础数据（实时行情入库）
 python basic_data_daily_job.py
 
 # 综合选股数据
 python selection_data_daily_job.py
 
-# 技术指标计算
-python indicators_data_daily_job.py
-
-# K线形态识别
-python klinepattern_data_daily_job.py
-
-# 策略选股
-python strategy_data_daily_job.py
-
-# GPT综合选股
+# GPT综合选股（从DB读取cn_stock_selection，零API）
 python gpt_value_data_job.py
+
+# 流式分析（指标+K线+策略，零API，读缓存+写DB）
+# 注：替代了旧版 indicators/klinepattern/strategy 三个独立作业
+python streaming_analysis_job.py
 
 # 回测数据
 python backtest_data_daily_job.py
+
+# ── 旧版独立作业（仍可运行但内存较高，~1.6GB） ──
+python indicators_data_daily_job.py
+python klinepattern_data_daily_job.py
+python strategy_data_daily_job.py
 ```
 
 ### 3. 手动拉取历史数据

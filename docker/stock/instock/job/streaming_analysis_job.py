@@ -83,14 +83,19 @@ def _get_stock_list_from_db(date):
 
 def _get_stock_tops_from_db(date):
     """
-    从数据库 cn_stock_fund_flow（龙虎榜）表获取机构参与的股票列表。
+    从数据库 cn_stock_lhb（龙虎榜）表获取近90天上榜股票列表。
     如果表不存在或无数据，返回 None（不发起外部API请求）。
 
+    说明：
+        原 fetch_stock_top_entity_data() 使用 API 获取机构买入数据，
+        此处用 cn_stock_lhb 表的上榜记录替代（数据由 basic_data_other_daily_job 入库），
+        作为 check_high_tight 策略 istop 参数的来源（超集近似）。
+
     Returns:
-        set | None: 龙虎榜上有机构参与的股票代码集合
+        set | None: 近90天内出现在龙虎榜上的股票代码集合
     """
     try:
-        table_name = 'stock_lhb_stock_statistic_em'
+        table_name = tbs.TABLE_CN_STOCK_lHB['name']
         if not mdb.checkTableIsExist(table_name):
             return None
         date_str = date.strftime("%Y-%m-%d")

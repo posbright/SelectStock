@@ -645,16 +645,20 @@ cat InStock/instock/bin/run_job.sh
 枚举时间作业 python execute_daily_job.py 2022-01-01,2021-02-08,2022-03-12
 区间时间作业 python execute_daily_job.py 2022-01-01 2022-03-01
 ------单功能作业，支持批量作业，回测数据自动填补到当前
+数据获取管道 python fetch_daily_job.py  (Phase 1-3 + 收盘后，包含所有API调用)
+数据分析管道 python analysis_daily_job.py  (GPT + 流式分析 + 回测，零API调用)
 数据获取作业 python fetch_data_job.py  (实时行情+历史K线+缓存清理)
-综合选股作业 python selection_data_daily_job.py
 基础数据实时作业 python basic_data_daily_job.py
-基础数据收盘2小时后作业 python basic_data_after_close_daily_job.py
 基础数据非实时作业 python basic_data_other_daily_job.py
+综合选股作业 python selection_data_daily_job.py
+GPT综合选股作业 python gpt_value_data_job.py
+流式分析作业 python streaming_analysis_job.py  (指标+K线+策略，替代旧版三个独立作业)
+回测数据 python backtest_data_daily_job.py
+基础数据收盘2小时后 python basic_data_after_close_daily_job.py
+------旧版独立作业（仍可运行但内存较高，已被streaming_analysis_job替代）
 指标数据作业 python indicators_data_daily_job.py
 K线形态作业 python klinepattern_data_daily_job.py
 策略数据作业 python strategy_data_daily_job.py
-GPT综合选股作业 python gpt_value_data_job.py
-回测数据 python backtest_data_daily_job.py
 第一种方法：
 python execute_daily_job.py 2023-03-01,2023-03-02
 第二种方法：

@@ -458,12 +458,12 @@ CREATE TABLE IF NOT EXISTS `cn_stock_indicators_sell` (
 
 ---
 
-### 3.12 K线形态识别表 (cn_stock_pattern)
+### 3.12 K线形态识别表 (cn_stock_kline_pattern)
 
 存储 61 种 K 线形态识别结果。
 
 ```sql
-CREATE TABLE IF NOT EXISTS `cn_stock_pattern` (
+CREATE TABLE IF NOT EXISTS `cn_stock_kline_pattern` (
     `date` DATE NOT NULL COMMENT '日期',
     `code` VARCHAR(6) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '股票代码',
     `name` VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '股票名称',
@@ -529,7 +529,7 @@ CREATE TABLE IF NOT EXISTS `cn_stock_pattern` (
     `upside_downside_gap` SMALLINT COMMENT '上升/下降跳空三法',
     PRIMARY KEY (`date`, `code`),
     INDEX `idx_code` (`code`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='股票K线形态识别';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='股票K线形态';
 ```
 
 ---
@@ -714,7 +714,7 @@ CREATE TABLE IF NOT EXISTS `cn_stock_backtest_data` (
 │       ├── cn_stock_indicators (技术指标)                         │
 │       │       ├── cn_stock_indicators_buy (买入信号)             │
 │       │       └── cn_stock_indicators_sell (卖出信号)            │
-│       ├── cn_stock_pattern (K线形态)                             │
+│       ├── cn_stock_kline_pattern (K线形态)                       │
 │       └── cn_stock_strategy_* (14种策略表)                       │
 ├─────────────────────────────────────────────────────────────────┤
 │  cn_etf_spot (每日ETF数据)                                       │
@@ -746,7 +746,7 @@ CREATE TABLE IF NOT EXISTS `cn_stock_backtest_data` (
 | 10 | cn_stock_indicators | 股票指标数据 | 32种技术指标计算结果 |
 | 11 | cn_stock_indicators_buy | 股票指标买入 | 买入信号及回测收益 |
 | 12 | cn_stock_indicators_sell | 股票指标卖出 | 卖出信号及回测收益 |
-| 13 | cn_stock_pattern | 股票K线形态 | 61种K线形态识别结果 |
+| 13 | cn_stock_kline_pattern | 股票K线形态 | 61种K线形态识别结果 |
 | 14 | cn_stock_strategy_enter | 放量上涨 | 策略选股结果 |
 | 15 | cn_stock_strategy_keep_increasing | 均线多头 | 策略选股结果 |
 | 16 | cn_stock_strategy_parking_apron | 停机坪 | 策略选股结果 |
@@ -768,6 +768,9 @@ CREATE TABLE IF NOT EXISTS `cn_stock_backtest_data` (
 | 32 | cn_stock_chip_race_end | 尾盘抢筹数据 | 尾盘集合竞价抢筹数据 |
 | 33 | cn_stock_limitup_reason | 涨停原因揭密 | 涨停原因分析数据 |
 | 34 | cn_strategy_params | 策略参数配置 | 可配置策略筛选参数 |
+| 35 | cn_stock_spot_buy | 基本面选股 | 基本面选股中间结果 |
+| 36 | cn_stock_top | 股票龙虎榜(新浪) | 新浪数据源龙虎榜（未启用） |
+| 37 | cn_stock_foreign_key | 股票外键 | 股票代码→市场前缀映射 |
 
 ---
 
@@ -783,7 +786,7 @@ CREATE TABLE IF NOT EXISTS `cn_stock_backtest_data` (
 
 ---
 
-## 六、快速初始化脚本
+## 八、快速初始化脚本
 
 将上述所有建表语句保存为 `init_database.sql`，执行以下命令初始化：
 
@@ -796,6 +799,47 @@ mysql -u root -p < init_database.sql
 ```sql
 source /path/to/init_database.sql;
 ```
+
+---
+
+## 七、数据流水线与表关系
+
+系统采用 5 阶段流水线架构，数据获取与分析彻底分离：
+
+```
+Phase 1 (数据获取):
+  fetch_data_job → 实时行情 → cn_stock_spot, cn_etf_spot
+                → 历史K线 → cache/hist/ (Parquet文件缓存)
+
+Phase 2 (基础数据):
+  basic_data_daily_job → 实时行情入库 → cn_stock_spot
+  selection_data_daily_job → 综合选股数据 → cn_stock_selection
+
+Phase 3 (扩展数据):
+  basic_data_other_daily_job → 资金流向 → cn_stock_fund_flow
+                             → 行业资金 → cn_stock_fund_flow_industry
+                             → 概念资金 → cn_stock_fund_flow_concept
+                             → 龙虎榜 → cn_stock_lhb
+                             → 分红配送 → cn_stock_bonus
+                             → 涨停原因 → cn_stock_limitup_reason
+                             → 早盘抢筹 → cn_stock_chip_race_open
+  gpt_value_data_job → 读 cn_stock_selection → 写 cn_stock_strategy_gpt_value
+
+Phase 4 (流式分析，零API调用):
+  streaming_analysis_job → 读 cache/hist/ + cn_stock_lhb
+                         → 写 cn_stock_indicators (32种指标)
+                         → 写 cn_stock_indicators_buy/sell (买卖信号)
+                         → 写 cn_stock_kline_pattern (61种K线形态)
+                         → 写 cn_stock_strategy_* (13种策略)
+
+Phase 5 (回测与收尾):
+  backtest_data_daily_job → 读 cache/hist/ → 写 cn_stock_backtest_data
+                          → 读所有策略表 → 写 cn_stock_backtest (统计汇总)
+  basic_data_after_close_daily_job → 大宗交易 → cn_stock_blocktrade
+                                   → 尾盘抢筹 → cn_stock_chip_race_end
+```
+
+> **注意**：Phase 1-3 涉及外部 API 调用（东方财富/腾讯/新浪），Phase 4-5 仅读写本地 DB 和缓存，零 API 调用。
 
 ---
 
