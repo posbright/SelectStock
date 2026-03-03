@@ -11,9 +11,12 @@ defineProps<Props>()
 const route = useRoute()
 const router = useRouter()
 
-// 获取路由菜单
+// 获取路由菜单（过滤 hidden 路由，如 404 页面）
 const menuList = computed(() => {
-  return router.options.routes.filter(item => item.path !== '/' || item.children?.length)
+  return router.options.routes.filter(item => {
+    if (item.meta?.hidden) return false
+    return item.path !== '/' || item.children?.length
+  })
 })
 
 // 当前激活的菜单

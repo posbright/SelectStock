@@ -32,7 +32,9 @@ export function getStockData(params: StockDataParams) {
 }
 
 /**
- * 获取股票指标详情
+ * 获取股票指标详情（备用：通过后端 HTML 接口获取指标数据）
+ * 注意：当前前端使用 getKlineData + indicator/index.vue 渲染指标详情，
+ * 此函数保留以兼容未来可能的 JSON 格式指标 API。
  * @param params 
  */
 export function getStockIndicators(params: StockIndicatorParams) {

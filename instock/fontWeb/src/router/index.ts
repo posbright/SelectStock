@@ -300,6 +300,20 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '回测汇总', tableName: 'cn_stock_backtest', isRealtime: false, noDateFilter: true }
       }
     ]
+  },
+  // 404 catch-all：放在最后，匹配所有未定义路径
+  {
+    path: '/:pathMatch(.*)*',
+    name: 'NotFound',
+    component: Layout,
+    meta: { hidden: true },
+    children: [
+      {
+        path: '',
+        component: () => import('@/views/error/NotFound.vue'),
+        meta: { title: '页面不存在', hidden: true }
+      }
+    ]
   }
 ]
 

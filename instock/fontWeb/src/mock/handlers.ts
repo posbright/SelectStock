@@ -56,8 +56,9 @@ export const handlers = [
   }),
 
   // 获取K线历史数据
-  http.get('/instock/api/kline/:code', ({ params }) => {
-    const { code } = params
+  http.get('/instock/api/kline', ({ request }) => {
+    const url = new URL(request.url)
+    const code = url.searchParams.get('code')
     console.log(`[Mock] 获取K线数据: ${code}`)
     
     return HttpResponse.json(mockKlineHistoryData)
