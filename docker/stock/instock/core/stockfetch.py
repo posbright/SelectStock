@@ -1014,6 +1014,9 @@ def stock_hist_cache_incremental(code, date_start, date_end, is_cache=True, adju
             combined_data = combined_data.drop_duplicates(subset=['date'], keep='last')
             combined_data = combined_data.sort_values(by='date').reset_index(drop=True)
         
+        # 4.5 过滤异常行（防止污染数据写入缓存）
+        combined_data = _filter_ohlc_outliers(combined_data, code)
+        
         # 5. 保存更新后的缓存（有新数据时才写入）
         if is_cache and len(all_new_data) > 0 and combined_data is not None and len(combined_data) > 0:
             try:
@@ -1367,6 +1370,59 @@ def read_hist_from_cache(data_base, years=None):
     return data
 
 
+def _filter_ohlc_outliers(data, code=''):
+    """
+    过滤 OHLC 异常行：检测并移除价格与相邻行严重偏离的数据点。
+
+    已知问题：某些缓存文件中混入了月度聚合数据（来源不明），
+    表现为月末最后一个交易日的 OHLC 值偏离正常价格 >50%，
+    且 volume 异常大（为月度成交量总和）。此函数可安全移除这类异常行。
+
+    检测逻辑：
+    - 计算 close 列的 rolling median（窗口=5，居中对齐）
+    - 若某行的 close 偏离 median > 50%，标记为异常
+    - 移除标记行并记录日志
+    """
+    if data is None or len(data) < 5:
+        return data
+
+    try:
+        close = pd.to_numeric(data['close'], errors='coerce')
+        if close.isna().all():
+            return data
+
+        # 使用滚动中位数（窗口=5）作为基准，居中对齐
+        rolling_med = close.rolling(window=5, center=True, min_periods=2).median()
+
+        # 对首尾几行补充使用更小窗口
+        for i in range(len(close)):
+            if pd.isna(rolling_med.iloc[i]):
+                # 取 ±2 范围内的中位数
+                start = max(0, i - 2)
+                end = min(len(close), i + 3)
+                neighbors = close.iloc[start:end].dropna()
+                if len(neighbors) > 0:
+                    rolling_med.iloc[i] = neighbors.median()
+
+        # 检测偏离 >50% 的行
+        ratio = (close / rolling_med).fillna(1.0)
+        outlier_mask = (ratio < 0.5) | (ratio > 2.0)
+
+        n_outliers = outlier_mask.sum()
+        if n_outliers > 0 and n_outliers < len(data) * 0.1:  # 异常行不超过10%才过滤
+            outlier_dates = data.loc[outlier_mask, 'date'].tolist()
+            logging.warning(
+                f"_filter_ohlc_outliers: {code} 发现 {n_outliers} 行 OHLC 异常数据已过滤，"
+                f"日期: {outlier_dates[:5]}{'...' if n_outliers > 5 else ''}"
+            )
+            data = data.loc[~outlier_mask].reset_index(drop=True)
+
+        return data
+    except Exception as e:
+        logging.debug(f"_filter_ohlc_outliers 异常: {code} - {e}")
+        return data
+
+
 def read_stock_hist_from_cache(code, date_start, date_end):
     """
     从缓存文件读取单只股票的历史数据（流式处理用）
@@ -1408,6 +1464,9 @@ def read_stock_hist_from_cache(code, date_start, date_end):
         # 确保只保留标准列
         valid_cols = [c for c in _standard_columns if c in data.columns]
         data = data[valid_cols]
+        
+        # 过滤 OHLC 异常行（月度聚合数据等污染）
+        data = _filter_ohlc_outliers(data, code)
         
         # 按请求日期范围过滤
         data_dates = data['date'].apply(_to_date_str)
