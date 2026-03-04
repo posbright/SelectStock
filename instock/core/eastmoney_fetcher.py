@@ -72,12 +72,12 @@ class eastmoney_fetcher:
             self._thread_local.session = self._create_session()
         return self._thread_local.session
 
-    def make_request(self, url, params=None, retry=2, timeout=30):
+    def make_request(self, url, params=None, retry=3, timeout=30):
         """
         发送请求（线程安全：每个线程使用独立的 Session）
         :param url: 请求URL
         :param params: 请求参数
-        :param retry: 重试次数
+        :param retry: 重试次数（每次使用不同代理/直连，最后一次强制直连）
         :param timeout: 超时时间（直连时使用；走代理时自动缩短以避免长时间等待失效代理）
         :return: 响应对象
         """
@@ -92,7 +92,11 @@ class eastmoney_fetcher:
         proxy_pool = proxys()
         
         for i in range(retry):
-            current_proxy = proxy_pool.get_proxies()
+            # 最后一次重试强制直连，确保不受坏代理影响
+            if i == retry - 1:
+                current_proxy = None
+            else:
+                current_proxy = proxy_pool.get_proxies()
             # 记录当前使用的代理URL（用于后续反馈成功/失败）
             proxy_url = current_proxy.get("http") if current_proxy else None
             # 走代理时使用更短的超时（免费代理不稳定，长等待没有意义）
@@ -113,7 +117,7 @@ class eastmoney_fetcher:
                 # 请求失败，反馈给代理池（累积失败次数，达阈值后自动移除）
                 proxy_pool.report_failure(proxy_url)
                 err_str = str(e)
-                # 连接级错误（服务器拒绝/断开/过载）：不重试，立即抛出让上层换数据源
+                # 连接级错误（代理断开/过载等）：换代理或直连重试
                 is_connection_error = any(kw in err_str for kw in [
                     'RemoteDisconnected', 'Connection aborted', 'ConnectionReset',
                     'Connection refused', 'Max retries exceeded',
@@ -122,8 +126,14 @@ class eastmoney_fetcher:
                     'Service Unavailable', 'Gateway Time-out', 'Bad Gateway',
                 ])
                 if is_connection_error:
-                    logging.debug(f"请求连接错误(不重试): {e}")
-                    raise
+                    proxy_label = proxy_url or '直连'
+                    if i < retry - 1:
+                        logging.debug(f"请求连接错误(代理:{proxy_label}): {e}，将换代理/直连重试")
+                        time.sleep(random.uniform(1, 3))
+                        continue
+                    else:
+                        logging.debug(f"请求连接错误(代理:{proxy_label}): {e}，已用尽重试次数")
+                        raise
                 logging.debug(f"请求错误: {e}, 第 {i + 1}/{retry} 次重试")
                 if i < retry - 1:
                     # 随机延迟后重试，逐步增加延迟

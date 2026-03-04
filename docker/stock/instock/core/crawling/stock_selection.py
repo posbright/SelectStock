@@ -43,13 +43,23 @@ def stock_selection() -> pd.DataFrame:
         "client": "WEB"
     }
 
-    r = fetcher.make_request(url, params=params)
-    data_json = r.json()
-    data = data_json["result"]["data"]
+    # 首页请求加重试保护（首页失败则整个函数失败）
+    data = None
+    data_count = 0
+    for first_attempt in range(3):
+        try:
+            r = fetcher.make_request(url, params=params)
+            data_json = r.json()
+            data = data_json["result"]["data"]
+            data_count = data_json["result"]["count"]
+            break
+        except Exception as e:
+            logging.warning(f"选股器首页获取失败(第{first_attempt+1}次): {e}")
+            if first_attempt < 2:
+                time.sleep(random.uniform(2, 5))
+
     if not data:
         return pd.DataFrame()
-
-    data_count = data_json["result"]["count"]
     total_pages = math.ceil(data_count / page_size)
     failed_pages = []
 
