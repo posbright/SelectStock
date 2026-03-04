@@ -300,6 +300,30 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '回测汇总', tableName: 'cn_stock_backtest', isRealtime: false, noDateFilter: true }
       }
     ]
+  },
+  // 兼容旧版 /stock/ 前缀路径：自动去掉前缀并重定向到正确路由
+  // 例如 /stock/selection → /selection, /stock/basic/spot → /basic/spot
+  {
+    path: '/stock/:pathMatch(.*)*',
+    redirect: (to) => {
+      const rest = to.path.replace(/^\/stock\/?/, '')
+      return `/${rest}`
+    },
+    meta: { hidden: true }
+  },
+  // 404 catch-all：放在最后，匹配所有未定义路径
+  {
+    path: '/:pathMatch(.*)*',
+    name: 'NotFound',
+    component: Layout,
+    meta: { hidden: true },
+    children: [
+      {
+        path: '',
+        component: () => import('@/views/error/NotFound.vue'),
+        meta: { title: '页面不存在', hidden: true }
+      }
+    ]
   }
 ]
 

@@ -301,6 +301,16 @@ const routes: RouteRecordRaw[] = [
       }
     ]
   },
+  // 兼容旧版 /stock/ 前缀路径：自动去掉前缀并重定向到正确路由
+  // 例如 /stock/selection → /selection, /stock/basic/spot → /basic/spot
+  {
+    path: '/stock/:pathMatch(.*)*',
+    redirect: (to) => {
+      const rest = to.path.replace(/^\/stock\/?/, '')
+      return `/${rest}`
+    },
+    meta: { hidden: true }
+  },
   // 404 catch-all：放在最后，匹配所有未定义路径
   {
     path: '/:pathMatch(.*)*',
