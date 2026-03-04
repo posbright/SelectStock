@@ -10,6 +10,8 @@ __date__ = '2026/02/14'
 
 
 def is_trade_date(date=None):
+    if date is None:
+        date = datetime.date.today()
     trade_date = stock_trade_date().get_data()
     if trade_date is None:
         return False
