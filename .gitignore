@@ -161,3 +161,4 @@ cache/
 **/cache/
 test/
 .vite/
+*.log
