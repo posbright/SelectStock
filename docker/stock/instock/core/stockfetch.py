@@ -1375,41 +1375,70 @@ def _filter_ohlc_outliers(data, code=''):
     过滤 OHLC 异常行：检测并移除价格与相邻行严重偏离的数据点。
 
     已知问题：某些缓存文件中混入了月度聚合数据（来源不明），
-    表现为月末最后一个交易日的 OHLC 值偏离正常价格 >50%，
+    表现为月末最后一个交易日的 OHLC 值偏离正常价格，
     且 volume 异常大（为月度成交量总和）。此函数可安全移除这类异常行。
 
-    检测逻辑：
-    - 计算 close 列的 rolling median（窗口=5，居中对齐）
-    - 若某行的 close 偏离 median > 50%，标记为异常
-    - 移除标记行并记录日志
+    检测逻辑（三重检测，命中任一即标记）：
+    1. 价格+成交量联合检测：close 偏离邻居中位数 >25% 且 volume > 邻居中位数 3 倍
+    2. 极端价格偏离：close 偏离邻居中位数 >60%（无论 volume）
+    3. 无效价格：close <= 0
+
+    安全阀：异常行不超过总行数 15% 时才执行过滤。
     """
-    if data is None or len(data) < 5:
+    if data is None or len(data) < 10:
         return data
 
     try:
         close = pd.to_numeric(data['close'], errors='coerce')
+        volume = pd.to_numeric(data.get('volume', pd.Series(dtype='float64')), errors='coerce')
         if close.isna().all():
             return data
 
-        # 使用滚动中位数（窗口=5）作为基准，居中对齐
-        rolling_med = close.rolling(window=5, center=True, min_periods=2).median()
+        n = len(data)
+        outlier_mask = pd.Series(False, index=data.index)
 
-        # 对首尾几行补充使用更小窗口
-        for i in range(len(close)):
-            if pd.isna(rolling_med.iloc[i]):
-                # 取 ±2 范围内的中位数
-                start = max(0, i - 2)
-                end = min(len(close), i + 3)
-                neighbors = close.iloc[start:end].dropna()
-                if len(neighbors) > 0:
-                    rolling_med.iloc[i] = neighbors.median()
+        # --- 检测 1 & 2：基于邻居中位数的价格偏离 ---
+        for i in range(n):
+            # 取 ±2 范围内的邻居（排除自身）
+            neighbor_idx = [j for j in range(max(0, i - 2), min(n, i + 3)) if j != i]
+            neighbor_closes = close.iloc[neighbor_idx].dropna()
 
-        # 检测偏离 >50% 的行
-        ratio = (close / rolling_med).fillna(1.0)
-        outlier_mask = (ratio < 0.5) | (ratio > 2.0)
+            if len(neighbor_closes) < 2:
+                continue
+
+            median_close = neighbor_closes.median()
+            if median_close <= 0 or pd.isna(median_close):
+                continue
+
+            curr_close = close.iloc[i]
+            if pd.isna(curr_close):
+                continue
+
+            price_ratio = curr_close / median_close
+
+            # 检测 3：无效价格（负数或零）
+            if curr_close <= 0:
+                outlier_mask.iloc[i] = True
+                continue
+
+            # 检测 2：极端价格偏离 >60%（ratio < 0.4 或 > 2.5）
+            if price_ratio < 0.4 or price_ratio > 2.5:
+                outlier_mask.iloc[i] = True
+                continue
+
+            # 检测 1：价格偏离 >25% + 成交量异常 >3x
+            if (price_ratio < 0.75 or price_ratio > 1.33) and not volume.empty:
+                neighbor_vols = volume.iloc[neighbor_idx].dropna()
+                if len(neighbor_vols) >= 2:
+                    median_vol = neighbor_vols.median()
+                    curr_vol = volume.iloc[i] if i < len(volume) else 0
+                    if not pd.isna(curr_vol) and median_vol > 0:
+                        vol_ratio = curr_vol / median_vol
+                        if vol_ratio > 3.0:
+                            outlier_mask.iloc[i] = True
 
         n_outliers = outlier_mask.sum()
-        if n_outliers > 0 and n_outliers < len(data) * 0.1:  # 异常行不超过10%才过滤
+        if n_outliers > 0 and n_outliers < len(data) * 0.15:  # 异常行不超过15%才过滤
             outlier_dates = data.loc[outlier_mask, 'date'].tolist()
             logging.warning(
                 f"_filter_ohlc_outliers: {code} 发现 {n_outliers} 行 OHLC 异常数据已过滤，"

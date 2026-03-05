@@ -4,9 +4,9 @@
 K线缓存数据清理脚本
 
 修复已知的缓存污染问题：
-- 5只股票的日线缓存中混入了月度聚合数据行
-- 受影响股票: 002024, 002371, 002916, 300760, 600809
-- 异常特征: 月末日期的OHLC价格与前后数据偏离>50%
+- 日线缓存中混入了月度聚合数据行（特征：月末日期、价格偏离、成交量异常大）
+- 受影响股票: 15只以上（详见 KNOWN_AFFECTED）
+- 检测使用三重算法与 stockfetch.py 中的 _filter_ohlc_outliers() 保持一致
 
 使用方法:
     python fix_kline_cache.py           # 扫描并修复所有缓存
@@ -28,14 +28,25 @@ logger = logging.getLogger(__name__)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(SCRIPT_DIR, 'instock', 'cache', 'hist')
 
-# 已知受影响的股票
-KNOWN_AFFECTED = ['002024', '002371', '002916', '300760', '600809']
+# 已知受影响的股票（扫描发现15只，272行污染）
+KNOWN_AFFECTED = [
+    '600660', '002557', '600276', '002049', '601601',
+    '002024', '600809', '000002', '002371', '000858',
+    '002916', '300760', '600309', '600438', '600519',
+]
 
 
 def filter_ohlc_outliers(data, code=''):
     """
-    过滤OHLC异常行。使用滚动中位数检测价格异常。
+    过滤OHLC异常行。三重检测算法。
     与 stockfetch.py 中的 _filter_ohlc_outliers() 保持一致。
+
+    检测逻辑（命中任一即标记）：
+    1. 价格+成交量联合：close 偏离邻居中位数 >25% 且 volume > 邻居中位数 3 倍
+    2. 极端价格偏离：close 偏离邻居中位数 >60%（ratio < 0.4 或 > 2.5）
+    3. 无效价格：close <= 0
+
+    安全阀：异常行不超过总行数 15% 时才执行过滤。
     """
     if data is None or data.empty or len(data) < 10:
         return data, 0
@@ -45,14 +56,56 @@ def filter_ohlc_outliers(data, code=''):
         if close_col is None:
             return data, 0
 
-        close = data[close_col].astype(float)
-        rolling_med = close.rolling(window=5, center=True, min_periods=2).median()
-        ratio = close / rolling_med
+        close = pd.to_numeric(data['close'], errors='coerce')
+        volume = pd.to_numeric(data.get('volume', pd.Series(dtype='float64')), errors='coerce')
+        if close.isna().all():
+            return data, 0
 
-        outlier_mask = (ratio < 0.5) | (ratio > 2.0)
+        n = len(data)
+        outlier_mask = pd.Series(False, index=data.index)
+
+        for i in range(n):
+            # 取 ±2 范围内的邻居（排除自身）
+            neighbor_idx = [j for j in range(max(0, i - 2), min(n, i + 3)) if j != i]
+            neighbor_closes = close.iloc[neighbor_idx].dropna()
+
+            if len(neighbor_closes) < 2:
+                continue
+
+            median_close = neighbor_closes.median()
+            if median_close <= 0 or pd.isna(median_close):
+                continue
+
+            curr_close = close.iloc[i]
+            if pd.isna(curr_close):
+                continue
+
+            price_ratio = curr_close / median_close
+
+            # 检测 3：无效价格（负数或零）
+            if curr_close <= 0:
+                outlier_mask.iloc[i] = True
+                continue
+
+            # 检测 2：极端价格偏离 >60%（ratio < 0.4 或 > 2.5）
+            if price_ratio < 0.4 or price_ratio > 2.5:
+                outlier_mask.iloc[i] = True
+                continue
+
+            # 检测 1：价格偏离 >25% + 成交量异常 >3x
+            if (price_ratio < 0.75 or price_ratio > 1.33) and not volume.empty:
+                neighbor_vols = volume.iloc[neighbor_idx].dropna()
+                if len(neighbor_vols) >= 2:
+                    median_vol = neighbor_vols.median()
+                    curr_vol = volume.iloc[i] if i < len(volume) else 0
+                    if not pd.isna(curr_vol) and median_vol > 0:
+                        vol_ratio = curr_vol / median_vol
+                        if vol_ratio > 3.0:
+                            outlier_mask.iloc[i] = True
+
         outlier_count = outlier_mask.sum()
 
-        if outlier_count > 0 and outlier_count < len(data) * 0.1:
+        if outlier_count > 0 and outlier_count < len(data) * 0.15:
             removed_dates = data.loc[outlier_mask, 'date'].tolist() if 'date' in data.columns else []
             logger.info(f"  [{code}] 检测到 {outlier_count} 行异常数据")
             for d in removed_dates[:5]:
@@ -64,7 +117,7 @@ def filter_ohlc_outliers(data, code=''):
                 logger.info(f"    ... 及其他 {len(removed_dates) - 5} 行")
             cleaned = data[~outlier_mask].reset_index(drop=True)
             return cleaned, outlier_count
-        elif outlier_count >= len(data) * 0.1:
+        elif outlier_count >= len(data) * 0.15:
             logger.warning(f"  [{code}] 异常行占比过高 ({outlier_count}/{len(data)})，跳过过滤")
             return data, 0
     except Exception as e:
