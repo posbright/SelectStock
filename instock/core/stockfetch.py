@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import logging
+import gc
 import os.path
 import datetime
 import numpy as np
@@ -1324,6 +1325,7 @@ def update_all_caches(stocks, date_start, date_end, workers=2):
                 processed_total += 1
                 # 每 N 次 API 请求后短暂暂停，让连接池冷却
                 if api_processed > 0 and api_processed % BATCH_PAUSE_INTERVAL == 0:
+                    gc.collect()
                     pause = random.uniform(*BATCH_PAUSE_SECONDS)
                     remaining = len(stocks) - processed_total
                     logging.info(

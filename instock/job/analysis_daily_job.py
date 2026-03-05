@@ -18,7 +18,7 @@
 设计原则：
 - 零 API 调用，纯本地计算
 - 依赖 fetch_daily_job.py 已更新的缓存，但即使缓存未更新也能用历史缓存运行
-- 峰值内存 < 100 MB
+- 峰值内存 < 50 MB（通过环境变量可调节并发度和批量大小）
 - 可独立于数据获取任务运行
 """
 
@@ -60,18 +60,21 @@ def main():
         gptj.main()
     except Exception as e:
         logging.error("数据分析 gpt_value 异常", exc_info=True)
+    gc.collect()
 
     # 流式分析：指标计算 + K线形态识别 + 策略选股（从磁盘缓存读取）
     try:
         saj.main()
     except Exception as e:
         logging.error("数据分析 streaming_analysis 异常", exc_info=True)
+    gc.collect()
 
     # 策略回测（从磁盘缓存按需读取）
     try:
         bdj.main()
     except Exception as e:
         logging.error("数据分析 backtest 异常", exc_info=True)
+    gc.collect()
 
     # 释放可能加载的单例
     try:

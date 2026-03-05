@@ -46,7 +46,12 @@ __author__ = 'InStock'
 __date__ = '2026/02/14'
 
 # 批量写入大小：每处理 BATCH_SIZE 只股票后统一写入数据库
-BATCH_SIZE = 200
+# 默认 50（适配 ≤2GB 服务器），可通过环境变量 INSTOCK_BATCH_SIZE 覆盖
+BATCH_SIZE = int(os.environ.get('INSTOCK_BATCH_SIZE', '50'))
+
+# 并发线程数：控制同时读取缓存的股票数（每只 ~1-3 MB DataFrame）
+# 默认 2（适配 ≤2GB 服务器），可通过环境变量 INSTOCK_ANALYSIS_WORKERS 覆盖
+ANALYSIS_WORKERS = int(os.environ.get('INSTOCK_ANALYSIS_WORKERS', '2'))
 
 
 def _get_stock_list_from_db(date):
@@ -192,7 +197,7 @@ def streaming_analysis(date):
     errors = 0
 
     # 6. 逐只股票流式处理（多线程并发，但控制同时在内存中的数据量）
-    # workers=4 意味着同时最多 4 只股票的历史数据在内存中（~1.4 MB）
+    # workers=2 意味着同时最多 2 只股票的历史数据在内存中（~0.7 MB）
     def _process_one_stock(stock):
         """单只股票的完整分析流程（在线程池内执行）"""
         code = stock[1]
@@ -235,9 +240,12 @@ def streaming_analysis(date):
             except Exception as e:
                 logging.debug(f"策略检测异常：{code} {strategy['name']} - {e}")
 
+        # 显式释放大 DataFrame，降低 GC 延迟回收的影响
+        del hist_data
+
         return stock, 'ok', result
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=ANALYSIS_WORKERS) as executor:
         future_to_stock = {executor.submit(_process_one_stock, stock): stock for stock in stocks}
         for future in concurrent.futures.as_completed(future_to_stock):
             stock = future_to_stock[future]

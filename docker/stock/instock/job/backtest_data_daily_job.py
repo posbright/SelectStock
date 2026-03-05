@@ -11,10 +11,12 @@
 
 import logging
 import concurrent.futures
-import pandas as pd
+import gc
+import os
 import os.path
 import sys
 import datetime
+import pandas as pd
 
 cpath_current = os.path.dirname(os.path.dirname(__file__))
 cpath = os.path.abspath(os.path.join(cpath_current, os.pardir))
@@ -46,8 +48,10 @@ def prepare():
     date_start, _ = trd.get_trade_hist_interval(now, years)
     date_end = now.strftime("%Y%m%d")
 
-    # 回归测试表，限制并发数以控制内存占用（适配2GB服务器）
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+    # 回归测试表，逐表顺序处理以控制内存占用（适配 ≤2GB 服务器）
+    # 可通过环境变量 INSTOCK_BACKTEST_OUTER_WORKERS 覆盖（默认 1：顺序执行）
+    outer_workers = int(os.environ.get('INSTOCK_BACKTEST_OUTER_WORKERS', '1'))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=outer_workers) as executor:
         for table in tables:
             executor.submit(process, table, date_start, date_end, backtest_column)
 
@@ -78,9 +82,16 @@ def process(table, date_start, date_end, backtest_column):
 
     except Exception as e:
         logging.error(f"backtest_data_daily_job.process处理异常：{table}表", exc_info=True)
+    finally:
+        gc.collect()
 
 
-def run_check(stocks, date_start, date_end, backtest_column, workers=4):
+# 内层并发线程数（每线程加载 ~1-3MB DataFrame）
+# 默认 2（适配 ≤2GB 服务器），可通过环境变量 INSTOCK_BACKTEST_INNER_WORKERS 覆盖
+_INNER_WORKERS = int(os.environ.get('INSTOCK_BACKTEST_INNER_WORKERS', '2'))
+
+
+def run_check(stocks, date_start, date_end, backtest_column, workers=_INNER_WORKERS):
     """
     逐只股票从缓存读取历史数据并计算回测收益率
     
