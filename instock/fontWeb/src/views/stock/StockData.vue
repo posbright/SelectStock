@@ -193,6 +193,15 @@ const formatLargeNumber = (value: number): string => {
   return value.toFixed(2)
 }
 
+// 已知以"元"为单位的金额字段（需要 亿/万 格式化，即使 dataType 不是 bigint）
+const monetaryAmountFields = new Set([
+  'net_amount_buy', 'sum_buy', 'sum_sell', 'lhb_amount', 'market_amount',
+])
+
+// stock_spot / etf_spot 表中市值字段的原始值单位为"万元"，需先乘 10000 转为元再格式化
+const wanyuanSpotTables = new Set(['cn_stock_spot', 'cn_etf_spot'])
+const wanyuanFields = new Set(['total_market_cap', 'free_cap'])
+
 // 不应显示为百分比的字段（虽然名称中含有 rate/ratio）
 const nonPercentFields = new Set([
   'volume_ratio',       // 量比，是一个倍数而非百分比
@@ -212,9 +221,18 @@ const formatCellValue = (value: any, fieldName: string) => {
   // bigint 类型：大数值字段（成交额、市值、净利润、营业收入、股本等），转换为亿/万
   if (dataType === 'bigint') {
     if (typeof value === 'number') {
+      // stock_spot / etf_spot 中的市值字段原始单位为万元，先转为元再格式化
+      if (wanyuanSpotTables.has(tableName.value) && wanyuanFields.has(fieldName)) {
+        return formatLargeNumber(value * 10000)
+      }
       return formatLargeNumber(value)
     }
     return value
+  }
+  
+  // 已知金额字段（元）：即使 dataType 不是 bigint，也做亿/万格式化
+  if (monetaryAmountFields.has(fieldName)) {
+    return typeof value === 'number' ? formatLargeNumber(value) : value
   }
   
   // 成交量转换为万

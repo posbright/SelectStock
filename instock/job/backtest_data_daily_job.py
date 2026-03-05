@@ -209,8 +209,9 @@ def summarize_backtest():
                 if data is None or len(data) == 0:
                     continue
                 
-                # 添加策略名称（使用表名作为唯一标识，dashboard API 依赖此值匹配策略）
-                data['strategy_name'] = table_name
+                # 添加策略名称（使用中文名，供前端数据表直接展示）
+                # dashboard API 的 _get_strategy_map() 同时支持中文名和表名查找
+                data['strategy_name'] = table.get('cn', table_name)
                 # 转数值类型
                 for nc in ('success_count', 'backtested_count', 'stock_count'):
                     data[nc] = pd.to_numeric(data[nc], errors='coerce').fillna(0).astype(int)
