@@ -1016,10 +1016,11 @@ def stock_hist_cache_incremental(code, date_start, date_end, is_cache=True, adju
             combined_data = combined_data.sort_values(by='date').reset_index(drop=True)
         
         # 4.5 过滤异常行（防止污染数据写入缓存）
-        combined_data = _filter_ohlc_outliers(combined_data, code)
+        combined_data, n_outliers = _filter_ohlc_outliers(combined_data, code)
         
-        # 5. 保存更新后的缓存（有新数据时才写入）
-        if is_cache and len(all_new_data) > 0 and combined_data is not None and len(combined_data) > 0:
+        # 5. 保存更新后的缓存（有新数据或清除了异常行时写入）
+        need_save = len(all_new_data) > 0 or n_outliers > 0
+        if is_cache and need_save and combined_data is not None and len(combined_data) > 0:
             try:
                 combined_data.to_pickle(cache_file, compression="gzip")
                 if 'date' in combined_data.columns:
@@ -1388,7 +1389,7 @@ def read_hist_from_cache(data_base, years=None):
 
 def _filter_ohlc_outliers(data, code=''):
     """
-    过滤 OHLC 异常行：检测并移除价格与相邻行严重偏离的数据点。
+    过滤 OHLC 异常行：检测并移除价格与相邻行严重偏离的数据点（向量化实现）。
 
     已知问题：某些缓存文件中混入了月度聚合数据（来源不明），
     表现为月末最后一个交易日的 OHLC 值偏离正常价格，
@@ -1400,60 +1401,49 @@ def _filter_ohlc_outliers(data, code=''):
     3. 无效价格：close <= 0
 
     安全阀：异常行不超过总行数 15% 时才执行过滤。
+
+    返回值：(filtered_data, n_outliers_removed)
+        - filtered_data: 过滤后的 DataFrame
+        - n_outliers_removed: 被移除的异常行数（0 表示无变化）
     """
     if data is None or len(data) < 10:
-        return data
+        return data, 0
 
     try:
         close = pd.to_numeric(data['close'], errors='coerce')
         volume = pd.to_numeric(data.get('volume', pd.Series(dtype='float64')), errors='coerce')
         if close.isna().all():
-            return data
+            return data, 0
 
-        n = len(data)
-        outlier_mask = pd.Series(False, index=data.index)
+        # --- 向量化：用 rolling(5).median() 近似邻居中位数 ---
+        # rolling(5) 包含自身+前后各 2 行 = 5 行窗口的中位数
+        # 为排除自身的影响，使用 (5*median - self) / 4 修正（当自身是异常值时修正更准）
+        win = 5
+        rolling_median_close = close.rolling(win, center=True, min_periods=3).median()
+        rolling_median_vol = volume.rolling(win, center=True, min_periods=3).median()
 
-        # --- 检测 1 & 2：基于邻居中位数的价格偏离 ---
-        for i in range(n):
-            # 取 ±2 范围内的邻居（排除自身）
-            neighbor_idx = [j for j in range(max(0, i - 2), min(n, i + 3)) if j != i]
-            neighbor_closes = close.iloc[neighbor_idx].dropna()
+        # 价格比率：当前值 / 邻居中位数
+        # 中位数对单个异常值鲁棒，无需排除自身修正
+        price_ratio = close / rolling_median_close
 
-            if len(neighbor_closes) < 2:
-                continue
+        # 检测 3：无效价格（负数或零）
+        invalid_price = close <= 0
 
-            median_close = neighbor_closes.median()
-            if median_close <= 0 or pd.isna(median_close):
-                continue
+        # 检测 2：极端价格偏离 >60%（ratio < 0.4 或 > 2.5）
+        extreme_deviation = (price_ratio < 0.4) | (price_ratio > 2.5)
 
-            curr_close = close.iloc[i]
-            if pd.isna(curr_close):
-                continue
+        # 检测 1：价格偏离 >25% + 成交量异常 >3x
+        price_deviated = (price_ratio < 0.75) | (price_ratio > 1.33)
+        vol_ratio = volume / rolling_median_vol.replace(0, np.nan)
+        vol_abnormal = vol_ratio > 3.0
+        joint_detection = price_deviated & vol_abnormal
 
-            price_ratio = curr_close / median_close
+        # 合并所有检测结果
+        outlier_mask = invalid_price | extreme_deviation | joint_detection
+        # NaN 处理：rolling 边缘的 NaN 不应被标记
+        outlier_mask = outlier_mask.fillna(False)
 
-            # 检测 3：无效价格（负数或零）
-            if curr_close <= 0:
-                outlier_mask.iloc[i] = True
-                continue
-
-            # 检测 2：极端价格偏离 >60%（ratio < 0.4 或 > 2.5）
-            if price_ratio < 0.4 or price_ratio > 2.5:
-                outlier_mask.iloc[i] = True
-                continue
-
-            # 检测 1：价格偏离 >25% + 成交量异常 >3x
-            if (price_ratio < 0.75 or price_ratio > 1.33) and not volume.empty:
-                neighbor_vols = volume.iloc[neighbor_idx].dropna()
-                if len(neighbor_vols) >= 2:
-                    median_vol = neighbor_vols.median()
-                    curr_vol = volume.iloc[i] if i < len(volume) else 0
-                    if not pd.isna(curr_vol) and median_vol > 0:
-                        vol_ratio = curr_vol / median_vol
-                        if vol_ratio > 3.0:
-                            outlier_mask.iloc[i] = True
-
-        n_outliers = outlier_mask.sum()
+        n_outliers = int(outlier_mask.sum())
         if n_outliers > 0 and n_outliers < len(data) * 0.15:  # 异常行不超过15%才过滤
             outlier_dates = data.loc[outlier_mask, 'date'].tolist()
             logging.warning(
@@ -1461,11 +1451,12 @@ def _filter_ohlc_outliers(data, code=''):
                 f"日期: {outlier_dates[:5]}{'...' if n_outliers > 5 else ''}"
             )
             data = data.loc[~outlier_mask].reset_index(drop=True)
+            return data, n_outliers
 
-        return data
+        return data, 0
     except Exception as e:
         logging.debug(f"_filter_ohlc_outliers 异常: {code} - {e}")
-        return data
+        return data, 0
 
 
 def read_stock_hist_from_cache(code, date_start, date_end):
@@ -1511,7 +1502,16 @@ def read_stock_hist_from_cache(code, date_start, date_end):
         data = data[valid_cols]
         
         # 过滤 OHLC 异常行（月度聚合数据等污染）
-        data = _filter_ohlc_outliers(data, code)
+        data, n_outliers = _filter_ohlc_outliers(data, code)
+        
+        # 如果清除了异常行，回写缓存（避免后续读取重复过滤）
+        if n_outliers > 0 and data is not None and len(data) > 0:
+            try:
+                data.to_pickle(cache_file, compression="gzip")
+                last_date = _to_date_str(data['date'].max())
+                _write_cache_meta(code, last_date, 'qfq')
+            except Exception:
+                pass  # 回写失败不影响正常读取
         
         # 按请求日期范围过滤
         data_dates = data['date'].apply(_to_date_str)
