@@ -799,8 +799,13 @@ def _get_cache_meta_path(code, adjust=''):
     return os.path.join(cache_dir, f"{code}{adjust}.meta")
 
 
+# 当前过滤算法版本号：向量化 exclude-self 邻居中位数 (2025-03)
+# 当此版本号与 .meta 中的 filtered_version 匹配时，读取缓存可跳过 _filter_ohlc_outliers
+_FILTER_VERSION = 2
+
+
 def _read_cache_meta(code, adjust=''):
-    """读取缓存元数据（最后更新日期）"""
+    """读取缓存元数据（最后更新日期 + 过滤版本号）"""
     meta_path = _get_cache_meta_path(code, adjust)
     try:
         if os.path.isfile(meta_path):
@@ -809,19 +814,20 @@ def _read_cache_meta(code, adjust=''):
                 parts = content.split(',')
                 return {
                     'last_date': parts[0] if len(parts) > 0 else None,
-                    'update_time': parts[1] if len(parts) > 1 else None
+                    'update_time': parts[1] if len(parts) > 1 else None,
+                    'filtered_version': int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
                 }
     except Exception as e:
         logging.debug(f"读取缓存元数据失败: {code} - {e}")
     return None
 
 
-def _write_cache_meta(code, last_date, adjust=''):
-    """写入缓存元数据"""
+def _write_cache_meta(code, last_date, adjust='', filtered_version=0):
+    """写入缓存元数据（含过滤版本号）"""
     meta_path = _get_cache_meta_path(code, adjust)
     try:
         with open(meta_path, 'w') as f:
-            f.write(f"{last_date},{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}")
+            f.write(f"{last_date},{datetime.datetime.now().strftime('%Y%m%d%H%M%S')},{filtered_version}")
     except Exception as e:
         logging.debug(f"写入缓存元数据失败: {code} - {e}")
 
@@ -1016,16 +1022,35 @@ def stock_hist_cache_incremental(code, date_start, date_end, is_cache=True, adju
             combined_data = combined_data.sort_values(by='date').reset_index(drop=True)
         
         # 4.5 过滤异常行（防止污染数据写入缓存）
-        combined_data, n_outliers = _filter_ohlc_outliers(combined_data, code)
+        # 优化：无新数据 + meta 标记已过滤 → 跳过 _filter_ohlc_outliers（节省 ~7ms/stock）
+        has_new_data = len(all_new_data) > 0
+        if has_new_data:
+            # 有新 API 数据混入，必须过滤
+            combined_data, n_outliers = _filter_ohlc_outliers(combined_data, code)
+        else:
+            # 纯缓存数据 — 检查 meta 是否已标记当前版本
+            meta = _read_cache_meta(code, adjust)
+            if meta is not None and meta.get('filtered_version', 0) >= _FILTER_VERSION:
+                n_outliers = 0  # 已过滤，跳过
+            else:
+                combined_data, n_outliers = _filter_ohlc_outliers(combined_data, code)
+                # 即使无异常也更新 meta 版本号（标记已检查，下次跳过）
+                if is_cache and n_outliers == 0 and combined_data is not None and len(combined_data) > 0:
+                    try:
+                        if 'date' in combined_data.columns:
+                            last_date = _to_date_str(combined_data['date'].max())
+                            _write_cache_meta(code, last_date, adjust, filtered_version=_FILTER_VERSION)
+                    except Exception:
+                        pass
         
         # 5. 保存更新后的缓存（有新数据或清除了异常行时写入）
-        need_save = len(all_new_data) > 0 or n_outliers > 0
+        need_save = has_new_data or n_outliers > 0
         if is_cache and need_save and combined_data is not None and len(combined_data) > 0:
             try:
                 combined_data.to_pickle(cache_file, compression="gzip")
                 if 'date' in combined_data.columns:
                     last_date = _to_date_str(combined_data['date'].max())
-                    _write_cache_meta(code, last_date, adjust)
+                    _write_cache_meta(code, last_date, adjust, filtered_version=_FILTER_VERSION)
             except Exception as e:
                 logging.warning(f"保存缓存失败: {code} - {e}")
         
@@ -1519,17 +1544,26 @@ def read_stock_hist_from_cache(code, date_start, date_end):
         valid_cols = [c for c in _standard_columns if c in data.columns]
         data = data[valid_cols]
         
-        # 过滤 OHLC 异常行（月度聚合数据等污染）
-        data, n_outliers = _filter_ohlc_outliers(data, code)
+        # 过滤 OHLC 异常行 — 仅在缓存未经当前版本过滤时执行
+        # 若 stock_hist_cache_incremental 已过滤并标记 filtered_version，则跳过
+        meta = _read_cache_meta(code, 'qfq')
+        already_filtered = (meta is not None and meta.get('filtered_version', 0) >= _FILTER_VERSION)
         
-        # 如果清除了异常行，回写缓存（避免后续读取重复过滤）
-        if n_outliers > 0 and data is not None and len(data) > 0:
-            try:
-                data.to_pickle(cache_file, compression="gzip")
-                last_date = _to_date_str(data['date'].max())
-                _write_cache_meta(code, last_date, 'qfq')
-            except Exception:
-                pass  # 回写失败不影响正常读取
+        if already_filtered:
+            n_outliers = 0
+        else:
+            data, n_outliers = _filter_ohlc_outliers(data, code)
+            # 更新 meta 版本号：后续读取可跳过 _filter_ohlc_outliers
+            if data is not None and len(data) > 0:
+                try:
+                    if n_outliers > 0:
+                        # 有异常行被清除 → 回写数据 + 更新 meta
+                        data.to_pickle(cache_file, compression="gzip")
+                    # 无论是否有异常行，都更新 meta 版本号（标记已检查）
+                    last_date = _to_date_str(data['date'].max())
+                    _write_cache_meta(code, last_date, 'qfq', filtered_version=_FILTER_VERSION)
+                except Exception:
+                    pass  # 回写失败不影响正常读取
         
         # 按请求日期范围过滤
         data_dates = data['date'].apply(_to_date_str)
