@@ -19,7 +19,7 @@ const strategy = computed(() => route.query.strategy as string || '')
 const klineChartRef = ref<HTMLDivElement>()
 const loading = ref(false)
 
-// 当前周期
+// === Period tabs ===
 const currentPeriod = ref('daily')
 const periods = [
   { label: '日K', value: 'daily' },
@@ -29,14 +29,21 @@ const periods = [
   { label: '年K', value: 'yearly' },
 ]
 
-// 当前副图指标
-const currentIndicator = ref('MACD')
-const indicatorOptions = ['MACD', 'RSI', 'BOLL']
+// === Main chart overlay toggles ===
+const mainOverlays = ref<string[]>(['MA'])
+const mainOverlayOptions = [
+  { label: '均线', value: 'MA' },
+  { label: 'BOLL', value: 'BOLL' },
+]
 
-// K线数据
+// === Sub indicator tabs (East Money style bottom bar) ===
+const currentSubIndicator = ref('MACD')
+const subIndicatorOptions = ['MACD', 'KDJ', 'RSI', 'WR', 'BOLL']
+
+// K-line data
 const klineData = ref<any>(null)
 
-// 加载K线数据
+// Load K-line data
 const loadKlineData = async () => {
   if (!code.value) return
   loading.value = true
@@ -63,137 +70,269 @@ const loadKlineData = async () => {
   }
 }
 
-// 渲染ECharts图表
+// === Format volume for axis labels ===
+const formatVolume = (val: number): string => {
+  if (val >= 1e8) return (val / 1e8).toFixed(2) + '亿'
+  if (val >= 1e4) return (val / 1e4).toFixed(0) + '万'
+  return val.toString()
+}
+
+// === Smart dataZoom start per period (show recent N bars like East Money) ===
+const getZoomStart = (total: number): number => {
+  const visible: Record<string, number> = {
+    daily: 120,
+    weekly: 104,
+    monthly: 60,
+    quarterly: 40,
+    yearly: 9999, // yearly: show all
+  }
+  const n = visible[currentPeriod.value] || 120
+  if (n >= total) return 0
+  return Math.max(0, Math.round((1 - n / total) * 100))
+}
+
+// === East Money color scheme ===
+const COLORS = {
+  up: '#ec0000',
+  down: '#00da3c',
+  ma5: '#FF9900',
+  ma10: '#0099FF',
+  ma20: '#FF00FF',
+  ma60: '#00CC66',
+  bollUpper: '#e6a23c',
+  bollMiddle: '#909399',
+  bollLower: '#67c23a',
+}
+
+// === Render ECharts ===
 const renderChart = () => {
   if (!klineChartRef.value || !klineData.value) return
   const d = klineData.value
 
-  if (chartInstance) {
-    chartInstance.dispose()
-  }
+  if (chartInstance) { chartInstance.dispose() }
   chartInstance = echarts.init(klineChartRef.value)
 
   const dates: string[] = d.dates
   const ohlc: number[][] = d.ohlc
   const volumes: number[] = d.volumes
   const ma = d.ma || {}
+  const volMa = d.vol_ma || {}
   const boll = d.boll || {}
   const rsi: (number | null)[] = d.rsi || []
   const macd = d.macd || {}
+  const kdj = d.kdj || {}
+  const wr = d.wr || {}
 
-  // 根据当前指标决定副图配置
-  const showBollOnMain = currentIndicator.value === 'BOLL'
-  const showMacdSub = currentIndicator.value === 'MACD'
-  const showRsiSub = currentIndicator.value === 'RSI'
+  const showMA = mainOverlays.value.includes('MA')
+  const showBollOnMain = mainOverlays.value.includes('BOLL')
+  const subInd = currentSubIndicator.value
+  const hasSub = ['MACD', 'KDJ', 'RSI', 'WR', 'BOLL'].includes(subInd)
 
-  // 成交量颜色
+  // Volume bar coloring
   const volData = volumes.map((v, i) => ({
     value: v,
     itemStyle: {
-      color: ohlc[i] && ohlc[i][1] >= ohlc[i][0] ? '#ec0000' : '#00da3c'
+      color: ohlc[i] && ohlc[i][1] >= ohlc[i][0] ? COLORS.up : COLORS.down
     }
   }))
 
-  // Grid 布局：主图 + 成交量 + 副图指标
+  // === Grid layout ===
   const grids: any[] = [
-    { left: '8%', right: '4%', top: '8%', height: '42%' },   // 主图
-    { left: '8%', right: '4%', top: '55%', height: '12%' },   // 成交量
+    { left: '8%', right: '3%', top: 48, bottom: hasSub ? '34%' : '22%' },
+    { left: '8%', right: '3%', height: '10%', bottom: hasSub ? '22%' : '10%' },
   ]
-  const xAxes: any[] = [
-    { type: 'category', data: dates, boundaryGap: false, axisLine: { onZero: false }, splitLine: { show: false }, min: 'dataMin', max: 'dataMax' },
-    { type: 'category', gridIndex: 1, data: dates, axisLabel: { show: false } },
-  ]
-  const yAxes: any[] = [
-    { scale: true, splitArea: { show: true } },
-    { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } },
-  ]
-
-  if (showMacdSub || showRsiSub) {
-    grids.push({ left: '8%', right: '4%', top: '72%', height: '14%' })
-    xAxes.push({ type: 'category', gridIndex: 2, data: dates, axisLabel: { show: false } })
-    yAxes.push({ scale: true, gridIndex: 2, splitNumber: 2, axisLabel: { show: true, fontSize: 10 }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } })
+  if (hasSub) {
+    grids.push({ left: '8%', right: '3%', height: '14%', bottom: '6%' })
   }
 
-  const legendData = ['K线', 'MA5', 'MA10', 'MA20', 'MA60']
+  // === X/Y axes ===
+  const xAxes: any[] = [
+    {
+      type: 'category', data: dates, boundaryGap: false,
+      axisLine: { onZero: false, lineStyle: { color: '#ccc' } },
+      splitLine: { show: false },
+      axisLabel: { fontSize: 10, color: '#666' },
+      min: 'dataMin', max: 'dataMax',
+    },
+    {
+      type: 'category', gridIndex: 1, data: dates,
+      axisLabel: { show: false }, axisTick: { show: false }, axisLine: { show: false },
+    },
+  ]
+  const yAxes: any[] = [
+    {
+      scale: true,
+      splitArea: { show: true, areaStyle: { color: ['rgba(250,250,250,0.3)', 'rgba(240,240,240,0.3)'] } },
+      splitLine: { lineStyle: { color: '#eee' } },
+      axisLabel: { fontSize: 10, color: '#666' },
+    },
+    {
+      scale: true, gridIndex: 1, splitNumber: 2,
+      axisLabel: { show: true, fontSize: 9, color: '#999', formatter: (v: number) => formatVolume(v) },
+      axisLine: { show: false }, axisTick: { show: false },
+      splitLine: { show: false },
+    },
+  ]
+  if (hasSub) {
+    xAxes.push({
+      type: 'category', gridIndex: 2, data: dates,
+      axisLabel: { show: false }, axisTick: { show: false }, axisLine: { show: false },
+    })
+    yAxes.push({
+      scale: true, gridIndex: 2, splitNumber: 2,
+      axisLabel: { show: true, fontSize: 9, color: '#999' },
+      axisLine: { show: false }, axisTick: { show: false },
+      splitLine: { show: false },
+    })
+  }
+
+  // === Legend ===
+  const legendData: string[] = []
+  if (showMA) legendData.push('MA5', 'MA10', 'MA20', 'MA60')
   if (showBollOnMain) legendData.push('BOLL上轨', 'BOLL中轨', 'BOLL下轨')
 
+  // === Series ===
   const series: any[] = [
     {
       name: 'K线', type: 'candlestick', data: ohlc,
-      itemStyle: { color: '#ec0000', color0: '#00da3c', borderColor: '#ec0000', borderColor0: '#00da3c' },
+      itemStyle: {
+        color: COLORS.up, color0: COLORS.down,
+        borderColor: COLORS.up, borderColor0: COLORS.down,
+      },
       markPoint: {
-        symbol: 'pin',
-        symbolSize: 36,
+        symbol: 'pin', symbolSize: 36,
         label: { fontSize: 11, fontWeight: 'bold', color: '#fff' },
         data: [
-          {
-            name: '最高价',
-            type: 'max',
-            valueDim: 'highest',
-            itemStyle: { color: '#ec0000' },
-          },
-          {
-            name: '最低价',
-            type: 'min',
-            valueDim: 'lowest',
-            itemStyle: { color: '#009900' },
-            symbolRotate: 180,
-            label: { offset: [0, 7] },
-          },
+          { name: '最高价', type: 'max', valueDim: 'highest', itemStyle: { color: COLORS.up } },
+          { name: '最低价', type: 'min', valueDim: 'lowest', itemStyle: { color: '#009900' }, symbolRotate: 180, label: { offset: [0, 7] } },
         ],
       },
     },
-    { name: 'MA5', type: 'line', data: ma.ma5, smooth: true, lineStyle: { width: 1 }, symbol: 'none' },
-    { name: 'MA10', type: 'line', data: ma.ma10, smooth: true, lineStyle: { width: 1 }, symbol: 'none' },
-    { name: 'MA20', type: 'line', data: ma.ma20, smooth: true, lineStyle: { width: 1 }, symbol: 'none' },
-    { name: 'MA60', type: 'line', data: ma.ma60, smooth: true, lineStyle: { width: 1 }, symbol: 'none' },
-    { name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volData },
   ]
 
-  // BOLL 叠加到主图
+  // MA lines
+  if (showMA) {
+    const maLines: [string, any, string][] = [
+      ['MA5', ma.ma5, COLORS.ma5],
+      ['MA10', ma.ma10, COLORS.ma10],
+      ['MA20', ma.ma20, COLORS.ma20],
+      ['MA60', ma.ma60, COLORS.ma60],
+    ]
+    for (const [name, data, color] of maLines) {
+      if (data) {
+        series.push({
+          name, type: 'line', data, smooth: true,
+          lineStyle: { width: 1, color }, symbol: 'none',
+        })
+      }
+    }
+  }
+
+  // BOLL overlay on main chart
   if (showBollOnMain && boll.upper) {
     series.push(
-      { name: 'BOLL上轨', type: 'line', data: boll.upper, lineStyle: { width: 1, type: 'dashed', color: '#e6a23c' }, symbol: 'none' },
-      { name: 'BOLL中轨', type: 'line', data: boll.middle, lineStyle: { width: 1, color: '#909399' }, symbol: 'none' },
-      { name: 'BOLL下轨', type: 'line', data: boll.lower, lineStyle: { width: 1, type: 'dashed', color: '#67c23a' }, symbol: 'none' },
+      { name: 'BOLL上轨', type: 'line', data: boll.upper, lineStyle: { width: 1, type: 'dashed', color: COLORS.bollUpper }, symbol: 'none' },
+      { name: 'BOLL中轨', type: 'line', data: boll.middle, lineStyle: { width: 1, color: COLORS.bollMiddle }, symbol: 'none' },
+      { name: 'BOLL下轨', type: 'line', data: boll.lower, lineStyle: { width: 1, type: 'dashed', color: COLORS.bollLower }, symbol: 'none' },
     )
   }
 
-  // MACD 副图
-  if (showMacdSub && macd.dif) {
-    legendData.push('DIF', 'DEA', 'MACD')
-    const macdBarData = (macd.histogram || []).map((v: number | null) => ({
-      value: v,
-      itemStyle: { color: v !== null && v >= 0 ? '#ec0000' : '#00da3c' }
-    }))
-    series.push(
-      { name: 'DIF', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macd.dif, lineStyle: { width: 1 }, symbol: 'none' },
-      { name: 'DEA', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macd.dea, lineStyle: { width: 1 }, symbol: 'none' },
-      { name: 'MACD', type: 'bar', xAxisIndex: 2, yAxisIndex: 2, data: macdBarData },
-    )
+  // Volume bars + volume MA lines
+  series.push(
+    { name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volData, barMaxWidth: 8 },
+  )
+  if (volMa.ma5) {
+    series.push({
+      name: 'VOL MA5', type: 'line', xAxisIndex: 1, yAxisIndex: 1,
+      data: volMa.ma5, lineStyle: { width: 1, color: COLORS.ma5 }, symbol: 'none',
+    })
+  }
+  if (volMa.ma10) {
+    series.push({
+      name: 'VOL MA10', type: 'line', xAxisIndex: 1, yAxisIndex: 1,
+      data: volMa.ma10, lineStyle: { width: 1, color: COLORS.ma10 }, symbol: 'none',
+    })
   }
 
-  // RSI 副图
-  if (showRsiSub && rsi.length) {
-    legendData.push('RSI(14)')
-    series.push(
-      { name: 'RSI(14)', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: rsi, lineStyle: { width: 1, color: '#e6a23c' }, symbol: 'none' },
-    )
+  // === Sub indicator chart ===
+  if (hasSub) {
+    if (subInd === 'MACD' && macd.dif) {
+      legendData.push('DIF', 'DEA', 'MACD柱')
+      const macdBarData = (macd.histogram || []).map((v: number | null) => ({
+        value: v,
+        itemStyle: { color: v !== null && v >= 0 ? COLORS.up : COLORS.down }
+      }))
+      series.push(
+        { name: 'DIF', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macd.dif, lineStyle: { width: 1 }, symbol: 'none' },
+        { name: 'DEA', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macd.dea, lineStyle: { width: 1, color: COLORS.ma5 }, symbol: 'none' },
+        { name: 'MACD柱', type: 'bar', xAxisIndex: 2, yAxisIndex: 2, data: macdBarData, barMaxWidth: 4 },
+      )
+    }
+
+    if (subInd === 'KDJ' && kdj.k) {
+      legendData.push('K', 'D', 'J')
+      series.push(
+        { name: 'K', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: kdj.k, lineStyle: { width: 1, color: COLORS.ma5 }, symbol: 'none' },
+        { name: 'D', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: kdj.d, lineStyle: { width: 1, color: COLORS.ma10 }, symbol: 'none' },
+        { name: 'J', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: kdj.j, lineStyle: { width: 1, color: COLORS.ma20 }, symbol: 'none' },
+      )
+    }
+
+    if (subInd === 'RSI' && rsi.length) {
+      legendData.push('RSI(14)')
+      series.push(
+        { name: 'RSI(14)', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: rsi, lineStyle: { width: 1, color: COLORS.ma5 }, symbol: 'none' },
+      )
+    }
+
+    if (subInd === 'WR' && wr.wr10) {
+      legendData.push('WR(10)', 'WR(6)')
+      series.push(
+        { name: 'WR(10)', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: wr.wr10, lineStyle: { width: 1, color: COLORS.ma5 }, symbol: 'none' },
+        { name: 'WR(6)', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: wr.wr6, lineStyle: { width: 1, color: COLORS.ma10 }, symbol: 'none' },
+      )
+    }
+
+    if (subInd === 'BOLL' && boll.upper) {
+      legendData.push('BOLL上', 'BOLL中', 'BOLL下')
+      series.push(
+        { name: 'BOLL上', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: boll.upper, lineStyle: { width: 1, color: COLORS.bollUpper }, symbol: 'none' },
+        { name: 'BOLL中', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: boll.middle, lineStyle: { width: 1, color: COLORS.bollMiddle }, symbol: 'none' },
+        { name: 'BOLL下', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: boll.lower, lineStyle: { width: 1, color: COLORS.bollLower }, symbol: 'none' },
+      )
+    }
   }
 
-  const zoomXIndices = [0, 1]
-  if (showMacdSub || showRsiSub) zoomXIndices.push(2)
+  // === dataZoom ===
+  const zoomStart = getZoomStart(dates.length)
+  const zoomXIndices = hasSub ? [0, 1, 2] : [0, 1]
 
-  const option = {
+  const option: echarts.EChartsOption = {
     animation: false,
-    tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
-    legend: { data: legendData, top: 0, textStyle: { fontSize: 11 } },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'cross' },
+      backgroundColor: 'rgba(255,255,255,0.96)',
+      borderColor: '#ddd',
+      textStyle: { fontSize: 12, color: '#333' },
+    },
+    legend: {
+      data: legendData,
+      top: 4, left: '8%',
+      textStyle: { fontSize: 11 },
+      itemWidth: 14, itemHeight: 10,
+    },
     grid: grids,
     xAxis: xAxes,
     yAxis: yAxes,
     dataZoom: [
-      { type: 'inside', xAxisIndex: zoomXIndices, start: 40, end: 100 },
-      { show: true, xAxisIndex: zoomXIndices, type: 'slider', top: '92%', start: 40, end: 100 },
+      { type: 'inside', xAxisIndex: zoomXIndices, start: zoomStart, end: 100 },
+      {
+        show: true, xAxisIndex: zoomXIndices, type: 'slider',
+        bottom: 4, height: 20, start: zoomStart, end: 100,
+        borderColor: '#ddd', fillerColor: 'rgba(64,158,255,0.15)',
+        handleStyle: { color: '#409eff' },
+      },
     ],
     series,
   }
@@ -201,43 +340,33 @@ const renderChart = () => {
   chartInstance.setOption(option)
 }
 
-// 切换周期
+// Switch period
 const switchPeriod = (p: string) => {
   currentPeriod.value = p
   loadKlineData()
 }
 
-// 切换副图指标
-watch(currentIndicator, () => {
-  renderChart()
-})
+// Re-render chart (no data reload) when overlay or sub-indicator changes
+watch([currentSubIndicator, mainOverlays], () => { renderChart() }, { deep: true })
 
-// 跳转回测
+// Navigate to backtest
 const goBacktest = () => {
   router.push({
     path: '/backtest/custom',
-    query: {
-      code: code.value,
-      name: stockName.value,
-      strategy: strategy.value || undefined
-    }
+    query: { code: code.value, name: stockName.value, strategy: strategy.value || undefined }
   })
 }
 
 const handleResize = () => { chartInstance?.resize() }
 
-// 监听路由参数变化，当从别的股票点击进入时重新加载
 let lastLoadedCode = ''
-watch(
-  () => route.query.code,
-  (newCode, oldCode) => {
-    if (newCode && newCode !== oldCode) {
-      currentPeriod.value = 'daily'
-      lastLoadedCode = newCode as string
-      loadKlineData()
-    }
+watch(() => route.query.code, (newCode, oldCode) => {
+  if (newCode && newCode !== oldCode) {
+    currentPeriod.value = 'daily'
+    lastLoadedCode = newCode as string
+    loadKlineData()
   }
-)
+})
 
 onMounted(() => {
   lastLoadedCode = code.value || ''
@@ -245,7 +374,6 @@ onMounted(() => {
   window.addEventListener('resize', handleResize)
 })
 
-// keep-alive 重新激活时，仅在股票代码变化时重新加载
 onActivated(() => {
   window.addEventListener('resize', handleResize)
   nextTick(() => { chartInstance?.resize() })
@@ -265,78 +393,51 @@ onUnmounted(() => {
 
 <template>
   <div class="indicator-container">
-    <!-- 股票信息 -->
-    <el-card class="info-card" shadow="never">
-      <div class="stock-info">
-        <div class="stock-basic">
-          <span class="stock-code">{{ code }}</span>
-          <span class="stock-name">{{ stockName }}</span>
-          <el-tag size="small">{{ date }}</el-tag>
+    <!-- Top info bar -->
+    <div class="top-bar">
+      <div class="stock-basic">
+        <span class="stock-code">{{ code }}</span>
+        <span class="stock-name">{{ stockName }}</span>
+        <el-tag size="small" effect="plain">{{ date }}</el-tag>
+      </div>
+      <div class="top-actions">
+        <el-button type="primary" size="small" @click="goBacktest">查看回测</el-button>
+      </div>
+    </div>
+
+    <!-- Toolbar: period tabs + main chart overlay checkboxes -->
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <div class="period-tabs">
+          <span
+            v-for="p in periods" :key="p.value"
+            :class="['period-tab', { active: currentPeriod === p.value }]"
+            @click="switchPeriod(p.value)"
+          >{{ p.label }}</span>
         </div>
-        <div class="stock-actions">
-          <el-button type="primary" size="small" @click="goBacktest">
-            查看回测
-          </el-button>
+        <div class="overlay-checks">
+          <span class="label">主图指标</span>
+          <el-checkbox-group v-model="mainOverlays" size="small">
+            <el-checkbox v-for="opt in mainOverlayOptions" :key="opt.value" :value="opt.value">
+              {{ opt.label }}
+            </el-checkbox>
+          </el-checkbox-group>
         </div>
       </div>
-    </el-card>
+    </div>
 
-    <!-- K线图 -->
-    <el-card class="chart-card" shadow="never" v-loading="loading">
-      <template #header>
-        <div class="card-header">
-          <div class="header-left">
-            <span>K线图</span>
-            <el-radio-group v-model="currentIndicator" size="small" style="margin-left: 16px;">
-              <el-radio-button v-for="ind in indicatorOptions" :key="ind" :value="ind">{{ ind }}</el-radio-button>
-            </el-radio-group>
-          </div>
-          <el-button-group size="small">
-            <el-button
-              v-for="p in periods" :key="p.value"
-              :type="currentPeriod === p.value ? 'primary' : ''"
-              @click="switchPeriod(p.value)"
-            >{{ p.label }}</el-button>
-          </el-button-group>
-        </div>
-      </template>
-      <div ref="klineChartRef" class="chart-container"></div>
-    </el-card>
-
-    <!-- 技术指标说明 -->
-    <el-card class="desc-card" shadow="never">
-      <template #header>
-        <span>{{ currentIndicator }} 指标说明</span>
-      </template>
-      <div class="indicator-desc">
-        <template v-if="currentIndicator === 'MACD'">
-          <p><strong>MACD (指数平滑移动平均线)</strong></p>
-          <p>MACD由快线EMA12减慢线EMA26得到DIF，再对DIF做9日EMA得到DEA。MACD柱 = 2×(DIF-DEA)。</p>
-          <ul>
-            <li>DIF 上穿 DEA → 金叉（买入参考）</li>
-            <li>DIF 下穿 DEA → 死叉（卖出参考）</li>
-            <li>红柱变长 → 上涨动力增强；绿柱变长 → 下跌动力增强</li>
-          </ul>
-        </template>
-        <template v-else-if="currentIndicator === 'RSI'">
-          <p><strong>RSI (相对强弱指标, 14日)</strong></p>
-          <ul>
-            <li>RSI &gt; 70 → 超买区，注意减仓</li>
-            <li>RSI &lt; 30 → 超卖区，关注反弹机会</li>
-            <li>RSI 在 40-60 区间 → 趋势温和，适合趋势回调买入</li>
-          </ul>
-        </template>
-        <template v-else-if="currentIndicator === 'BOLL'">
-          <p><strong>BOLL 布林带 (20日, 2倍标准差)</strong></p>
-          <ul>
-            <li>价格触及上轨并放量滞涨 → 注意减仓</li>
-            <li>价格回调至中轨企稳，中轨上行 → 回调买入参考</li>
-            <li>价格跌破下轨后收回 → 超跌反弹信号</li>
-            <li>轨道收窄（缩口）→ 即将变盘</li>
-          </ul>
-        </template>
+    <!-- Chart area -->
+    <div class="chart-wrapper" v-loading="loading">
+      <div ref="klineChartRef" class="chart-main"></div>
+      <!-- Sub indicator tab bar (East Money style) -->
+      <div class="sub-indicator-bar">
+        <span
+          v-for="ind in subIndicatorOptions" :key="ind"
+          :class="['sub-tab', { active: currentSubIndicator === ind }]"
+          @click="currentSubIndicator = ind"
+        >{{ ind }}</span>
       </div>
-    </el-card>
+    </div>
   </div>
 </template>
 
@@ -344,51 +445,66 @@ onUnmounted(() => {
 .indicator-container {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 0;
+  background: #fff;
+  border-radius: 4px;
+  overflow: hidden;
 }
 
-.info-card {
-  :deep(.el-card__body) { padding: 12px 20px; }
-}
-
-.stock-info {
+/* Top info bar */
+.top-bar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #eee;
 }
-
 .stock-basic {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  .stock-code { font-size: 20px; font-weight: 600; color: #409eff; }
-  .stock-name { font-size: 18px; color: #303133; }
+  display: flex; align-items: center; gap: 10px;
+  .stock-code { font-size: 18px; font-weight: 700; color: #333; }
+  .stock-name { font-size: 16px; color: #666; }
 }
 
-.chart-card {
-  .card-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  .header-left {
-    display: flex;
-    align-items: center;
+/* Toolbar */
+.toolbar {
+  display: flex; align-items: center; padding: 6px 16px; border-bottom: 1px solid #f0f0f0;
+  background: #fafafa;
+}
+.toolbar-left {
+  display: flex; align-items: center; gap: 24px; flex-wrap: wrap;
+}
+.period-tabs {
+  display: flex; gap: 2px;
+  .period-tab {
+    padding: 3px 12px; font-size: 13px; cursor: pointer; border-radius: 3px;
+    color: #666; transition: all .15s;
+    &:hover { background: #e8f0fe; color: #409eff; }
+    &.active { background: #409eff; color: #fff; font-weight: 600; }
   }
 }
+.overlay-checks {
+  display: flex; align-items: center; gap: 6px;
+  .label { font-size: 12px; color: #999; }
+}
 
-.chart-container { height: 560px; }
+/* Chart */
+.chart-wrapper {
+  position: relative;
+}
+.chart-main {
+  height: 640px;
+}
 
-.desc-card {
-  .indicator-desc {
-    line-height: 1.8;
-    color: #606266;
-    p { margin-bottom: 8px; }
-    ul { padding-left: 20px; li { margin-bottom: 4px; } }
+/* Sub indicator tab bar */
+.sub-indicator-bar {
+  display: flex; gap: 0; border-top: 1px solid #eee; background: #fafafa;
+  .sub-tab {
+    flex: 1; text-align: center; padding: 5px 0; font-size: 12px;
+    cursor: pointer; color: #888; border-right: 1px solid #eee;
+    transition: all .15s; user-select: none;
+    &:last-child { border-right: none; }
+    &:hover { background: #e8f0fe; color: #409eff; }
+    &.active { background: #fff; color: #409eff; font-weight: 600; border-bottom: 2px solid #409eff; }
   }
 }
 </style>

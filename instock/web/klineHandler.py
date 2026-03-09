@@ -125,6 +125,50 @@ def _compute_macd(closes, fast=12, slow=26, signal=9):
     return dif, dea, macd_hist
 
 
+def _compute_kdj(closes, highs, lows, n=9, m1=3, m2=3):
+    """计算KDJ指标"""
+    length = len(closes)
+    k_vals = [50.0] * length
+    d_vals = [50.0] * length
+    j_vals = [50.0] * length
+    for i in range(length):
+        if i < n - 1:
+            continue
+        window_high = max(highs[i - n + 1:i + 1])
+        window_low = min(lows[i - n + 1:i + 1])
+        if window_high == window_low:
+            rsv = 50.0
+        else:
+            rsv = (closes[i] - window_low) / (window_high - window_low) * 100
+        prev_k = k_vals[i - 1] if i > 0 else 50.0
+        prev_d = d_vals[i - 1] if i > 0 else 50.0
+        k_vals[i] = round((m1 - 1) / m1 * prev_k + 1 / m1 * rsv, 2)
+        d_vals[i] = round((m2 - 1) / m2 * prev_d + 1 / m2 * k_vals[i], 2)
+        j_vals[i] = round(3 * k_vals[i] - 2 * d_vals[i], 2)
+    # 前 n-1 个设为 None
+    for i in range(min(n - 1, length)):
+        k_vals[i] = None
+        d_vals[i] = None
+        j_vals[i] = None
+    return k_vals, d_vals, j_vals
+
+
+def _compute_wr(closes, highs, lows, period=10):
+    """计算威廉指标 WR"""
+    result = []
+    for i in range(len(closes)):
+        if i < period - 1:
+            result.append(None)
+        else:
+            window_high = max(highs[i - period + 1:i + 1])
+            window_low = min(lows[i - period + 1:i + 1])
+            if window_high == window_low:
+                result.append(0.0)
+            else:
+                result.append(round((window_high - closes[i]) / (window_high - window_low) * -100, 2))
+    return result
+
+
 def _resample_to_period(df, period):
     """
     将日线数据重采样为周线/月线/季线/年线
@@ -167,25 +211,26 @@ def _resample_to_period(df, period):
 
 class GetKlineDataHandler(webBase.BaseHandler, ABC):
     """
-    K线数据JSON API
+    K线数据JSON API（仿东方财富风格，返回全量数据供前端 dataZoom 控制视图）
 
     参数:
         code: 股票代码 (必填)
         date: 日期 (可选, 默认今天)
         period: 周期 (可选, 默认 'daily')
                 可选值: daily / weekly / monthly / quarterly / yearly
-        days: 返回天数 (可选, 默认根据period自动设置)
+        days: 返回天数 (可选, 不设置则返回全部可用数据)
+        name: 股票名称 (可选)
 
     返回:
         {
-            code, name, period,
-            dates: [...],
-            ohlc: [[open, close, low, high], ...],
-            volumes: [...],
-            ma: {ma5: [...], ma10: [...], ma20: [...], ma60: [...]},
-            boll: {upper: [...], middle: [...], lower: [...]},
-            rsi: [...],
-            macd: {dif: [...], dea: [...], histogram: [...]},
+            code, name, period, total,
+            dates, ohlc, volumes,
+            ma: {ma5, ma10, ma20, ma60},
+            vol_ma: {ma5, ma10},
+            boll: {upper, middle, lower},
+            rsi, macd: {dif, dea, histogram},
+            kdj: {k, d, j},
+            wr: {wr10, wr6},
         }
     """
 
@@ -206,8 +251,8 @@ class GetKlineDataHandler(webBase.BaseHandler, ABC):
             if date is None:
                 date = datetime.datetime.now().strftime('%Y-%m-%d')
 
-            # 获取历史K线（仅从本地缓存读取，不发起外部API请求）
-            stock = stf.read_hist_from_cache((date, code))
+            # 获取全量历史K线（years=50 确保覆盖所有可用数据）
+            stock = stf.read_hist_from_cache((date, code), years=50)
 
             if stock is None or stock.empty:
                 self.write(json.dumps({"error": "无K线数据（缓存未命中，请确认数据采集任务已运行）", "code": code}, ensure_ascii=False))
@@ -225,23 +270,14 @@ class GetKlineDataHandler(webBase.BaseHandler, ABC):
             if resample_key:
                 stock = _resample_to_period(stock, resample_key)
 
-            # 截取数据天数
+            # 仅在显式指定 days 时截取，否则返回全部数据
             if days:
                 try:
                     n = int(days)
-                    if n > 0 and n < len(stock):
+                    if 0 < n < len(stock):
                         stock = stock.tail(n).reset_index(drop=True)
                 except (ValueError, TypeError):
                     pass
-            else:
-                # 默认天数: daily=120, weekly=104, monthly=60, quarterly=40, yearly=20
-                default_days = {
-                    'daily': 120, 'weekly': 104, 'monthly': 60,
-                    'quarterly': 40, 'yearly': 20
-                }
-                n = default_days.get(period, 120)
-                if n < len(stock):
-                    stock = stock.tail(n).reset_index(drop=True)
 
             # 提取数据
             dates = stock['date'].astype(str).tolist()
@@ -256,17 +292,24 @@ class GetKlineDataHandler(webBase.BaseHandler, ABC):
             for o, c, l, h in zip(opens, closes, lows, highs):
                 ohlc.append([o, c, l, h])
 
-            # 用于计算指标的 close 数组（None->0）
+            # 用于计算指标的 close/high/low 数组（None->0）
             closes_clean = [c if c is not None else 0 for c in closes]
+            highs_clean = [h if h is not None else 0 for h in highs]
+            lows_clean = [l if l is not None else 0 for l in lows]
 
             # 计算指标
             ma5 = _compute_ma(closes_clean, 5)
             ma10 = _compute_ma(closes_clean, 10)
             ma20 = _compute_ma(closes_clean, 20)
             ma60 = _compute_ma(closes_clean, 60)
+            vol_ma5 = _compute_ma(volumes, 5)
+            vol_ma10 = _compute_ma(volumes, 10)
             boll_upper, boll_middle, boll_lower = _compute_boll(closes_clean, 20, 2)
             rsi = _compute_rsi(closes_clean, 14)
             macd_dif, macd_dea, macd_hist = _compute_macd(closes_clean, 12, 26, 9)
+            kdj_k, kdj_d, kdj_j = _compute_kdj(closes_clean, highs_clean, lows_clean, 9, 3, 3)
+            wr10 = _compute_wr(closes_clean, highs_clean, lows_clean, 10)
+            wr6 = _compute_wr(closes_clean, highs_clean, lows_clean, 6)
 
             result = {
                 "code": code,
@@ -282,6 +325,10 @@ class GetKlineDataHandler(webBase.BaseHandler, ABC):
                     "ma20": ma20,
                     "ma60": ma60,
                 },
+                "vol_ma": {
+                    "ma5": vol_ma5,
+                    "ma10": vol_ma10,
+                },
                 "boll": {
                     "upper": boll_upper,
                     "middle": boll_middle,
@@ -292,6 +339,15 @@ class GetKlineDataHandler(webBase.BaseHandler, ABC):
                     "dif": macd_dif,
                     "dea": macd_dea,
                     "histogram": macd_hist,
+                },
+                "kdj": {
+                    "k": kdj_k,
+                    "d": kdj_d,
+                    "j": kdj_j,
+                },
+                "wr": {
+                    "wr10": wr10,
+                    "wr6": wr6,
                 },
             }
 
