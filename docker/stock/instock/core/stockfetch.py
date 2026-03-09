@@ -1258,82 +1258,96 @@ def update_all_caches(stocks, date_start, date_end, workers=2):
     # 限制并发数，避免过多线程同时请求 API
     workers = min(workers, 4)
     
+    # ── 分批提交（时间换空间）──
+    # 关键优化：不再一次性创建 ~4900 个 Future 对象，改为每批提交 CHUNK_SIZE 只
+    # 每批处理完后 gc.collect()，避免 Future/结果对象在内存中累积
+    CHUNK_SIZE = BATCH_PAUSE_INTERVAL  # 复用批次暂停间隔（默认 100）
+    
     try:
         processed_total = 0
         api_processed = 0  # 实际发起 API 请求的数量（用于批次暂停计数）
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-            future_to_stock = {executor.submit(_update_one, stock): stock for stock in stocks}
-            for future in concurrent.futures.as_completed(future_to_stock):
-                if _abort:
-                    break
-                
-                try:
-                    result = future.result()
-                    if result == 'skip':
-                        skip += 1
-                    elif result:
-                        success += 1
-                        api_processed += 1
-                    else:
+        
+        for chunk_start in range(0, len(stocks), CHUNK_SIZE):
+            if _abort:
+                break
+            
+            chunk = stocks[chunk_start:chunk_start + CHUNK_SIZE]
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                future_to_stock = {executor.submit(_update_one, stock): stock for stock in chunk}
+                for future in concurrent.futures.as_completed(future_to_stock):
+                    if _abort:
+                        break
+                    
+                    try:
+                        result = future.result()
+                        if result == 'skip':
+                            skip += 1
+                        elif result:
+                            success += 1
+                            api_processed += 1
+                        else:
+                            fail += 1
+                            api_processed += 1
+                            # 限流检测：连续失败达到阈值时触发暂停
+                            should_throttle = False
+                            pause_time = 0
+                            with _lock:
+                                consecutive_fails += 1
+                                # 仅当未处于限流暂停状态时才触发新的暂停
+                                if consecutive_fails >= CONSECUTIVE_FAIL_THRESHOLD and _throttle_event.is_set():
+                                    throttle_count += 1
+                                    pause_time = BASE_THROTTLE_PAUSE * (2 ** (throttle_count - 1))
+                                    
+                                    if throttle_count >= MAX_THROTTLE_COUNT:
+                                        logging.error(
+                                            f"限流已触发 {throttle_count} 次，疑似 IP 被封禁，"
+                                            f"终止任务以避免进一步封禁。"
+                                            f"当前进度：成功={success}, 失败={fail}, 跳过={skip}"
+                                        )
+                                        _abort = True
+                                        break
+                                    
+                                    should_throttle = True
+                                    _throttle_event.clear()  # 阻塞所有工作线程
+                            
+                            if should_throttle:
+                                logging.warning(
+                                    f"连续 {CONSECUTIVE_FAIL_THRESHOLD} 次获取失败，"
+                                    f"第{throttle_count}次触发限流保护，暂停 {pause_time} 秒..."
+                                )
+                                time.sleep(pause_time)
+                                with _lock:
+                                    consecutive_fails = 0
+                                    # 恢复后自动降速：请求间隔加大 50%（上限 5-8 秒）
+                                    request_delay[0] = min(request_delay[0] * 1.5, 5.0)
+                                    request_delay[1] = min(request_delay[1] * 1.5, 8.0)
+                                _throttle_event.set()  # 恢复所有工作线程
+                                logging.info(
+                                    f"限流暂停结束，恢复请求。"
+                                    f"请求间隔已调整为 {request_delay[0]:.1f}-{request_delay[1]:.1f} 秒"
+                                )
+                                
+                    except Exception as e:
                         fail += 1
                         api_processed += 1
-                        # 限流检测：连续失败达到阈值时触发暂停
-                        should_throttle = False
-                        pause_time = 0
-                        with _lock:
-                            consecutive_fails += 1
-                            # 仅当未处于限流暂停状态时才触发新的暂停
-                            if consecutive_fails >= CONSECUTIVE_FAIL_THRESHOLD and _throttle_event.is_set():
-                                throttle_count += 1
-                                pause_time = BASE_THROTTLE_PAUSE * (2 ** (throttle_count - 1))
-                                
-                                if throttle_count >= MAX_THROTTLE_COUNT:
-                                    logging.error(
-                                        f"限流已触发 {throttle_count} 次，疑似 IP 被封禁，"
-                                        f"终止任务以避免进一步封禁。"
-                                        f"当前进度：成功={success}, 失败={fail}, 跳过={skip}"
-                                    )
-                                    _abort = True
-                                    break
-                                
-                                should_throttle = True
-                                _throttle_event.clear()  # 阻塞所有工作线程
-                        
-                        if should_throttle:
-                            logging.warning(
-                                f"连续 {CONSECUTIVE_FAIL_THRESHOLD} 次获取失败，"
-                                f"第{throttle_count}次触发限流保护，暂停 {pause_time} 秒..."
-                            )
-                            time.sleep(pause_time)
-                            with _lock:
-                                consecutive_fails = 0
-                                # 恢复后自动降速：请求间隔加大 50%（上限 5-8 秒）
-                                request_delay[0] = min(request_delay[0] * 1.5, 5.0)
-                                request_delay[1] = min(request_delay[1] * 1.5, 8.0)
-                            _throttle_event.set()  # 恢复所有工作线程
-                            logging.info(
-                                f"限流暂停结束，恢复请求。"
-                                f"请求间隔已调整为 {request_delay[0]:.1f}-{request_delay[1]:.1f} 秒"
-                            )
-                            
-                except Exception as e:
-                    fail += 1
-                    api_processed += 1
-                    stock = future_to_stock[future]
-                    logging.error(f"update_all_caches处理异常：{stock[1]} -", exc_info=True)
-                
-                processed_total += 1
-                # 每 N 次 API 请求后短暂暂停，让连接池冷却
-                if api_processed > 0 and api_processed % BATCH_PAUSE_INTERVAL == 0:
-                    gc.collect()
-                    pause = random.uniform(*BATCH_PAUSE_SECONDS)
-                    remaining = len(stocks) - processed_total
-                    logging.info(
-                        f"已处理 {processed_total}/{len(stocks)}"
-                        f"（成功={success}, 跳过={skip}），"
-                        f"暂停 {pause:.0f} 秒，剩余 {remaining}"
-                    )
-                    time.sleep(pause)
+                        stock = future_to_stock[future]
+                        logging.error(f"update_all_caches处理异常：{stock[1]} -", exc_info=True)
+                    
+                    processed_total += 1
+            
+            # ── 批次间隔：GC + 冷却暂停 ──
+            # ThreadPoolExecutor 上下文退出后，本批所有线程/Future 已释放
+            gc.collect()
+            remaining = len(stocks) - processed_total
+            if remaining > 0 and not _abort:
+                pause = random.uniform(*BATCH_PAUSE_SECONDS)
+                logging.info(
+                    f"已处理 {processed_total}/{len(stocks)}"
+                    f"（成功={success}, 失败={fail}, 跳过={skip}），"
+                    f"暂停 {pause:.0f} 秒，剩余 {remaining}"
+                )
+                time.sleep(pause)
     except Exception as e:
         logging.error(f"update_all_caches处理异常", exc_info=True)
     

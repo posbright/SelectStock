@@ -111,17 +111,22 @@ def run_check(stocks, date_start, date_end, backtest_column, workers=_INNER_WORK
             return None
         return rate.get_rates(stock, hist_data, backtest_column, len(backtest_column) - 1)
 
+    # 分批提交（时间换空间）：每批 50 只股票，避免一次创建大量 Future 对象
+    _CHUNK = 50
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-            future_to_stock = {executor.submit(_process_stock, stock): stock for stock in stocks}
-            for future in concurrent.futures.as_completed(future_to_stock):
-                stock = future_to_stock[future]
-                try:
-                    _data_ = future.result()
-                    if _data_ is not None:
-                        data[stock] = _data_
-                except Exception as e:
-                    logging.error(f"backtest_data_daily_job.run_check处理异常：{stock[1]}代码", exc_info=True)
+        for chunk_start in range(0, len(stocks), _CHUNK):
+            chunk = stocks[chunk_start:chunk_start + _CHUNK]
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                future_to_stock = {executor.submit(_process_stock, stock): stock for stock in chunk}
+                for future in concurrent.futures.as_completed(future_to_stock):
+                    stock = future_to_stock[future]
+                    try:
+                        _data_ = future.result()
+                        if _data_ is not None:
+                            data[stock] = _data_
+                    except Exception as e:
+                        logging.error(f"backtest_data_daily_job.run_check处理异常：{stock[1]}代码", exc_info=True)
+            gc.collect()
     except Exception as e:
         logging.error(f"backtest_data_daily_job.run_check处理异常", exc_info=True)
     if not data:

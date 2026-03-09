@@ -11,11 +11,12 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Tuple
 import pandas as pd
 import numpy as np
+from importlib import import_module
 
 try:
-    import backtrader as bt
+    bt = import_module('backtrader')
     BACKTRADER_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     BACKTRADER_AVAILABLE = False
     bt = None
 

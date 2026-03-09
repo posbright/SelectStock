@@ -245,43 +245,45 @@ def streaming_analysis(date):
 
         return stock, 'ok', result
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=ANALYSIS_WORKERS) as executor:
-        future_to_stock = {executor.submit(_process_one_stock, stock): stock for stock in stocks}
-        for future in concurrent.futures.as_completed(future_to_stock):
-            stock = future_to_stock[future]
-            code = stock[1]
-            try:
-                _, status, result = future.result()
-                if status == 'skipped':
-                    skipped += 1
-                    continue
+    # 分批提交（时间换空间）：不再一次性创建 ~4900 个 Future，改为每批 BATCH_SIZE
+    for chunk_start in range(0, total_stocks, BATCH_SIZE):
+        chunk = stocks[chunk_start:chunk_start + BATCH_SIZE]
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=ANALYSIS_WORKERS) as executor:
+            future_to_stock = {executor.submit(_process_one_stock, stock): stock for stock in chunk}
+            for future in concurrent.futures.as_completed(future_to_stock):
+                stock = future_to_stock[future]
+                code = stock[1]
+                try:
+                    _, status, result = future.result()
+                    if status == 'skipped':
+                        skipped += 1
+                        continue
 
-                if result['indicator'] is not None:
-                    indicator_results[stock] = result['indicator']
-                if result['kline'] is not None:
-                    kline_results[stock] = result['kline']
-                for s_name, matched in result['strategies'].items():
-                    if matched:
-                        strategy_results[s_name].append(stock)
+                    if result['indicator'] is not None:
+                        indicator_results[stock] = result['indicator']
+                    if result['kline'] is not None:
+                        kline_results[stock] = result['kline']
+                    for s_name, matched in result['strategies'].items():
+                        if matched:
+                            strategy_results[s_name].append(stock)
 
-                processed += 1
+                    processed += 1
 
-            except Exception as e:
-                errors += 1
-                logging.error(f"流式分析处理异常：{code} -", exc_info=True)
+                except Exception as e:
+                    errors += 1
+                    logging.error(f"流式分析处理异常：{code} -", exc_info=True)
 
-            # 批量写入数据库
-            if processed > 0 and processed % BATCH_SIZE == 0:
-                _flush_results(indicator_results, kline_results, strategy_results, date_str, strategies, tables_cleaned)
-                indicator_results.clear()
-                kline_results.clear()
-                for k in strategy_results:
-                    strategy_results[k] = []
-                gc.collect()
-                logging.info(f"流式分析进度：{processed}/{total_stocks}（跳过 {skipped}，错误 {errors}）")
+        # 每批处理完后：写入数据库 + 释放内存
+        _flush_results(indicator_results, kline_results, strategy_results, date_str, strategies, tables_cleaned)
+        indicator_results.clear()
+        kline_results.clear()
+        for k in strategy_results:
+            strategy_results[k] = []
+        gc.collect()
+        logging.info(f"流式分析进度：{processed}/{total_stocks}（跳过 {skipped}，错误 {errors}）")
 
-    # 7. 写入剩余结果
-    _flush_results(indicator_results, kline_results, strategy_results, date_str, strategies, tables_cleaned)
+    # 7. 最后一批已在循环内写入，无需额外 flush
 
     elapsed = time.time() - start_time
     logging.info(
