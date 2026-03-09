@@ -21,8 +21,16 @@ REM   - 服务器 cron 会自动检测本地是否已完成，避免重复执行
 REM ============================================================
 
 cd /d %~dp0
-cd ..
-cd job
+cd ..\..
+
+REM === 激活虚拟环境 ===
+if exist ".venv\Scripts\activate.bat" (
+    call .venv\Scripts\activate.bat
+) else (
+    echo [警告] 未找到 .venv，将使用系统 Python
+)
+
+cd instock\job
 
 REM === 高并发配置（利用本地充足的 CPU 和内存）===
 REM 流式分析并发线程数（服务器默认 2，本地放大到 8）
