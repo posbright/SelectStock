@@ -38,92 +38,38 @@ KNOWN_AFFECTED = [
 
 def filter_ohlc_outliers(data, code=''):
     """
-    过滤OHLC异常行。三重检测算法。
-    与 stockfetch.py 中的 _filter_ohlc_outliers() 保持一致。
-
-    检测逻辑（命中任一即标记）：
-    1. 价格+成交量联合：close 偏离邻居中位数 >25% 且 volume > 邻居中位数 3 倍
-    2. 极端价格偏离：close 偏离邻居中位数 >60%（ratio < 0.4 或 > 2.5）
-    3. 无效价格：close <= 0
-
-    安全阀：异常行不超过总行数 15% 时才执行过滤。
+    过滤OHLC异常行。直接复用 stockfetch.py 中的向量化实现。
     """
-    if data is None or data.empty or len(data) < 10:
-        return data, 0
-
     try:
-        close_col = 'close' if 'close' in data.columns else None
-        if close_col is None:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from instock.core.stockfetch import _filter_ohlc_outliers
+        return _filter_ohlc_outliers(data, code)
+    except ImportError:
+        logger.warning("无法导入 stockfetch._filter_ohlc_outliers，使用内置简化版")
+        # 简化版回退：仅检测 close<=0（邻居正常时）和极端偏离
+        if data is None or data.empty or len(data) < 10:
             return data, 0
-
         close = pd.to_numeric(data['close'], errors='coerce')
-        volume = pd.to_numeric(data.get('volume', pd.Series(dtype='float64')), errors='coerce')
         if close.isna().all():
             return data, 0
-
-        n = len(data)
-        outlier_mask = pd.Series(False, index=data.index)
-
-        for i in range(n):
-            # 取 ±2 范围内的邻居（排除自身）
-            neighbor_idx = [j for j in range(max(0, i - 2), min(n, i + 3)) if j != i]
-            neighbor_closes = close.iloc[neighbor_idx].dropna()
-
-            if len(neighbor_closes) < 2:
-                continue
-
-            median_close = neighbor_closes.median()
-            if median_close <= 0 or pd.isna(median_close):
-                continue
-
-            curr_close = close.iloc[i]
-            if pd.isna(curr_close):
-                continue
-
-            price_ratio = curr_close / median_close
-
-            # 检测 3：无效价格（负数或零）
-            if curr_close <= 0:
-                outlier_mask.iloc[i] = True
-                continue
-
-            # 检测 2：极端价格偏离 >60%（ratio < 0.4 或 > 2.5）
-            if price_ratio < 0.4 or price_ratio > 2.5:
-                outlier_mask.iloc[i] = True
-                continue
-
-            # 检测 1：价格偏离 >25% + 成交量异常 >3x
-            if (price_ratio < 0.75 or price_ratio > 1.33) and not volume.empty:
-                neighbor_vols = volume.iloc[neighbor_idx].dropna()
-                if len(neighbor_vols) >= 2:
-                    median_vol = neighbor_vols.median()
-                    curr_vol = volume.iloc[i] if i < len(volume) else 0
-                    if not pd.isna(curr_vol) and median_vol > 0:
-                        vol_ratio = curr_vol / median_vol
-                        if vol_ratio > 3.0:
-                            outlier_mask.iloc[i] = True
-
-        outlier_count = outlier_mask.sum()
-
-        if outlier_count > 0 and outlier_count < len(data) * 0.15:
-            removed_dates = data.loc[outlier_mask, 'date'].tolist() if 'date' in data.columns else []
-            logger.info(f"  [{code}] 检测到 {outlier_count} 行异常数据")
-            for d in removed_dates[:5]:
-                idx = data[data['date'] == d].index[0]
-                row = data.loc[idx]
-                logger.info(f"    日期={d}, open={row.get('open','?')}, close={row.get('close','?')}, "
-                          f"high={row.get('high','?')}, low={row.get('low','?')}, volume={row.get('volume','?')}")
-            if len(removed_dates) > 5:
-                logger.info(f"    ... 及其他 {len(removed_dates) - 5} 行")
-            cleaned = data[~outlier_mask].reset_index(drop=True)
-            return cleaned, outlier_count
-        elif outlier_count >= len(data) * 0.15:
-            logger.warning(f"  [{code}] 异常行占比过高 ({outlier_count}/{len(data)})，跳过过滤")
-            return data, 0
-    except Exception as e:
-        logger.error(f"  [{code}] 过滤异常时出错: {e}")
-
-    return data, 0
+        c_m2 = close.shift(2)
+        c_m1 = close.shift(1)
+        c_p1 = close.shift(-1)
+        c_p2 = close.shift(-2)
+        nb = pd.DataFrame({'a': c_m2, 'b': c_m1, 'c': c_p1, 'd': c_p2})
+        nb_med = nb.median(axis=1, skipna=True)
+        nb_cnt = nb.notna().sum(axis=1)
+        has_nb = nb_cnt >= 2
+        safe_med = nb_med.where(nb_med > 0, np.nan)
+        pr = close / safe_med
+        invalid = (close <= 0) & has_nb & (nb_med > 0)
+        extreme = has_nb & ((pr < 0.4) | (pr > 2.5))
+        mask = (invalid | extreme).fillna(False)
+        n_out = int(mask.sum())
+        if n_out > 0 and n_out < len(data) * 0.15:
+            data = data.loc[~mask].reset_index(drop=True)
+            return data, n_out
+        return data, 0
 
 
 def scan_cache_files(cache_dir):

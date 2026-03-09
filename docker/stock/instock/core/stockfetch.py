@@ -1415,32 +1415,50 @@ def _filter_ohlc_outliers(data, code=''):
         if close.isna().all():
             return data, 0
 
-        # --- 向量化：用 rolling(5).median() 近似邻居中位数 ---
-        # rolling(5) 包含自身+前后各 2 行 = 5 行窗口的中位数
-        # 为排除自身的影响，使用 (5*median - self) / 4 修正（当自身是异常值时修正更准）
-        win = 5
-        rolling_median_close = close.rolling(win, center=True, min_periods=3).median()
-        rolling_median_vol = volume.rolling(win, center=True, min_periods=3).median()
+        # --- 向量化：取 ±2 位置的邻居（排除自身）计算中位数 ---
+        # 与原始 for 循环逻辑完全一致：neighbor_idx = [i-2, i-1, i+1, i+2]
+        c_m2 = close.shift(2)    # 邻居 i-2
+        c_m1 = close.shift(1)    # 邻居 i-1
+        c_p1 = close.shift(-1)   # 邻居 i+1
+        c_p2 = close.shift(-2)   # 邻居 i+2
+        neighbor_close = pd.DataFrame({'a': c_m2, 'b': c_m1, 'c': c_p1, 'd': c_p2})
+        # 要求至少 2 个有效邻居（与原始 len(neighbor_closes) < 2 一致）
+        neighbor_median_close = neighbor_close.median(axis=1, skipna=True)
+        neighbor_count = neighbor_close.notna().sum(axis=1)
+        has_enough_neighbors = neighbor_count >= 2
 
-        # 价格比率：当前值 / 邻居中位数
-        # 中位数对单个异常值鲁棒，无需排除自身修正
-        price_ratio = close / rolling_median_close
+        v_m2 = volume.shift(2)
+        v_m1 = volume.shift(1)
+        v_p1 = volume.shift(-1)
+        v_p2 = volume.shift(-2)
+        neighbor_vol = pd.DataFrame({'a': v_m2, 'b': v_m1, 'c': v_p1, 'd': v_p2})
+        neighbor_median_vol = neighbor_vol.median(axis=1, skipna=True)
+        neighbor_vol_count = neighbor_vol.notna().sum(axis=1)
+        has_enough_vol_neighbors = neighbor_vol_count >= 2
 
-        # 检测 3：无效价格（负数或零）
-        invalid_price = close <= 0
+        # 价格比率：当前值 / 邻居中位数（排除自身）
+        safe_median = neighbor_median_close.replace(0, np.nan)
+        safe_median = safe_median.where(safe_median > 0, np.nan)
+        price_ratio = close / safe_median
+
+        # 检测 3：无效价格（负数或零），且邻居有正常正价格
+        # 注意：前复权（qfq）小盘股可能出现大片 close<=0 的合法数据，
+        # 只有邻居价格正常时才视为异常（与原始算法行为一致）
+        invalid_price = (close <= 0) & has_enough_neighbors & (neighbor_median_close > 0)
 
         # 检测 2：极端价格偏离 >60%（ratio < 0.4 或 > 2.5）
-        extreme_deviation = (price_ratio < 0.4) | (price_ratio > 2.5)
+        extreme_deviation = has_enough_neighbors & ((price_ratio < 0.4) | (price_ratio > 2.5))
 
         # 检测 1：价格偏离 >25% + 成交量异常 >3x
-        price_deviated = (price_ratio < 0.75) | (price_ratio > 1.33)
-        vol_ratio = volume / rolling_median_vol.replace(0, np.nan)
-        vol_abnormal = vol_ratio > 3.0
+        price_deviated = has_enough_neighbors & ((price_ratio < 0.75) | (price_ratio > 1.33))
+        safe_vol_median = neighbor_median_vol.replace(0, np.nan)
+        vol_ratio = volume / safe_vol_median
+        vol_abnormal = has_enough_vol_neighbors & (vol_ratio > 3.0)
         joint_detection = price_deviated & vol_abnormal
 
         # 合并所有检测结果
         outlier_mask = invalid_price | extreme_deviation | joint_detection
-        # NaN 处理：rolling 边缘的 NaN 不应被标记
+        # NaN 处理：边缘位置的 NaN 不应被标记为异常
         outlier_mask = outlier_mask.fillna(False)
 
         n_outliers = int(outlier_mask.sum())
