@@ -120,7 +120,28 @@ const renderChart = () => {
   const series: any[] = [
     {
       name: 'K线', type: 'candlestick', data: ohlc,
-      itemStyle: { color: '#ec0000', color0: '#00da3c', borderColor: '#ec0000', borderColor0: '#00da3c' }
+      itemStyle: { color: '#ec0000', color0: '#00da3c', borderColor: '#ec0000', borderColor0: '#00da3c' },
+      markPoint: {
+        symbol: 'pin',
+        symbolSize: 36,
+        label: { fontSize: 11, fontWeight: 'bold', color: '#fff' },
+        data: [
+          {
+            name: '最高价',
+            type: 'max',
+            valueDim: 'highest',
+            itemStyle: { color: '#ec0000' },
+          },
+          {
+            name: '最低价',
+            type: 'min',
+            valueDim: 'lowest',
+            itemStyle: { color: '#009900' },
+            symbolRotate: 180,
+            label: { offset: [0, 7] },
+          },
+        ],
+      },
     },
     { name: 'MA5', type: 'line', data: ma.ma5, smooth: true, lineStyle: { width: 1 }, symbol: 'none' },
     { name: 'MA10', type: 'line', data: ma.ma10, smooth: true, lineStyle: { width: 1 }, symbol: 'none' },
