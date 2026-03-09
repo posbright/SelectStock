@@ -35,9 +35,46 @@ import streaming_analysis_job as saj
 import backtest_data_daily_job as bdj
 import selection_data_daily_job as sddj
 import gpt_value_data_job as gptj
+import instock.lib.database as mdb
+import instock.lib.trade_time as trd
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
+
+# 分析数据跳过阈值（同 analysis_daily_job.py）
+ANALYSIS_DONE_THRESHOLD = int(os.environ.get('INSTOCK_ANALYSIS_DONE_THRESHOLD', '1000'))
+
+
+def _is_analysis_done():
+    """
+    检查今日分析数据是否已由其他节点完成。
+    用于 execute_daily_job 中跳过 Phase 4/5（分析+回测），
+    但仍执行 Phase 1/2/3（数据采集）。
+    可通过 INSTOCK_FORCE_ANALYSIS=1 强制执行。
+    """
+    if os.environ.get('INSTOCK_FORCE_ANALYSIS', '').strip() == '1':
+        return False
+    try:
+        run_date, run_date_nph = trd.get_trade_date_last()
+        date_str = run_date_nph.strftime("%Y-%m-%d")
+        table_name = 'cn_stock_indicators'
+        if not mdb.checkTableIsExist(table_name):
+            return False
+        row = mdb.executeSqlFetch(
+            f"SELECT COUNT(*) FROM `{table_name}` WHERE `date` = %s",
+            (date_str,)
+        )
+        count = row[0][0] if row else 0
+        if count >= ANALYSIS_DONE_THRESHOLD:
+            logging.info(
+                f"分析数据已存在（{count} 条 >= {ANALYSIS_DONE_THRESHOLD}），"
+                f"Phase 4/5 将跳过。设置 INSTOCK_FORCE_ANALYSIS=1 可强制执行。"
+            )
+            return True
+        return False
+    except Exception as e:
+        logging.warning(f"检查分析完成状态异常（将继续执行）：{e}")
+        return False
 
 
 def main():
@@ -97,10 +134,16 @@ def main():
     # 峰值内存 < 100 MB（vs 原架构 ~1670 MB 全量加载）
     # 无任何外部API调用，数据来源：Phase 1 已更新的本地缓存
     # ================================================================
-    try:
-        saj.main()   # 流式分析：指标计算 + K线形态识别 + 策略选股（单次遍历）
-    except Exception as e:
-        logging.error(f"execute_daily_job streaming_analysis异常", exc_info=True)
+    # 检查分析数据是否已由其他节点完成（本地优先模式）
+    analysis_already_done = _is_analysis_done()
+
+    if analysis_already_done:
+        logging.info("Phase 4 跳过：分析数据已由其他节点完成")
+    else:
+        try:
+            saj.main()   # 流式分析：指标计算 + K线形态识别 + 策略选股（单次遍历）
+        except Exception as e:
+            logging.error(f"execute_daily_job streaming_analysis异常", exc_info=True)
 
     # ================================================================
     # Phase 5: 回测与收尾
@@ -114,10 +157,13 @@ def main():
     except Exception as e:
         logging.warning(f"释放单例异常（不影响后续执行）：{e}")
 
-    try:
-        bdj.main()   # 策略回测（重新加载stock_hist_data，但此时缓存已热，无API调用）
-    except Exception as e:
-        logging.error(f"execute_daily_job backtest异常", exc_info=True)
+    if analysis_already_done:
+        logging.info("Phase 5 跳过：回测数据已由其他节点完成")
+    else:
+        try:
+            bdj.main()   # 策略回测（重新加载stock_hist_data，但此时缓存已热，无API调用）
+        except Exception as e:
+            logging.error(f"execute_daily_job backtest异常", exc_info=True)
 
     try:
         acdj.main()  # 闭盘后数据（大宗交易等，需要API）

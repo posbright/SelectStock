@@ -1,9 +1,16 @@
 #!/bin/bash
 
-# 获取脚本所在目录，计算项目根目录
+# 完整每日任务（获取 + 分析，服务器回退模式）
+#
+# 本地优先模式：
+#   - Phase 1/2/3（数据采集）始终执行
+#   - Phase 4/5（分析+回测）自动检测：如果本地已完成则跳过
+#   - 设置 INSTOCK_FORCE_ANALYSIS=1 可强制执行全部阶段
+
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PROJECT_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 
+# cron环境PATH极其有限，必须显式设置
 export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH
 export PYTHONIOENCODING=utf-8
 export LANG=zh_CN.UTF-8
@@ -14,7 +21,7 @@ LOG_DIR=$PROJECT_ROOT/instock/log
 mkdir -p $LOG_DIR
 LOG_FILE=$LOG_DIR/workdayly.log
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始执行 execute_daily_job" >> $LOG_FILE
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始执行 execute_daily_job（自动检测分析跳过）" >> $LOG_FILE
 python3 $PROJECT_ROOT/instock/job/execute_daily_job.py >> $LOG_FILE 2>&1
 EXIT_CODE=$?
 if [ $EXIT_CODE -eq 0 ]; then

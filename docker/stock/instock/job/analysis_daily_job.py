@@ -43,6 +43,8 @@ except Exception:
         filename=os.path.join(log_path, 'stock_analysis_job.log'),
         level=logging.INFO,
     )
+import instock.lib.database as mdb
+import instock.lib.trade_time as trd
 import gpt_value_data_job as gptj
 import streaming_analysis_job as saj
 import backtest_data_daily_job as bdj
@@ -50,10 +52,63 @@ import backtest_data_daily_job as bdj
 __author__ = 'InStock'
 __date__ = '2026/02/14'
 
+# 分析数据跳过阈值：cn_stock_indicators 今日行数 >= 此值时认为分析已完成
+# 正常交易日约 4800+ 条，设 1000 作为安全阈值避免误跳过部分完成的情况
+ANALYSIS_DONE_THRESHOLD = int(os.environ.get('INSTOCK_ANALYSIS_DONE_THRESHOLD', '1000'))
+
+
+def _is_analysis_done(date_str):
+    """
+    检查今日分析数据是否已由其他节点（如本地计算机）完成。
+    
+    检查 cn_stock_indicators 表的今日行数：
+    - >= ANALYSIS_DONE_THRESHOLD → 已完成，跳过
+    - < ANALYSIS_DONE_THRESHOLD → 未完成或部分完成，需要执行
+    
+    用于服务器 cron 回退模式：当本地已执行完分析任务后，
+    服务器 cron 触发时自动跳过，避免低内存环境重复计算。
+    可通过 INSTOCK_FORCE_ANALYSIS=1 环境变量强制执行。
+    """
+    if os.environ.get('INSTOCK_FORCE_ANALYSIS', '').strip() == '1':
+        logging.info("检测到 INSTOCK_FORCE_ANALYSIS=1，强制执行分析任务")
+        return False
+
+    try:
+        table_name = 'cn_stock_indicators'
+        if not mdb.checkTableIsExist(table_name):
+            return False
+        row = mdb.executeSqlFetch(
+            f"SELECT COUNT(*) FROM `{table_name}` WHERE `date` = %s",
+            (date_str,)
+        )
+        count = row[0][0] if row else 0
+        if count >= ANALYSIS_DONE_THRESHOLD:
+            logging.info(
+                f"今日分析数据已存在（{table_name} 有 {count} 条 >= 阈值 {ANALYSIS_DONE_THRESHOLD}），"
+                f"跳过分析任务。设置 INSTOCK_FORCE_ANALYSIS=1 可强制执行。"
+            )
+            return True
+        logging.info(f"今日分析数据不足（{table_name} 有 {count} 条 < 阈值 {ANALYSIS_DONE_THRESHOLD}），继续执行")
+        return False
+    except Exception as e:
+        logging.warning(f"检查分析数据是否完成时异常（将继续执行）：{e}")
+        return False
+
 
 def main():
     start = time.time()
     logging.info("====== 数据分析任务开始 [%s] ======" % datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+    # 检查今日分析是否已由其他节点完成（本地计算机优先模式）
+    try:
+        run_date, run_date_nph = trd.get_trade_date_last()
+        date_str = run_date_nph.strftime("%Y-%m-%d")
+        if _is_analysis_done(date_str):
+            elapsed = time.time() - start
+            logging.info("====== 数据分析任务跳过（已完成），耗时 %.1f 秒 ======" % elapsed)
+            return
+    except Exception as e:
+        logging.warning(f"检查分析完成状态异常（将继续执行）：{e}")
 
     # GPT综合选股（纯 DB 读取 + 筛选，无 API）
     try:

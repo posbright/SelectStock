@@ -1,9 +1,15 @@
 #!/bin/bash
 
-# 数据分析任务（独立）
+# 数据分析任务（独立，服务器回退模式）
 # 只执行本地分析计算（指标/K线/策略/回测），不调用外部API
 # 与 run_fetch 配合使用，实现获取与分析解耦
 # 依赖 fetch 已更新的缓存，但即使缓存未更新也能用历史数据运行
+#
+# 本地优先模式：
+#   - 分析任务已内置"跳过已完成"检查
+#   - 如果本地计算机已执行完分析并写入DB，此脚本自动跳过
+#   - 设置 INSTOCK_FORCE_ANALYSIS=1 可强制执行
+#   - 阈值可通过 INSTOCK_ANALYSIS_DONE_THRESHOLD 调整（默认 1000）
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PROJECT_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
@@ -18,7 +24,7 @@ LOG_DIR=$PROJECT_ROOT/instock/log
 mkdir -p $LOG_DIR
 LOG_FILE=$LOG_DIR/workdayly.log
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始执行 analysis_daily_job（数据分析）" >> $LOG_FILE
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始执行 analysis_daily_job（数据分析，自动检测跳过）" >> $LOG_FILE
 python3 $PROJECT_ROOT/instock/job/analysis_daily_job.py >> $LOG_FILE 2>&1
 EXIT_CODE=$?
 if [ $EXIT_CODE -eq 0 ]; then
