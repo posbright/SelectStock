@@ -78,7 +78,7 @@ class proxys(metaclass=singleton_type):
                 if self._manual_proxies:
                     logging.info(f"代理池：从 proxy.txt 加载了 {len(self._manual_proxies)} 个手动代理")
         except Exception:
-            pass
+            logging.debug("代理池：加载 proxy.txt 异常", exc_info=True)
 
     def _initial_fetch(self):
         """初始化时抓取免费代理（限制候选数量加速启动）"""
@@ -289,7 +289,7 @@ class proxys(metaclass=singleton_type):
                         proto = "https" if "https" in protocols else "http"
                         proxies.append(f"{proto}://{ip}:{port}")
         except Exception:
-            pass
+            logging.debug("代理池：从 geonode 获取异常", exc_info=True)
         return proxies
 
     def _fetch_fate0(self):
@@ -311,7 +311,7 @@ class proxys(metaclass=singleton_type):
                     except Exception:
                         continue
         except Exception:
-            pass
+            logging.debug("代理池：从 fate0 获取异常", exc_info=True)
         return proxies
 
     @staticmethod
@@ -342,6 +342,7 @@ class proxys(metaclass=singleton_type):
                         if p:
                             proxies.append(p)
             except Exception:
+                logging.debug("代理池：从 proxifly 获取异常", exc_info=True)
                 continue
         return proxies
 
@@ -359,7 +360,7 @@ class proxys(metaclass=singleton_type):
                     if p:
                         proxies.append(p)
         except Exception:
-            pass
+            logging.debug("代理池：从 TheSpeedX 获取异常", exc_info=True)
         return proxies
 
     def _fetch_monosans(self):
@@ -375,7 +376,7 @@ class proxys(metaclass=singleton_type):
                     if p:
                         proxies.append(p)
         except Exception:
-            pass
+            logging.debug("代理池：从 monosans 获取异常", exc_info=True)
         return proxies
 
     def _fetch_clarketm(self):
@@ -390,7 +391,7 @@ class proxys(metaclass=singleton_type):
                     if p:
                         proxies.append(p)
         except Exception:
-            pass
+            logging.debug("代理池：从 clarketm 获取异常", exc_info=True)
         return proxies
 
     def _fetch_mmpx12(self):
@@ -410,6 +411,7 @@ class proxys(metaclass=singleton_type):
                         if p:
                             proxies.append(p)
             except Exception:
+                logging.debug("代理池：从 mmpx12 获取异常", exc_info=True)
                 continue
         return proxies
 
@@ -425,7 +427,7 @@ class proxys(metaclass=singleton_type):
                     if p:
                         proxies.append(p)
         except Exception:
-            pass
+            logging.debug("代理池：从 roosterkid 获取异常", exc_info=True)
         return proxies
 
     def _fetch_sunny9577(self):
@@ -445,6 +447,7 @@ class proxys(metaclass=singleton_type):
                         if p:
                             proxies.append(p)
             except Exception:
+                logging.debug("代理池：从 sunny9577 获取异常", exc_info=True)
                 continue
         return proxies
 
@@ -460,7 +463,7 @@ class proxys(metaclass=singleton_type):
                     if p:
                         proxies.append(p)
         except Exception:
-            pass
+            logging.debug("代理池：从 MuRongPIG 获取异常", exc_info=True)
         return proxies
 
     def _fetch_rdavydov(self):
@@ -480,6 +483,7 @@ class proxys(metaclass=singleton_type):
                         if p:
                             proxies.append(p)
             except Exception:
+                logging.debug("代理池：从 rdavydov 获取异常", exc_info=True)
                 continue
         return proxies
 
@@ -500,6 +504,7 @@ class proxys(metaclass=singleton_type):
                         if p:
                             proxies.append(p)
             except Exception:
+                logging.debug("代理池：从 proxy-list.download 获取异常", exc_info=True)
                 continue
         return proxies
 
@@ -534,9 +539,9 @@ class proxys(metaclass=singleton_type):
                     data = r.json()
                     http_ok = data is not None
                 except Exception:
-                    pass
+                    logging.debug(f"代理验证JSON解析失败：{proxy_url}")
         except Exception:
-            pass
+            pass  # 网络不通是正常情况，不记录
 
         if not http_ok:
             return False, False
@@ -555,7 +560,7 @@ class proxys(metaclass=singleton_type):
             if r2.status_code == 200 and len(r2.text) > 50:
                 https_ok = True
         except Exception:
-            pass
+            pass  # HTTPS隧道不通是正常情况，保留为HTTP-only代理
 
         return http_ok, https_ok
 
@@ -599,7 +604,7 @@ class proxys(metaclass=singleton_type):
                         if https_ok:
                             https_count += 1
                 except Exception:
-                    pass
+                    logging.debug(f"代理池：验证代理线程异常：{proxy}", exc_info=True)
 
         if https_count > 0:
             logging.info(f"代理池：其中 {https_count} 个支持 HTTPS 隧道")
@@ -638,7 +643,7 @@ class proxys(metaclass=singleton_type):
                                     del self._pool[proxy]
                                     removed += 1
                 except Exception:
-                    pass
+                    logging.debug(f"代理池：重新验证线程异常：{proxy}", exc_info=True)
 
         if removed > 0:
             logging.info(f"代理池：重新验证完成，移除 {removed} 个失效代理，剩余 {self.pool_size()} 个")

@@ -111,7 +111,7 @@ def _get_stock_tops_from_db(date):
         if data is not None and len(data) > 0:
             return set(data['code'].values)
     except Exception:
-        pass
+        logging.warning("获取龙虎榜代码集合异常", exc_info=True)
     return None
 
 

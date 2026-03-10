@@ -156,7 +156,7 @@ def main():
             gc.collect()
             logging.info("Phase 2: 已释放 stock_data 单例，回收内存")
         except Exception:
-            pass
+            logging.debug("释放 stock_data 单例异常", exc_info=True)
 
         fdj.main()  # 历史K线缓存增量更新（低内存模式）
     except Exception as e:
@@ -248,7 +248,8 @@ def _data_health_check(pipeline_start):
                 )
                 if row:
                     cnt_today_row = mdb.executeSqlFetch(
-                        f"SELECT COUNT(*) AS cnt FROM `{table}` WHERE `date` = '{date_str}'"
+                        f"SELECT COUNT(*) AS cnt FROM `{table}` WHERE `date` = %s",
+                        (date_str,)
                     )
                     cnt_today = cnt_today_row[0][0] if cnt_today_row else 0
                     latest = row[0][1]

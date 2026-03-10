@@ -3,6 +3,7 @@
 
 
 import multiprocessing as mp
+import logging
 from threading import Thread
 
 __author__ = 'InStock'
@@ -35,7 +36,7 @@ class ProcessWrapper(object):
                     break
                 self.__strategy.clock(event)
             except Exception:
-                pass
+                logging.warning("交易策略clock事件处理异常", exc_info=True)
 
     def _process(self):
         clock_thread = Thread(target=self._process_clock, name="ProcessWrapper._process_clock")

@@ -155,7 +155,7 @@ def _load_selection_data(source_table, date_str):
             days = diag.iloc[0]['days']
             logging.warning(f"GPT综合选股诊断：{source_table} 表最新日期={latest}，共有 {days} 个交易日数据")
     except Exception:
-        pass
+        logging.debug("GPT综合选股诊断查询异常", exc_info=True)
     
     return None, date_str
 

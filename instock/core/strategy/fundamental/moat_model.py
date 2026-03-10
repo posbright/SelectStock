@@ -20,6 +20,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional
 from enum import Enum
 import json
+import logging
 from datetime import datetime
 
 
@@ -474,5 +475,5 @@ def get_threshold_config() -> Dict:
                 if param_key in values and threshold_key in config:
                     config[threshold_key]['weight'] = values[param_key]
     except Exception:
-        pass
+        logging.debug("加载护城河自定义权重异常", exc_info=True)
     return config

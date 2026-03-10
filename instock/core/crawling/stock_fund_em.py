@@ -6,6 +6,7 @@ Desc: 东方财富网-数据中心-资金流向
 https://data.eastmoney.com/zjlx/detail.html
 """
 import json
+import logging
 import random
 import time
 import math
@@ -39,7 +40,7 @@ def _individual_fund_flow_fetch_page(params, page_current=1):
                 if data_json and data_json.get("data") is not None:
                     return data_json
             except Exception:
-                pass
+                logging.debug("个股资金流向获取异常", exc_info=True)
     return None
 
 
@@ -291,7 +292,7 @@ def _sector_fund_flow_fetch_page(params, page_current=1):
                 if data_json and data_json.get("data") is not None:
                     return data_json
             except Exception:
-                pass
+                logging.debug("板块资金流向获取异常", exc_info=True)
 
     return None
 

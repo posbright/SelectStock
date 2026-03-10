@@ -95,7 +95,7 @@ def main():
         stock_data.release()
         gc.collect()
     except Exception:
-        pass
+        logging.debug("释放单例缓存异常", exc_info=True)
 
     # Phase 1: 历史K线缓存更新（内存密集型，放在最后执行）
     # 即使此步骤因 OOM 失败，上面的轻量级数据已经成功入库

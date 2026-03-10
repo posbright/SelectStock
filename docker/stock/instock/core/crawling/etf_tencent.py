@@ -6,6 +6,7 @@ Desc: 腾讯财经-ETF实时行情数据
 作为东方财富API的备选数据源
 """
 import time
+import logging
 import random
 import requests
 import pandas as pd
@@ -111,7 +112,7 @@ def _fetch_batch(codes_batch, timeout=30):
             response.encoding = 'gbk'
             return _parse_tencent_etf_data(response.text)
     except Exception:
-        pass
+        logging.debug(f"ETF腾讯批量获取异常：{codes_batch[:3]}...", exc_info=True)
     return []
 
 

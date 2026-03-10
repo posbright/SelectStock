@@ -1041,7 +1041,7 @@ def stock_hist_cache_incremental(code, date_start, date_end, is_cache=True, adju
                             last_date = _to_date_str(combined_data['date'].max())
                             _write_cache_meta(code, last_date, adjust, filtered_version=_FILTER_VERSION)
                     except Exception:
-                        pass
+                        logging.debug(f"缓存meta写入异常：{code}", exc_info=True)
         
         # 5. 保存更新后的缓存（有新数据或清除了异常行时写入）
         need_save = has_new_data or n_outliers > 0
@@ -1117,7 +1117,7 @@ def clean_expired_cache(expire_days=None):
             if bonus_codes:
                 logging.info(f"发现 {len(bonus_codes)} 只近期已除权除息的股票")
     except Exception:
-        pass  # 获取失败不影响清理
+        logging.debug("获取除权除息数据异常，不影响缓存清理", exc_info=True)  # 获取失败不影响清理
 
     delisted_count = 0
     bonus_count = 0
@@ -1141,7 +1141,7 @@ def clean_expired_cache(expire_days=None):
                         code = base_name[:6]
                         adjust = base_name[6:]  # 如 'qfq', 'hfq', ''
                 except Exception:
-                    pass
+                    logging.debug(f"解析缓存文件名异常：{file}", exc_info=True)
 
                 if code is None:
                     # 文件名格式无法解析，视为损坏文件
@@ -1563,7 +1563,7 @@ def read_stock_hist_from_cache(code, date_start, date_end):
                     last_date = _to_date_str(data['date'].max())
                     _write_cache_meta(code, last_date, 'qfq', filtered_version=_FILTER_VERSION)
                 except Exception:
-                    pass  # 回写失败不影响正常读取
+                    logging.debug(f"缓存回写异常：{code}", exc_info=True)  # 回写失败不影响正常读取
         
         # 按请求日期范围过滤
         data_dates = data['date'].apply(_to_date_str)
