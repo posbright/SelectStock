@@ -225,7 +225,7 @@ class GetKlineDataHandler(webBase.BaseHandler, ABC):
         {
             code, name, period, total,
             dates, ohlc, volumes,
-            ma: {ma5, ma10, ma20, ma60},
+            ma: {ma5, ma10, ma20, ma30, ma60},
             vol_ma: {ma5, ma10},
             boll: {upper, middle, lower},
             rsi, macd: {dif, dea, histogram},
@@ -301,6 +301,7 @@ class GetKlineDataHandler(webBase.BaseHandler, ABC):
             ma5 = _compute_ma(closes_clean, 5)
             ma10 = _compute_ma(closes_clean, 10)
             ma20 = _compute_ma(closes_clean, 20)
+            ma30 = _compute_ma(closes_clean, 30)
             ma60 = _compute_ma(closes_clean, 60)
             vol_ma5 = _compute_ma(volumes, 5)
             vol_ma10 = _compute_ma(volumes, 10)
@@ -323,6 +324,7 @@ class GetKlineDataHandler(webBase.BaseHandler, ABC):
                     "ma5": ma5,
                     "ma10": ma10,
                     "ma20": ma20,
+                    "ma30": ma30,
                     "ma60": ma60,
                 },
                 "vol_ma": {

@@ -73,7 +73,7 @@ const loadKlineData = async () => {
 // === Format volume for axis labels ===
 const formatVolume = (val: number): string => {
   if (val >= 1e8) return (val / 1e8).toFixed(2) + '亿'
-  if (val >= 1e4) return (val / 1e4).toFixed(0) + '万'
+  if (val >= 1e4) return (val / 1e4).toFixed(1) + '万'
   return val.toString()
 }
 
@@ -98,6 +98,7 @@ const COLORS = {
   ma5: '#FF9900',
   ma10: '#0099FF',
   ma20: '#FF00FF',
+  ma30: '#888800',
   ma60: '#00CC66',
   bollUpper: '#e6a23c',
   bollMiddle: '#909399',
@@ -188,7 +189,7 @@ const renderChart = () => {
 
   // === Legend ===
   const legendData: string[] = []
-  if (showMA) legendData.push('MA5', 'MA10', 'MA20', 'MA60')
+  if (showMA) legendData.push('MA5', 'MA10', 'MA20', 'MA30', 'MA60')
   if (showBollOnMain) legendData.push('BOLL上轨', 'BOLL中轨', 'BOLL下轨')
 
   // === Series ===
@@ -216,6 +217,7 @@ const renderChart = () => {
       ['MA5', ma.ma5, COLORS.ma5],
       ['MA10', ma.ma10, COLORS.ma10],
       ['MA20', ma.ma20, COLORS.ma20],
+      ['MA30', ma.ma30, COLORS.ma30],
       ['MA60', ma.ma60, COLORS.ma60],
     ]
     for (const [name, data, color] of maLines) {
