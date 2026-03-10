@@ -48,8 +48,8 @@ ANALYSIS_DONE_THRESHOLD = int(os.environ.get('INSTOCK_ANALYSIS_DONE_THRESHOLD', 
 def _is_analysis_done():
     """
     检查今日分析数据是否已由其他节点完成。
-    用于 execute_daily_job 中跳过 Phase 4/5（分析+回测），
-    但仍执行 Phase 1/2/3（数据采集）。
+    用于 execute_daily_job 中跳过 Phase 3/4（分析+回测），
+    但仍执行 Phase 0/1/2（初始化+轻量数据+K线缓存）。
     可通过 INSTOCK_FORCE_ANALYSIS=1 强制执行。
     """
     if os.environ.get('INSTOCK_FORCE_ANALYSIS', '').strip() == '1':
@@ -68,7 +68,7 @@ def _is_analysis_done():
         if count >= ANALYSIS_DONE_THRESHOLD:
             logging.info(
                 f"分析数据已存在（{count} 条 >= {ANALYSIS_DONE_THRESHOLD}），"
-                f"Phase 4/5 将跳过。设置 INSTOCK_FORCE_ANALYSIS=1 可强制执行。"
+                f"Phase 3/4 将跳过。设置 INSTOCK_FORCE_ANALYSIS=1 可强制执行。"
             )
             return True
         return False
@@ -83,62 +83,108 @@ def main():
     logging.info("######## 任务执行时间: %s #######" % _start.strftime("%Y-%m-%d %H:%M:%S.%f"))
 
     # ================================================================
-    # Phase 1: 数据获取（外部API调用 — 唯一的API密集阶段）
-    # 批量更新本地缓存（低内存模式：仅更新磁盘文件，不保留在内存中）
-    # 后续所有分析任务从磁盘缓存按需读取，不再发起API请求
+    # Phase 0: 初始化
     # ================================================================
     bj.main()   # 初始化数据库
-    fdj.main()  # 集中获取数据：实时行情 + 历史K线 + 缓存清理
 
     # ================================================================
-    # Phase 2: 基础数据入库（读取已加载的单例/少量API调用）
+    # Phase 1: 轻量级数据入库（优先执行，耗时短、内存低）
+    # 设计原则：先完成所有轻量 API 调用和入库操作，确保即使后续重量级
+    # K线缓存更新因 OOM 被杀，这些关键数据（综合选股、GPT选股等）
+    # 已经安全写入数据库，不会因 K线更新失败而全部丢失。
     # ================================================================
+
+    # Phase 1a: 集中获取数据中的"实时行情预加载"部分
+    # fdj.main() 内部包含 stock_data 单例预加载 + K线缓存批量更新
+    # 这里先单独预加载 stock_data 单例，供后续 Phase 1b 直接使用
     try:
-        hdj.main()   # 股票/ETF实时行情入库（从 stock_data 单例读取）
+        import instock.lib.run_template as runt
+        import instock.lib.trade_time as trd
+        import instock.core.stockfetch as stf
+        from instock.core.singleton_stock import stock_data as sd_cls
+
+        run_date, run_date_nph = trd.get_trade_date_last()
+        spot = sd_cls(run_date_nph).get_data()
+        if spot is not None:
+            logging.info(f"Phase 1a: 实时行情预加载成功，{len(spot)} 只股票")
+        else:
+            logging.error("Phase 1a: 实时行情预加载失败（stock_data 返回 None）")
+    except Exception as e:
+        logging.error(f"execute_daily_job Phase 1a 行情预加载异常", exc_info=True)
+
+    # Phase 1b: 基础数据入库（从 stock_data 单例读取，无额外API调用）
+    try:
+        hdj.main()   # 股票/ETF实时行情入库
     except Exception as e:
         logging.error(f"execute_daily_job basic_data_daily异常", exc_info=True)
 
+    # Phase 1c: 综合选股数据（轻量API：东方财富选股器，~10页，<30秒）
     try:
-        sddj.main()  # 综合选股数据入库（需要API获取选股器数据）
+        sddj.main()  # 综合选股数据入库
     except Exception as e:
         logging.error(f"execute_daily_job selection_data异常", exc_info=True)
 
-    # ================================================================
-    # Phase 3: 扩展数据获取与入库（独立API：资金流向、龙虎榜等）
-    # ================================================================
+    # Phase 1d: 扩展数据（资金流向、龙虎榜等，轻量API调用）
     try:
-        hdtj.main()  # 资金流向、龙虎榜、筹码等（I/O密集，内存占用低）
+        hdtj.main()  # 资金流向、龙虎榜、筹码等
     except Exception as e:
         logging.error(f"execute_daily_job basic_data_other异常", exc_info=True)
 
+    # Phase 1e: GPT综合选股（纯DB读取+筛选，无API调用，依赖 Phase 1c 的选股数据）
     try:
-        gptj.main()  # GPT综合选股（纯DB读取+筛选，无API调用）
+        gptj.main()  # GPT综合选股
     except Exception as e:
         logging.error(f"execute_daily_job gpt_value异常", exc_info=True)
 
-    # 释放 stock_data 单例：如果 Phase 2 API 失败，单例缓存了 None，
-    # Phase 4 流式分析调用 stock_data(date).get_data() 会得到缓存的 None 从而跳过。
-    # 此处释放单例，让 Phase 4 有机会重新发起 API 请求获取股票列表。
+    # Phase 1f: 收盘后数据（大宗交易等，轻量API）
+    try:
+        acdj.main()  # 闭盘后数据
+    except Exception as e:
+        logging.error(f"execute_daily_job after_close异常", exc_info=True)
+
+    # ================================================================
+    # Phase 2: 重量级数据获取 — K线缓存批量更新
+    # 处理 ~5000 只股票的历史K线增量缓存，内存密集型操作。
+    # 在 1.6GB 内存服务器上可能因 OOM 被杀，因此放在轻量级任务之后。
+    # 即使此步骤失败，Phase 1 的关键数据已安全入库。
+    # ================================================================
+    try:
+        # 释放 stock_data 单例以腾出内存给 K线缓存更新
+        try:
+            from instock.core.singleton_stock import stock_data
+            stock_data.release()
+            gc.collect()
+            logging.info("Phase 2: 已释放 stock_data 单例，回收内存")
+        except Exception:
+            pass
+
+        fdj.main()  # 历史K线缓存增量更新（低内存模式）
+    except Exception as e:
+        logging.error(f"execute_daily_job K线缓存更新异常（不影响已入库数据）", exc_info=True)
+
+    # 释放 stock_data 单例：如果预加载失败，单例缓存了 None，
+    # Phase 3 流式分析调用 stock_data(date).get_data() 会得到缓存的 None 从而跳过。
+    # 此处释放单例，让 Phase 3 有机会重新发起 API 请求获取股票列表。
     try:
         from instock.core.singleton_stock import stock_data
         _sd = getattr(stock_data, '_instance', None)
         if _sd is not None and _sd.data is None:
             stock_data.release()
-            logging.warning("Phase 2 stock_data 返回 None，已释放单例以允许 Phase 4 重试")
+            logging.warning("stock_data 返回 None，已释放单例以允许 Phase 3 重试")
     except Exception:
         logging.debug("释放 stock_data 单例异常", exc_info=True)
 
     # ================================================================
-    # Phase 4: 数据分析（流式处理 — 低内存模式）
+    # Phase 3: 数据分析（流式处理 — 低内存模式）
     # 从磁盘缓存逐只读取股票历史数据，同时计算指标+K线形态+策略
     # 峰值内存 < 100 MB（vs 原架构 ~1670 MB 全量加载）
-    # 无任何外部API调用，数据来源：Phase 1 已更新的本地缓存
+    # 无任何外部API调用，数据来源：Phase 2 已更新的本地缓存
     # ================================================================
     # 检查分析数据是否已由其他节点完成（本地优先模式）
     analysis_already_done = _is_analysis_done()
 
     if analysis_already_done:
-        logging.info("Phase 4 跳过：分析数据已由其他节点完成")
+        logging.info("Phase 3 跳过：分析数据已由其他节点完成")
     else:
         try:
             saj.main()   # 流式分析：指标计算 + K线形态识别 + 策略选股（单次遍历）
@@ -146,7 +192,7 @@ def main():
             logging.error(f"execute_daily_job streaming_analysis异常", exc_info=True)
 
     # ================================================================
-    # Phase 5: 回测与收尾
+    # Phase 4: 回测与收尾
     # ================================================================
     # 释放 stock_data 单例（流式架构不再使用 stock_hist_data 单例）
     try:
@@ -158,17 +204,12 @@ def main():
         logging.warning(f"释放单例异常（不影响后续执行）：{e}")
 
     if analysis_already_done:
-        logging.info("Phase 5 跳过：回测数据已由其他节点完成")
+        logging.info("Phase 4 跳过：回测数据已由其他节点完成")
     else:
         try:
             bdj.main()   # 策略回测（重新加载stock_hist_data，但此时缓存已热，无API调用）
         except Exception as e:
             logging.error(f"execute_daily_job backtest异常", exc_info=True)
-
-    try:
-        acdj.main()  # 闭盘后数据（大宗交易等，需要API）
-    except Exception as e:
-        logging.error(f"execute_daily_job after_close异常", exc_info=True)
 
     # ================================================================
     # 数据健康检查：在流水线结束后，检查各表是否有今日数据
