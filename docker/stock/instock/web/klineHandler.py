@@ -272,11 +272,10 @@ class GetKlineDataHandler(webBase.BaseHandler, ABC):
             return
 
         try:
-            if date is None:
-                date = datetime.datetime.now().strftime('%Y-%m-%d')
-
-            # 获取全量历史K线（years=50 确保覆盖所有可用数据）
-            stock = stf.read_hist_from_cache((date, code), years=50)
+            # K线图始终返回到最新可用数据，不受前端 date 参数截断
+            # （前端 date 来自列表页导航上下文，可能是旧日期如3月3号）
+            today = datetime.datetime.now().strftime('%Y-%m-%d')
+            stock = stf.read_hist_from_cache((today, code), years=50)
 
             if stock is None or stock.empty:
                 self.write(json.dumps({"error": "无K线数据（缓存未命中，请确认数据采集任务已运行）", "code": code}, ensure_ascii=False))
