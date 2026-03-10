@@ -5,6 +5,7 @@ import logging
 import concurrent.futures
 import os.path
 import sys
+import time as _time
 import pandas as pd
 
 cpath_current = os.path.dirname(os.path.dirname(__file__))
@@ -18,21 +19,46 @@ import instock.core.stockfetch as stf
 __author__ = 'InStock'
 __date__ = '2026/02/14'
 
+# API获取重试间隔（秒）
+_RETRY_DELAY = 10
+# 子任务间防限流延迟（秒）
+_TASK_DELAY = 30
+
+
+def _fetch_with_retry(fetch_func, name, retries=1, delay=_RETRY_DELAY):
+    """带重试的API获取包装器，降低因网络瞬断或限流导致的数据丢失"""
+    for attempt in range(1 + retries):
+        try:
+            data = fetch_func()
+            if data is not None and len(data) > 0:
+                return data
+            if attempt < retries:
+                logging.warning(f"{name}: 第{attempt+1}次获取为空，{delay}秒后重试")
+                _time.sleep(delay)
+        except Exception as e:
+            if attempt < retries:
+                logging.warning(f"{name}: 第{attempt+1}次获取异常（{e}），{delay}秒后重试")
+                _time.sleep(delay)
+            else:
+                raise
+    return None
+
+
 # 每日股票龙虎榜
 def save_nph_stock_lhb_data(date, before=True):
     if before:
         return
 
     try:
-        data = stf.fetch_stock_lhb_data(date)
+        data = _fetch_with_retry(lambda: stf.fetch_stock_lhb_data(date), "龙虎榜")
         if data is None or len(data.index) == 0:
             return
 
         table_name = tbs.TABLE_CN_STOCK_lHB['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_lHB['columns'])
@@ -47,15 +73,15 @@ def save_nph_stock_top_data(date, before=True):
         return
 
     try:
-        data = stf.fetch_stock_top_data(date)
+        data = _fetch_with_retry(lambda: stf.fetch_stock_top_data(date), "龙虎榜(新浪)")
         if data is None or len(data.index) == 0:
             return
 
         table_name = tbs.TABLE_CN_STOCK_TOP['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_TOP['columns'])
@@ -116,8 +142,8 @@ def save_nph_stock_fund_flow_data(date, before=True):
         table_name = tbs.TABLE_CN_STOCK_FUND_FLOW['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_FUND_FLOW['columns'])
@@ -134,7 +160,10 @@ def run_check_stock_fund_flow(times):
     try:
         for k in times:
             try:
-                _data = stf.fetch_stocks_fund_flow(k)
+                _data = _fetch_with_retry(
+                    lambda _k=k: stf.fetch_stocks_fund_flow(_k),
+                    f"资金流向 t={k}({indicator_names.get(k, '?')})"
+                )
                 if _data is not None and len(_data) > 0:
                     data[k] = _data
                     logging.info(f"资金流向 t={k}({indicator_names.get(k, '?')}) 获取成功：{len(_data)} 条")
@@ -203,8 +232,8 @@ def stock_sector_fund_flow_data(date, index_sector):
         table_name = tbs_table['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs_table['columns'])
@@ -241,15 +270,15 @@ def save_nph_stock_bonus(date, before=True):
         return
 
     try:
-        data = stf.fetch_stocks_bonus(date)
+        data = _fetch_with_retry(lambda: stf.fetch_stocks_bonus(date), "股票分红配送")
         if data is None or len(data.index) == 0:
             return
 
         table_name = tbs.TABLE_CN_STOCK_BONUS['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_BONUS['columns'])
@@ -265,9 +294,9 @@ def stock_spot_buy(date):
         if not mdb.checkTableIsExist(_table_name):
             return
 
-        sql = f'''SELECT * FROM `{_table_name}` WHERE `date` = '{date}' and 
+        sql = f'''SELECT * FROM `{_table_name}` WHERE `date` = %s and 
                 `pe9` > 0 and `pe9` <= 20 and `pbnewmrq` <= 10 and `roe_weight` >= 15'''
-        data = pd.read_sql(sql=sql, con=mdb.engine())
+        data = pd.read_sql(sql=sql, con=mdb.engine(), params=(date,))
         data = data.drop_duplicates(subset="code", keep="last")
         if len(data.index) == 0:
             return
@@ -275,8 +304,8 @@ def stock_spot_buy(date):
         table_name = tbs.TABLE_CN_STOCK_SPOT_BUY['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_SPOT_BUY['columns'])
@@ -289,15 +318,15 @@ def stock_spot_buy(date):
 # 每日早盘抢筹
 def stock_chip_race_open_data(date):
     try:
-        data = stf.fetch_stock_chip_race_open(date)
+        data = _fetch_with_retry(lambda: stf.fetch_stock_chip_race_open(date), "早盘抢筹")
         if data is None or len(data.index) == 0:
             return
 
         table_name = tbs.TABLE_CN_STOCK_CHIP_RACE_OPEN['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_CHIP_RACE_OPEN['columns'])
@@ -310,15 +339,15 @@ def stock_chip_race_open_data(date):
 # 每日涨停原因
 def stock_imitup_reason_data(date):
     try:
-        data = stf.fetch_stock_limitup_reason(date)
+        data = _fetch_with_retry(lambda: stf.fetch_stock_limitup_reason(date), "涨停原因")
         if data is None or len(data.index) == 0:
             return
 
         table_name = tbs.TABLE_CN_STOCK_LIMITUP_REASON['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_LIMITUP_REASON['columns'])
@@ -329,10 +358,15 @@ def stock_imitup_reason_data(date):
 
 def main():
     runt.run_with_args(save_nph_stock_lhb_data)
+    _time.sleep(_TASK_DELAY)
     runt.run_with_args(save_nph_stock_bonus)
+    _time.sleep(_TASK_DELAY)
     runt.run_with_args(save_nph_stock_fund_flow_data)
+    _time.sleep(_TASK_DELAY)
     runt.run_with_args(save_nph_stock_sector_fund_flow_data)
+    _time.sleep(_TASK_DELAY)
     runt.run_with_args(stock_chip_race_open_data)
+    _time.sleep(_TASK_DELAY)
     runt.run_with_args(stock_imitup_reason_data)
 
 

@@ -27,10 +27,9 @@ except Exception:
         level=logging.INFO,
     )
 import init_job as bj
+import subprocess
 import fetch_data_job as fdj
 import basic_data_daily_job as hdj
-import basic_data_other_daily_job as hdtj
-import basic_data_after_close_daily_job as acdj
 import streaming_analysis_job as saj
 import backtest_data_daily_job as bdj
 import selection_data_daily_job as sddj
@@ -43,6 +42,28 @@ __date__ = '2026/02/14'
 
 # 分析数据跳过阈值（同 analysis_daily_job.py）
 ANALYSIS_DONE_THRESHOLD = int(os.environ.get('INSTOCK_ANALYSIS_DONE_THRESHOLD', '1000'))
+
+_JOB_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _run_job_subprocess(script_name, label, timeout=1800):
+    """以独立子进程运行 job 脚本，防止 OOM 波及当前进程"""
+    script_path = os.path.join(_JOB_DIR, script_name)
+    try:
+        logging.info(f"{label}: 启动子进程 {script_name}")
+        result = subprocess.run(
+            [sys.executable, script_path],
+            env={**os.environ, 'PYTHONPATH': cpath},
+            timeout=timeout,
+        )
+        if result.returncode != 0:
+            logging.warning(f"{label}: 子进程退出码 {result.returncode}（可能 OOM 被杀）")
+        else:
+            logging.info(f"{label}: 子进程执行成功")
+    except subprocess.TimeoutExpired:
+        logging.error(f"{label}: 子进程执行超时（{timeout}秒）")
+    except Exception as e:
+        logging.error(f"{label}: 子进程启动异常", exc_info=True)
 
 
 def _is_analysis_done():
@@ -125,10 +146,8 @@ def main():
         logging.error(f"execute_daily_job selection_data异常", exc_info=True)
 
     # Phase 1d: 扩展数据（资金流向、龙虎榜等，轻量API调用）
-    try:
-        hdtj.main()  # 资金流向、龙虎榜、筹码等
-    except Exception as e:
-        logging.error(f"execute_daily_job basic_data_other异常", exc_info=True)
+    # 以独立子进程运行，防止 OOM 波及当前进程
+    _run_job_subprocess('basic_data_other_daily_job.py', 'execute_daily_job basic_data_other')
 
     # Phase 1e: GPT综合选股（纯DB读取+筛选，无API调用，依赖 Phase 1c 的选股数据）
     try:
@@ -137,10 +156,8 @@ def main():
         logging.error(f"execute_daily_job gpt_value异常", exc_info=True)
 
     # Phase 1f: 收盘后数据（大宗交易等，轻量API）
-    try:
-        acdj.main()  # 闭盘后数据
-    except Exception as e:
-        logging.error(f"execute_daily_job after_close异常", exc_info=True)
+    # 以独立子进程运行，防止 OOM 波及当前进程
+    _run_job_subprocess('basic_data_after_close_daily_job.py', 'execute_daily_job after_close')
 
     # ================================================================
     # Phase 2: 重量级数据获取 — K线缓存批量更新
