@@ -38,7 +38,7 @@ const mainOverlayOptions = [
 
 // === Sub indicator tabs (East Money style bottom bar) ===
 const currentSubIndicator = ref('MACD')
-const subIndicatorOptions = ['MACD', 'KDJ', 'RSI', 'WR', 'BOLL']
+const subIndicatorOptions = ['MACD', 'KDJ', 'RSI', 'WR', '多空趋势']
 
 // K-line data
 const klineData = ref<any>(null)
@@ -80,13 +80,13 @@ const formatVolume = (val: number): string => {
 // === Smart dataZoom start per period (show recent N bars like East Money) ===
 const getZoomStart = (total: number): number => {
   const visible: Record<string, number> = {
-    daily: 120,
-    weekly: 104,
-    monthly: 60,
-    quarterly: 40,
-    yearly: 9999, // yearly: show all
+    daily: 80,       // ~4 months of trading days
+    weekly: 52,      // ~1 year
+    monthly: 24,     // ~2 years
+    quarterly: 12,   // ~3 years
+    yearly: 9999,    // show all
   }
-  const n = visible[currentPeriod.value] || 120
+  const n = visible[currentPeriod.value] || 80
   if (n >= total) return 0
   return Math.max(0, Math.round((1 - n / total) * 100))
 }
@@ -123,11 +123,12 @@ const renderChart = () => {
   const macd = d.macd || {}
   const kdj = d.kdj || {}
   const wr = d.wr || {}
+  const bbi = d.bbi || {}
 
   const showMA = mainOverlays.value.includes('MA')
   const showBollOnMain = mainOverlays.value.includes('BOLL')
   const subInd = currentSubIndicator.value
-  const hasSub = ['MACD', 'KDJ', 'RSI', 'WR', 'BOLL'].includes(subInd)
+  const hasSub = ['MACD', 'KDJ', 'RSI', 'WR', '多空趋势'].includes(subInd)
 
   // Volume bar coloring
   const volData = volumes.map((v, i) => ({
@@ -137,13 +138,13 @@ const renderChart = () => {
     }
   }))
 
-  // === Grid layout ===
+  // === Grid layout (avoid overlap between K-line and volume) ===
   const grids: any[] = [
-    { left: '8%', right: '3%', top: 48, bottom: hasSub ? '34%' : '22%' },
-    { left: '8%', right: '3%', height: '10%', bottom: hasSub ? '22%' : '10%' },
+    { left: '8%', right: '3%', top: 48, bottom: hasSub ? '38%' : '24%' },
+    { left: '8%', right: '3%', height: '8%', bottom: hasSub ? '28%' : '12%' },
   ]
   if (hasSub) {
-    grids.push({ left: '8%', right: '3%', height: '14%', bottom: '6%' })
+    grids.push({ left: '8%', right: '3%', height: '16%', bottom: '6%' })
   }
 
   // === X/Y axes ===
@@ -179,12 +180,24 @@ const renderChart = () => {
       type: 'category', gridIndex: 2, data: dates,
       axisLabel: { show: false }, axisTick: { show: false }, axisLine: { show: false },
     })
-    yAxes.push({
-      scale: true, gridIndex: 2, splitNumber: 2,
+    // Dynamic y-axis config based on sub-indicator type
+    const subYAxis: any = {
+      scale: true, gridIndex: 2, splitNumber: 3,
       axisLabel: { show: true, fontSize: 9, color: '#999' },
       axisLine: { show: false }, axisTick: { show: false },
-      splitLine: { show: false },
-    })
+      splitLine: { lineStyle: { color: '#f5f5f5' } },
+    }
+    if (subInd === 'KDJ') {
+      subYAxis.min = -20
+      subYAxis.max = 120
+    } else if (subInd === 'WR') {
+      subYAxis.min = -100
+      subYAxis.max = 0
+    } else if (subInd === 'RSI') {
+      subYAxis.min = 0
+      subYAxis.max = 100
+    }
+    yAxes.push(subYAxis)
   }
 
   // === Legend ===
@@ -201,11 +214,25 @@ const renderChart = () => {
         borderColor: COLORS.up, borderColor0: COLORS.down,
       },
       markPoint: {
-        symbol: 'pin', symbolSize: 36,
-        label: { fontSize: 11, fontWeight: 'bold', color: '#fff' },
+        symbol: 'rect',
+        symbolSize: [1, 8],
+        label: {
+          show: true,
+          fontSize: 10,
+          fontWeight: 'bold',
+          formatter: (p: any) => p.data.type === 'max' ? `── ${p.value}` : `── ${p.value}`,
+        },
         data: [
-          { name: '最高价', type: 'max', valueDim: 'highest', itemStyle: { color: COLORS.up } },
-          { name: '最低价', type: 'min', valueDim: 'lowest', itemStyle: { color: '#009900' }, symbolRotate: 180, label: { offset: [0, 7] } },
+          {
+            name: '最高价', type: 'max', valueDim: 'highest',
+            itemStyle: { color: 'transparent' },
+            label: { position: 'top', color: COLORS.up },
+          },
+          {
+            name: '最低价', type: 'min', valueDim: 'lowest',
+            itemStyle: { color: 'transparent' },
+            label: { position: 'bottom', color: COLORS.down },
+          },
         ],
       },
     },
@@ -265,43 +292,57 @@ const renderChart = () => {
         itemStyle: { color: v !== null && v >= 0 ? COLORS.up : COLORS.down }
       }))
       series.push(
-        { name: 'DIF', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macd.dif, lineStyle: { width: 1 }, symbol: 'none' },
-        { name: 'DEA', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macd.dea, lineStyle: { width: 1, color: COLORS.ma5 }, symbol: 'none' },
+        { name: 'DIF', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macd.dif, connectNulls: true, lineStyle: { width: 1 }, symbol: 'none' },
+        { name: 'DEA', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macd.dea, connectNulls: true, lineStyle: { width: 1, color: COLORS.ma5 }, symbol: 'none' },
         { name: 'MACD柱', type: 'bar', xAxisIndex: 2, yAxisIndex: 2, data: macdBarData, barMaxWidth: 4 },
       )
     }
 
-    if (subInd === 'KDJ' && kdj.k) {
-      legendData.push('K', 'D', 'J')
-      series.push(
-        { name: 'K', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: kdj.k, lineStyle: { width: 1, color: COLORS.ma5 }, symbol: 'none' },
-        { name: 'D', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: kdj.d, lineStyle: { width: 1, color: COLORS.ma10 }, symbol: 'none' },
-        { name: 'J', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: kdj.j, lineStyle: { width: 1, color: COLORS.ma20 }, symbol: 'none' },
-      )
+    if (subInd === 'KDJ') {
+      const kArr = kdj.k || []
+      const dArr = kdj.d || []
+      const jArr = kdj.j || []
+      if (kArr.length > 0) {
+        legendData.push('K(9,3,3)', 'D(9,3,3)', 'J(9,3,3)')
+        series.push(
+          { name: 'K(9,3,3)', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: kArr, connectNulls: true, lineStyle: { width: 1, color: COLORS.ma5 }, symbol: 'none' },
+          { name: 'D(9,3,3)', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: dArr, connectNulls: true, lineStyle: { width: 1, color: COLORS.ma10 }, symbol: 'none' },
+          { name: 'J(9,3,3)', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: jArr, connectNulls: true, lineStyle: { width: 1, color: COLORS.ma20 }, symbol: 'none' },
+        )
+      }
     }
 
-    if (subInd === 'RSI' && rsi.length) {
-      legendData.push('RSI(14)')
-      series.push(
-        { name: 'RSI(14)', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: rsi, lineStyle: { width: 1, color: COLORS.ma5 }, symbol: 'none' },
-      )
+    if (subInd === 'RSI') {
+      if (rsi.length > 0) {
+        legendData.push('RSI(14)')
+        series.push(
+          { name: 'RSI(14)', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: rsi, connectNulls: true, lineStyle: { width: 1, color: COLORS.ma5 }, symbol: 'none' },
+        )
+      }
     }
 
-    if (subInd === 'WR' && wr.wr10) {
-      legendData.push('WR(10)', 'WR(6)')
-      series.push(
-        { name: 'WR(10)', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: wr.wr10, lineStyle: { width: 1, color: COLORS.ma5 }, symbol: 'none' },
-        { name: 'WR(6)', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: wr.wr6, lineStyle: { width: 1, color: COLORS.ma10 }, symbol: 'none' },
-      )
+    if (subInd === 'WR') {
+      const wr10Arr = wr.wr10 || []
+      const wr6Arr = wr.wr6 || []
+      if (wr10Arr.length > 0) {
+        legendData.push('WR(10)', 'WR(6)')
+        series.push(
+          { name: 'WR(10)', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: wr10Arr, connectNulls: true, lineStyle: { width: 1, color: COLORS.ma5 }, symbol: 'none' },
+          { name: 'WR(6)', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: wr6Arr, connectNulls: true, lineStyle: { width: 1, color: COLORS.ma10 }, symbol: 'none' },
+        )
+      }
     }
 
-    if (subInd === 'BOLL' && boll.upper) {
-      legendData.push('BOLL上', 'BOLL中', 'BOLL下')
-      series.push(
-        { name: 'BOLL上', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: boll.upper, lineStyle: { width: 1, color: COLORS.bollUpper }, symbol: 'none' },
-        { name: 'BOLL中', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: boll.middle, lineStyle: { width: 1, color: COLORS.bollMiddle }, symbol: 'none' },
-        { name: 'BOLL下', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: boll.lower, lineStyle: { width: 1, color: COLORS.bollLower }, symbol: 'none' },
-      )
+    if (subInd === '多空趋势') {
+      const bbiArr = bbi.bbi || []
+      const mabbArr = bbi.mabb || []
+      if (bbiArr.length > 0) {
+        legendData.push('BBI(3,6,12,24)', 'MABB(6)')
+        series.push(
+          { name: 'BBI(3,6,12,24)', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: bbiArr, connectNulls: true, lineStyle: { width: 1.5, color: '#e6a23c' }, symbol: 'none' },
+          { name: 'MABB(6)', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: mabbArr, connectNulls: true, lineStyle: { width: 1.5, color: '#409eff' }, symbol: 'none' },
+        )
+      }
     }
   }
 

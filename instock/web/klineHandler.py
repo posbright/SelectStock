@@ -169,6 +169,30 @@ def _compute_wr(closes, highs, lows, period=10):
     return result
 
 
+def _compute_bbi(closes):
+    """计算多空趋势 BBI (Bull Bear Index)
+    BBI = (MA3 + MA6 + MA12 + MA24) / 4
+    MABB = MA(BBI, 6) 信号线
+    """
+    ma3 = _compute_ma(closes, 3)
+    ma6 = _compute_ma(closes, 6)
+    ma12 = _compute_ma(closes, 12)
+    ma24 = _compute_ma(closes, 24)
+    bbi = []
+    for a, b, c, d in zip(ma3, ma6, ma12, ma24):
+        if any(v is None for v in (a, b, c, d)):
+            bbi.append(None)
+        else:
+            bbi.append(round((a + b + c + d) / 4, 4))
+    # MABB signal line: MA of BBI values
+    bbi_for_ma = [v if v is not None else 0 for v in bbi]
+    mabb = _compute_ma(bbi_for_ma, 6)
+    # 前 23 个设为 None (需要 MA24 的24个数据点)
+    for i in range(min(23, len(mabb))):
+        mabb[i] = None
+    return bbi, mabb
+
+
 def _resample_to_period(df, period):
     """
     将日线数据重采样为周线/月线/季线/年线
@@ -311,6 +335,7 @@ class GetKlineDataHandler(webBase.BaseHandler, ABC):
             kdj_k, kdj_d, kdj_j = _compute_kdj(closes_clean, highs_clean, lows_clean, 9, 3, 3)
             wr10 = _compute_wr(closes_clean, highs_clean, lows_clean, 10)
             wr6 = _compute_wr(closes_clean, highs_clean, lows_clean, 6)
+            bbi, mabb = _compute_bbi(closes_clean)
 
             result = {
                 "code": code,
@@ -350,6 +375,10 @@ class GetKlineDataHandler(webBase.BaseHandler, ABC):
                 "wr": {
                     "wr10": wr10,
                     "wr6": wr6,
+                },
+                "bbi": {
+                    "bbi": bbi,
+                    "mabb": mabb,
                 },
             }
 
