@@ -21,6 +21,22 @@ LOG_DIR=$PROJECT_ROOT/instock/log
 mkdir -p $LOG_DIR
 LOG_FILE=$LOG_DIR/workdayly.log
 
+# 非交易日跳过
+IS_TRADE_DAY=$(python3 -c "
+import sys, os
+sys.path.insert(0, '$PROJECT_ROOT')
+try:
+    import instock.lib.trade_time as trd
+    print('1' if trd.is_trade_date() else '0')
+except Exception:
+    print('1')  # 检测失败时保守执行
+" 2>/dev/null)
+
+if [ "$IS_TRADE_DAY" = "0" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 非交易日，跳过每日任务" >> $LOG_FILE
+    exit 0
+fi
+
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始执行 execute_daily_job（自动检测分析跳过）" >> $LOG_FILE
 python3 $PROJECT_ROOT/instock/job/execute_daily_job.py >> $LOG_FILE 2>&1
 EXIT_CODE=$?

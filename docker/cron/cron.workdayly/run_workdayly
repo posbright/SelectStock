@@ -7,10 +7,11 @@
 #   - Phase 4/5（分析+回测）自动检测：如果本地已完成则跳过
 #   - 设置 INSTOCK_FORCE_ANALYSIS=1 可强制执行全部阶段
 
-SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-PROJECT_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
+# Docker 环境：项目固定在 /data/InStock
+# 注意：不能用 $(dirname $0)/../.. 推算，因为脚本在 /etc/cron.workdayly/ 下，
+# ../../ 会解析到 / 而非项目目录
+PROJECT_ROOT=/data/InStock
 
-# cron环境PATH极其有限，必须显式设置
 export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH
 export PYTHONIOENCODING=utf-8
 export LANG=zh_CN.UTF-8
@@ -20,6 +21,22 @@ export LC_CTYPE=zh_CN.UTF-8
 LOG_DIR=$PROJECT_ROOT/instock/log
 mkdir -p $LOG_DIR
 LOG_FILE=$LOG_DIR/workdayly.log
+
+# 非交易日跳过
+IS_TRADE_DAY=$(python3 -c "
+import sys, os
+sys.path.insert(0, '$PROJECT_ROOT')
+try:
+    import instock.lib.trade_time as trd
+    print('1' if trd.is_trade_date() else '0')
+except Exception:
+    print('1')  # 检测失败时保守执行
+" 2>/dev/null)
+
+if [ "$IS_TRADE_DAY" = "0" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 非交易日，跳过每日任务" >> $LOG_FILE
+    exit 0
+fi
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始执行 execute_daily_job（自动检测分析跳过）" >> $LOG_FILE
 python3 $PROJECT_ROOT/instock/job/execute_daily_job.py >> $LOG_FILE 2>&1
