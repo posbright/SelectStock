@@ -28,30 +28,35 @@
 
 **调用**: `instock/job/execute_daily_job.py`
 
-**执行步骤**（采用 5 阶段流水线架构，数据获取与分析彻底分离）:
+**执行步骤**（采用 5 阶段流水线架构，轻量任务优先，重量级操作放后）:
 
-**Phase 1: 数据获取**（API 调用集中在此阶段）
+**Phase 0: 初始化**
 1. **init_job** - 创建/初始化数据库
-2. **fetch_data_job** - 集中获取数据：缓存清理 + 实时行情 + 历史K线增量更新（低内存模式）
 
-**Phase 2: 基础数据入库**
-3. **basic_data_daily_job** - 股票/ETF实时行情入库
-4. **selection_data_daily_job** - 综合选股数据入库
+**Phase 1: 轻量级数据入库**（优先执行，确保关键数据不受后续 OOM 影响）
+2. **Phase 1a** - 实时行情预加载（stock_data 单例）
+3. **Phase 1b** - basic_data_daily_job - 股票/ETF实时行情入库
+4. **Phase 1c** - selection_data_daily_job - 综合选股数据入库
+5. **Phase 1d** - basic_data_other_daily_job - 资金流向、龙虎榜等扩展数据
+6. **Phase 1e** - gpt_value_data_job - GPT综合选股（纯DB读取）
+7. **Phase 1f** - basic_data_after_close_daily_job - 收盘后数据（大宗交易等）
 
-**Phase 3: 扩展数据**
-5. **basic_data_other_daily_job** - 分红、龙虎榜、大宗交易等
-6. **gpt_value_data_job** - GPT综合选股
+**Phase 2: 重量级数据获取 — K线缓存批量更新**
+8. **fetch_data_job** - 历史K线缓存增量更新（~5000只股票，内存密集型）
+   - 在1.6GB内存服务器上可能因OOM被杀，因此放在轻量级任务之后
+   - 即使此步骤失败，Phase 1的关键数据已安全入库
 
-**Phase 4: 数据分析**（流式处理，无 API 调用，峰值内存 < 100 MB）
-7. **streaming_analysis_job** - 单次遍历所有股票，同时计算：
+**Phase 3: 数据分析**（流式处理，无 API 调用，峰值内存 < 100 MB）
+9. **streaming_analysis_job** - 单次遍历所有股票，同时计算：
    - 技术指标（MACD/KDJ/RSI等）
    - K线形态识别（锤子线/十字星等）
    - 策略选股（放量突破/均线金叉等）
    - 指标二次筛选（买入/卖出信号）
+   - 内置跳过检查：如果分析数据已由其他节点完成则自动跳过
 
-**Phase 5: 回测与收尾**
-8. **backtest_data_daily_job** - 策略回测数据（从缓存按需读取）
-9. **basic_data_after_close_daily_job** - 收盘后数据
+**Phase 4: 回测与收尾**
+10. **backtest_data_daily_job** - 策略回测数据（从缓存按需读取）
+11. **数据健康检查** - 检查各核心表是否有当日数据
 
 **适用场景**: 每个交易日收盘后运行（建议18:00后执行）
 
@@ -107,28 +112,19 @@ crontab -e
 
 # 添加以下内容（假设项目在 /root/SelectStock）：
 
-# ── 收盘后采集基础行情数据（轻量级，可多次执行）──
+# 盘中快照
 30 12 * * 1-5 flock -xn /tmp/instock_hourly.lock /root/SelectStock/cron/cron.hourly/run_hourly
-0 13 * * 1-5 flock -xn /tmp/instock_hourly.lock /root/SelectStock/cron/cron.hourly/run_hourly
-0 16 * * 1-5 flock -xn /tmp/instock_hourly.lock /root/SelectStock/cron/cron.hourly/run_hourly
-0 17 * * 1-5 flock -xn /tmp/instock_hourly.lock /root/SelectStock/cron/cron.hourly/run_hourly
+18 15 * * 1-5 flock -xn /tmp/instock_hourly.lock /root/SelectStock/cron/cron.hourly/run_hourly
 
-# ── 方式A：拆分模式（推荐，获取和分析独立运行）──
-# 18:00 数据获取（API调用：实时行情+K线+资金流向+龙虎榜等）
+# 数据获取 + 重试
 0 18 * * 1-5 flock -xn /tmp/instock_fetch.lock /root/SelectStock/cron/cron.workdayly/run_fetch
-# 22:00 数据分析（本地计算：指标+K线形态+策略+回测，约10分钟）
-# 说明：安排在22:00而非20:30，是因为首次运行fetch可能需要3-5小时下载全量K线缓存
-0 22 * * 1-5 flock -xn /tmp/instock_analysis.lock /root/SelectStock/cron/cron.workdayly/run_analysis
-# 01:00 重试获取（如果18:00仍在运行则跳过）
 0 1 * * 2-6 flock -xn /tmp/instock_fetch.lock /root/SelectStock/cron/cron.workdayly/run_fetch
-# 01:30 重试分析
-30 1 * * 2-6 flock -xn /tmp/instock_analysis.lock /root/SelectStock/cron/cron.workdayly/run_analysis
 
-# ── 方式B：一体模式（兼容旧版，获取+分析串行执行）──
-# 0 18 * * 1-5 flock -xn /tmp/instock_workdayly.lock /root/SelectStock/cron/cron.workdayly/run_workdayly
-# 0 1 * * 2-6 flock -xn /tmp/instock_workdayly.lock /root/SelectStock/cron/cron.workdayly/run_workdayly
+# 数据分析 + 重试
+0 22 * * 1-5 flock -xn /tmp/instock_analysis.lock /root/SelectStock/cron/cron.workdayly/run_analysis
+30 0 * * 2-6 flock -xn /tmp/instock_analysis.lock /root/SelectStock/cron/cron.workdayly/run_analysis
 
-# ── 月度缓存清理 ──
+# 月度清理
 0 4 1 * * /root/SelectStock/cron/cron.monthly/run_monthly
 ```
 
@@ -137,7 +133,62 @@ crontab -e
 > - `flock -xn` 参数：`-x` 排他锁，`-n` 非阻塞（如果锁被占用则立即退出，不等待）
 > - 获取和分析使用**不同的锁文件**，互不阻塞；`run_hourly` 也用独立锁文件避免与 `run_fetch` 写同一张表冲突
 > - 分析安排在22:00而非20:30，给首次运行的K线缓存下载留充足时间（后续增量更新速度很快）
-> - 重试服务安排在凌晨1:00/1:30（周二到周六），对应周一到周五的交易日数据
+> - 重试服务安排在凌晨1:00/0:30（周二到周六），对应周一到周五的交易日数据
+
+### Docker 环境 Cron 配置
+
+Docker 容器内使用与上述相同的拆分模式，定时任务在 Dockerfile 中配置：
+
+```crontab
+# 盘中行情快照
+0 12 * * 1-5 flock -xn /tmp/instock_hourly.lock /etc/cron.hourly/run_hourly
+18 15 * * 1-5 flock -xn /tmp/instock_hourly.lock /etc/cron.hourly/run_hourly
+
+# 收盘后数据获取 + 凌晨重试
+0 18 * * 1-5 flock -xn /tmp/instock_fetch.lock /etc/cron.workdayly/run_fetch
+0 1 * * 2-6 flock -xn /tmp/instock_fetch.lock /etc/cron.workdayly/run_fetch
+
+# 数据分析 + 凌晨重试
+0 22 * * 1-5 flock -xn /tmp/instock_analysis.lock /etc/cron.workdayly/run_analysis
+30 2 * * 2-6 flock -xn /tmp/instock_analysis.lock /etc/cron.workdayly/run_analysis
+
+# 月度缓存清理
+0 4 1 * * /etc/cron.monthly/run_monthly
+```
+
+> **Docker 环境注意事项**：
+> - 脚本路径为 `/etc/cron.*`（由 Dockerfile COPY 部署）
+> - `PROJECT_ROOT=/data/InStock` 硬编码在脚本中（Docker 固定路径）
+> - `PYTHONPATH=/data/InStock` 在 crontab 中设置
+
+---
+
+## 重试安全性（幂等性保证）
+
+所有定时任务均设计为**可安全重试**，不会因重复执行导致数据冗余或资源浪费：
+
+### 数据写入幂等性
+
+| 操作 | 机制 | 重试安全 |
+|------|------|---------|
+| DB 数据入库 | `DELETE WHERE date=X` → `INSERT`（先删后插） | ✅ 重跑覆盖旧数据 |
+| 并发写入 | `INSERT ... ON DUPLICATE KEY UPDATE`（Upsert） | ✅ 主键冲突自动更新 |
+| K线缓存更新 | 增量模式：读 `.meta` 最后日期 → 只拉新数据 | ✅ 已有数据不重拉 |
+| 回测计算 | 只处理 `backtest IS NULL` 的记录 | ✅ 已回测的不重算 |
+
+### 防重复执行机制
+
+| 机制 | 说明 |
+|------|------|
+| `flock -xn` | 排他锁+非阻塞：同类任务只能有一个在运行，后来者立即退出 |
+| `is_trade_date()` | 非交易日自动跳过（节假日、周末） |
+| `_is_analysis_done()` | 分析数据已存在（≥1000条）时自动跳过，避免低内存环境重复计算 |
+
+### 资源消耗
+
+- **重试时的 API 调用**：实时行情 API 返回最新快照（无历史累积），重试只是覆盖同一天的数据
+- **K线缓存重试**：增量模式下，如果上次已成功更新，重试几乎零 I/O（`.meta` 显示已是最新）
+- **分析重试**：如果上次已完成，`_is_analysis_done()` 检查通过后直接跳过，耗时<1秒
 
 ---
 

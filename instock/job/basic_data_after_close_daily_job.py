@@ -27,8 +27,8 @@ def save_after_close_stock_blocktrade_data(date):
         table_name = tbs.TABLE_CN_STOCK_BLOCKTRADE['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_BLOCKTRADE['columns'])
@@ -47,8 +47,8 @@ def save_after_close_stock_chip_race_end_data(date):
         table_name = tbs.TABLE_CN_STOCK_CHIP_RACE_END['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_CHIP_RACE_END['columns'])

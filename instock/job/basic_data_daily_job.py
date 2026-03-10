@@ -34,8 +34,8 @@ def save_nph_stock_spot_data(date, before=True):
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
             try:
-                del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-                mdb.executeSql(del_sql)
+                del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+                mdb.executeSql(del_sql, (date,))
             except Exception as e:
                 logging.warning(f"basic_data_daily_job.save_stock_spot_data删除旧数据失败，将使用upsert模式继续: {e}")
             cols_type = None
@@ -62,8 +62,8 @@ def save_nph_etf_spot_data(date, before=True):
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
             try:
-                del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-                mdb.executeSql(del_sql)
+                del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+                mdb.executeSql(del_sql, (date,))
             except Exception as e:
                 logging.warning(f"basic_data_daily_job.save_nph_etf_spot_data删除旧数据失败，将使用upsert模式继续: {e}")
             cols_type = None

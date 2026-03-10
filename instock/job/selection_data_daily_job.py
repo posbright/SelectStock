@@ -46,8 +46,8 @@ def save_nph_stock_selection_data(date, before=True):
 
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{_date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (_date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_SELECTION['columns'])

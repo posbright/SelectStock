@@ -31,8 +31,8 @@ def save_nph_stock_lhb_data(date, before=True):
         table_name = tbs.TABLE_CN_STOCK_lHB['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_lHB['columns'])
@@ -54,8 +54,8 @@ def save_nph_stock_top_data(date, before=True):
         table_name = tbs.TABLE_CN_STOCK_TOP['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_TOP['columns'])
@@ -116,8 +116,8 @@ def save_nph_stock_fund_flow_data(date, before=True):
         table_name = tbs.TABLE_CN_STOCK_FUND_FLOW['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_FUND_FLOW['columns'])
@@ -203,8 +203,8 @@ def stock_sector_fund_flow_data(date, index_sector):
         table_name = tbs_table['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs_table['columns'])
@@ -248,8 +248,8 @@ def save_nph_stock_bonus(date, before=True):
         table_name = tbs.TABLE_CN_STOCK_BONUS['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_BONUS['columns'])
@@ -265,9 +265,9 @@ def stock_spot_buy(date):
         if not mdb.checkTableIsExist(_table_name):
             return
 
-        sql = f'''SELECT * FROM `{_table_name}` WHERE `date` = '{date}' and 
+        sql = f'''SELECT * FROM `{_table_name}` WHERE `date` = %s and 
                 `pe9` > 0 and `pe9` <= 20 and `pbnewmrq` <= 10 and `roe_weight` >= 15'''
-        data = pd.read_sql(sql=sql, con=mdb.engine())
+        data = pd.read_sql(sql=sql, con=mdb.engine(), params=(date,))
         data = data.drop_duplicates(subset="code", keep="last")
         if len(data.index) == 0:
             return
@@ -275,8 +275,8 @@ def stock_spot_buy(date):
         table_name = tbs.TABLE_CN_STOCK_SPOT_BUY['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_SPOT_BUY['columns'])
@@ -296,8 +296,8 @@ def stock_chip_race_open_data(date):
         table_name = tbs.TABLE_CN_STOCK_CHIP_RACE_OPEN['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_CHIP_RACE_OPEN['columns'])
@@ -317,8 +317,8 @@ def stock_imitup_reason_data(date):
         table_name = tbs.TABLE_CN_STOCK_LIMITUP_REASON['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_LIMITUP_REASON['columns'])

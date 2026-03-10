@@ -101,9 +101,9 @@
 
 ```
 Fetch管道（有API调用）:
-  fetch_daily_job → init_job → fetch_data_job → basic_data_daily_job
+  fetch_daily_job → init_job → basic_data_daily_job
                   → selection_data_daily_job → basic_data_other_daily_job
-                  → basic_data_after_close_daily_job
+                  → basic_data_after_close_daily_job → fetch_data_job(K线缓存)
 
 Analysis管道（零API调用）:
   analysis_daily_job → gpt_value_data_job → streaming_analysis_job
@@ -226,8 +226,8 @@ SelectStock/
 │   │       └── rate_stats.py   # 收益率统计
 │   │
 │   ├── job/                     # ⏰ 定时作业
-│   │   ├── execute_daily_job.py    # 整体作业调度（5阶段流水线）
-│   │   ├── fetch_daily_job.py      # 数据获取管道（Phase 1-3 + 收盘后，可独立运行）
+│   │   ├── execute_daily_job.py    # 整体作业调度（Phase 0→1→2→3→4 流水线）
+│   │   ├── fetch_daily_job.py      # 数据获取管道（轻量API+K线缓存，可独立运行）
 │   │   ├── analysis_daily_job.py   # 分析管道（GPT + 流式分析 + 回测，零API调用）
 │   │   ├── streaming_analysis_job.py # Phase 4 流式分析（替代 indicators/klinepattern/strategy）
 │   │   ├── init_job.py             # 初始化（创建数据库）
@@ -488,15 +488,15 @@ docker-compose -f docker-compose.remote-db.yml up -d
 
 ### 1. 运行数据作业
 
-系统采用 **5阶段流水线架构**，数据获取与分析彻底分离：
+系统采用 **5阶段流水线架构**，轻量任务优先执行，重量级操作放后：
 
 | 阶段 | 说明 | 脚本 |
 |------|------|------|
-| Phase 1 | 数据获取（API调用集中在此阶段） | `fetch_data_job.py` |
-| Phase 2 | 基础数据入库 | `basic_data_daily_job.py` + `selection_data_daily_job.py` |
-| Phase 3 | 扩展数据入库 | `basic_data_other_daily_job.py` + `gpt_value_data_job.py` |
-| Phase 4 | 数据分析（纯计算，无API调用） | `streaming_analysis_job.py`（整合指标+K线+策略，单次遍历） |
-| Phase 5 | 回测与收尾 | `backtest_data_daily_job.py` + `basic_data_after_close_daily_job.py` |
+| Phase 0 | 初始化数据库 | `init_job.py` |
+| Phase 1 | 轻量级数据入库（行情+选股+资金流向+GPT+收盘后） | `basic_data_daily_job.py` + `selection_data_daily_job.py` + `basic_data_other_daily_job.py` + `gpt_value_data_job.py` + `basic_data_after_close_daily_job.py` |
+| Phase 2 | K线缓存批量更新（内存密集型，放在轻量任务之后） | `fetch_data_job.py` |
+| Phase 3 | 数据分析（纯计算，无API调用） | `streaming_analysis_job.py`（整合指标+K线+策略，单次遍历） |
+| Phase 4 | 回测与收尾 | `backtest_data_daily_job.py` + 数据健康检查 |
 
 ```bash
 cd instock/job
@@ -518,7 +518,7 @@ python execute_daily_job.py 2024-01-01,2024-01-15,2024-01-31
 
 ```bash
 # ── 推荐：拆分运行（数据获取 + 数据分析分离） ──
-# 数据获取管道（Phase 1-3 + 收盘后，包含所有API调用）
+# 数据获取管道（轻量API调用 + K线缓存更新，K线放最后以防OOM）
 python fetch_daily_job.py
 
 # 数据分析管道（GPT + 流式分析 + 回测，零API调用）
@@ -781,6 +781,38 @@ Body: {"code": "000001", "action": "add"}
 ## 许可证
 
 本项目采用开源许可证，详见 [LICENSE](LICENSE) 文件。
+
+---
+
+## 安全注意事项
+
+### 数据库凭据
+
+`instock/lib/database.py` 中的数据库连接信息会被环境变量覆盖。生产环境**务必**通过环境变量（Docker `-e` 或 `.env` 文件）配置，避免在源码中暴露凭据：
+
+```bash
+export db_host=your_host
+export db_user=your_user
+export db_password=your_password
+export db_database=instockdb
+```
+
+### SQL 参数化
+
+所有数据写入操作已使用参数化查询（`%s` 占位符），防止 SQL 注入。新增数据操作时请遵循此模式：
+
+```python
+# ✅ 正确：参数化查询
+mdb.executeSql("DELETE FROM `table` WHERE `date` = %s", (date,))
+
+# ❌ 错误：f-string 拼接
+mdb.executeSql(f"DELETE FROM `table` WHERE `date` = '{date}'")
+```
+
+### Web 服务
+
+- SPAHandler 已增加路径遍历防护（`os.path.realpath` 校验）
+- Web 服务默认绑定所有网卡（`0.0.0.0:9988`），生产环境建议配置反向代理（Nginx）限制访问
 
 ---
 

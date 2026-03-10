@@ -37,8 +37,8 @@ def prepare(date):
         table_name = tbs.TABLE_CN_STOCK_INDICATORS['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_INDICATORS['columns'])
@@ -97,10 +97,10 @@ def guess_buy(date):
 
         _columns = tuple(tbs.TABLE_CN_STOCK_FOREIGN_KEY['columns'])
         _selcol = '`,`'.join(_columns)
-        sql = f'''SELECT `{_selcol}` FROM `{_table_name}` WHERE `date` = '{date}' and 
+        sql = f'''SELECT `{_selcol}` FROM `{_table_name}` WHERE `date` = %s and 
                 `kdjk` >= 80 and `kdjd` >= 70 and `kdjj` >= 100 and `rsi_6` >= 80 and 
                 `cci` >= 100 and `cr` >= 300 and `wr_6` >= -20 and `vr` >= 160'''
-        data = pd.read_sql(sql=sql, con=mdb.engine())
+        data = pd.read_sql(sql=sql, con=mdb.engine(), params=(date,))
         data = data.drop_duplicates(subset="code", keep="last")
         # data.set_index('code', inplace=True)
 
@@ -110,8 +110,8 @@ def guess_buy(date):
         table_name = tbs.TABLE_CN_STOCK_INDICATORS_BUY['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_INDICATORS_BUY['columns'])
@@ -132,10 +132,10 @@ def guess_sell(date):
 
         _columns = tuple(tbs.TABLE_CN_STOCK_FOREIGN_KEY['columns'])
         _selcol = '`,`'.join(_columns)
-        sql = f'''SELECT `{_selcol}` FROM `{_table_name}` WHERE `date` = '{date}' and 
+        sql = f'''SELECT `{_selcol}` FROM `{_table_name}` WHERE `date` = %s and 
                 `kdjk` < 20 and `kdjd` < 30 and `kdjj` < 10 and `rsi_6` < 20 and 
                 `cci` < -100 and `cr` < 40 and `wr_6` < -80 and `vr` < 40'''
-        data = pd.read_sql(sql=sql, con=mdb.engine())
+        data = pd.read_sql(sql=sql, con=mdb.engine(), params=(date,))
         data = data.drop_duplicates(subset="code", keep="last")
         # data.set_index('code', inplace=True)
         if len(data.index) == 0:
@@ -144,8 +144,8 @@ def guess_sell(date):
         table_name = tbs.TABLE_CN_STOCK_INDICATORS_SELL['name']
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_INDICATORS_SELL['columns'])

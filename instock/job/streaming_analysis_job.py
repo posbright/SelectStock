@@ -303,8 +303,8 @@ def _clean_table_if_needed(table_name, date_str, tables_cleaned):
     if table_name not in tables_cleaned:
         try:
             if mdb.checkTableIsExist(table_name):
-                del_sql = f"DELETE FROM `{table_name}` where `date` = '{date_str}'"
-                mdb.executeSql(del_sql)
+                del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+                mdb.executeSql(del_sql, (date_str,))
         except Exception as e:
             logging.warning(f"清理表 {table_name} 异常：{e}")
         tables_cleaned.add(table_name)
@@ -461,10 +461,10 @@ def _guess_buy(date):
 
         _columns = tuple(tbs.TABLE_CN_STOCK_FOREIGN_KEY['columns'])
         _selcol = '`,`'.join(_columns)
-        sql = f'''SELECT `{_selcol}` FROM `{_table_name}` WHERE `date` = '{date}' and 
+        sql = f'''SELECT `{_selcol}` FROM `{_table_name}` WHERE `date` = %s and 
                 `kdjk` >= 80 and `kdjd` >= 70 and `kdjj` >= 100 and `rsi_6` >= 80 and 
                 `cci` >= 100 and `cr` >= 300 and `wr_6` >= -20 and `vr` >= 160'''
-        data = pd.read_sql(sql=sql, con=mdb.engine())
+        data = pd.read_sql(sql=sql, con=mdb.engine(), params=(date,))
         data = data.drop_duplicates(subset="code", keep="last")
 
         if len(data.index) == 0:
@@ -472,8 +472,8 @@ def _guess_buy(date):
 
         table_name = tbs.TABLE_CN_STOCK_INDICATORS_BUY['name']
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_INDICATORS_BUY['columns'])
@@ -494,18 +494,18 @@ def _guess_sell(date):
 
         _columns = tuple(tbs.TABLE_CN_STOCK_FOREIGN_KEY['columns'])
         _selcol = '`,`'.join(_columns)
-        sql = f'''SELECT `{_selcol}` FROM `{_table_name}` WHERE `date` = '{date}' and 
+        sql = f'''SELECT `{_selcol}` FROM `{_table_name}` WHERE `date` = %s and 
                 `kdjk` < 20 and `kdjd` < 30 and `kdjj` < 10 and `rsi_6` < 20 and 
                 `cci` < -100 and `cr` < 40 and `wr_6` < -80 and `vr` < 40'''
-        data = pd.read_sql(sql=sql, con=mdb.engine())
+        data = pd.read_sql(sql=sql, con=mdb.engine(), params=(date,))
         data = data.drop_duplicates(subset="code", keep="last")
         if len(data.index) == 0:
             return
 
         table_name = tbs.TABLE_CN_STOCK_INDICATORS_SELL['name']
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_INDICATORS_SELL['columns'])

@@ -248,7 +248,8 @@ def _data_health_check(pipeline_start):
                 )
                 if row:
                     cnt_today_row = mdb.executeSqlFetch(
-                        f"SELECT COUNT(*) AS cnt FROM `{table}` WHERE `date` = '{date_str}'"
+                        f"SELECT COUNT(*) AS cnt FROM `{table}` WHERE `date` = %s",
+                        (date_str,)
                     )
                     cnt_today = cnt_today_row[0][0] if cnt_today_row else 0
                     latest = row[0][1]
