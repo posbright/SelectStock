@@ -114,9 +114,9 @@ def main():
     # 已经安全写入数据库，不会因 K线更新失败而全部丢失。
     # ================================================================
 
-    # Phase 1a: 集中获取数据中的"实时行情预加载"部分
-    # fdj.main() 内部包含 stock_data 单例预加载 + K线缓存批量更新
-    # 这里先单独预加载 stock_data 单例，供后续 Phase 1b 直接使用
+    # Phase 1a: 实时行情预加载
+    # 单独预加载 stock_data 单例，供后续 Phase 1b 直接使用
+    # （K线缓存批量更新已移至 Phase 2 子进程执行）
     try:
         import instock.lib.run_template as runt
         import instock.lib.trade_time as trd

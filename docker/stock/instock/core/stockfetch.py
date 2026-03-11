@@ -235,6 +235,20 @@ def fetch_stocks_trade_date():
             df = pd.read_sql(sql, con=mdb.engine())
             if df is not None and len(df) > 30:
                 dates = set(pd.to_datetime(df['trade_date']).dt.date.tolist())
+                # 补充 cn_stock_spot 中比缓存更新的交易日（每天 hdj.main 会写入当日行情）
+                # 防止 cn_stock_trade_date 老化导致 is_trade_date(today) 返回 False
+                try:
+                    max_cached = max(dates)
+                    if mdb.checkTableIsExist('cn_stock_spot'):
+                        sql2 = "SELECT DISTINCT `date` FROM `cn_stock_spot` WHERE `date` > %s"
+                        df2 = pd.read_sql(sql2, con=mdb.engine(), params=[max_cached])
+                        if df2 is not None and len(df2) > 0:
+                            new_dates = set(pd.to_datetime(df2['date']).dt.date.tolist())
+                            dates.update(new_dates)
+                            _persist_trade_dates(new_dates)
+                            logging.info(f"fetch_stocks_trade_date: 从 cn_stock_spot 补充 {len(new_dates)} 个新交易日")
+                except Exception as e:
+                    logging.debug(f"fetch_stocks_trade_date: 补充新交易日异常: {e}")
                 logging.info(f"fetch_stocks_trade_date: 从 cn_stock_trade_date 获取 {len(dates)} 个交易日")
                 return dates
             else:
@@ -243,7 +257,6 @@ def fetch_stocks_trade_date():
         logging.warning(f"fetch_stocks_trade_date: cn_stock_trade_date 查询失败: {e}")
 
     # 次选：从 cn_stock_spot 表提取历史交易日期（零代理、零API）
-    spot_dates = None
     try:
         import instock.lib.database as mdb
         if mdb.checkTableIsExist('cn_stock_spot'):
