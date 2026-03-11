@@ -47,6 +47,8 @@ PROXY_INIT_BATCH_SIZE = 200         # 初始化时最多验证的候选数（加
 PROXY_MAX_FAIL_COUNT = 3            # 连续失败次数阈值，超过则移除
 PROXY_STALE_SECONDS = 600           # 代理验证新鲜度阈值（秒），超过此时间未验证的代理权重降低
 PROXY_CACHE_MAX_AGE = 86400         # 磁盘缓存最长有效期（秒），超过则丢弃
+PROXY_TARGET_POOL_SIZE = 15         # 代理池目标保有量，低于此数就补充
+PROXY_EMERGENCY_COOLDOWN = 30       # 紧急补充冷却时间（秒），比原60s更积极
 
 
 class proxys(metaclass=singleton_type):
@@ -230,9 +232,9 @@ class proxys(metaclass=singleton_type):
             return False
 
     def _initial_fetch(self):
-        """抓取免费代理并验证（仅HTTP，跳过HTTPS以加速）"""
-        logging.info("代理池：正在从免费代理源获取代理...")
-        candidates = self._fetch_from_sources()
+        """初始化抓取：选取6个源获取代理并验证（仅HTTP，跳过HTTPS以加速）"""
+        logging.info("代理池：正在从免费代理源获取代理（初始化，选取6个源）...")
+        candidates = self._fetch_from_sources(num_sources=6)
         if candidates:
             random.shuffle(candidates)
             batch = candidates[:PROXY_INIT_BATCH_SIZE]
@@ -367,42 +369,90 @@ class proxys(metaclass=singleton_type):
         """
         代理池耗尽时触发紧急补充（异步，不阻塞调用方）。
         
-        防抖：60秒内最多触发一次，避免并发请求同时触发大量刷新线程。
+        防抖：PROXY_EMERGENCY_COOLDOWN 秒内最多触发一次。
+        紧急补充使用更多代理源（8个）以尽快恢复可用代理。
         """
         now = time.time()
         with self._lock:
             last = getattr(self, '_last_emergency_refresh', 0)
-            if now - last < 60:
-                return  # 60秒内已触发过，跳过
+            if now - last < PROXY_EMERGENCY_COOLDOWN:
+                return  # 冷却期内已触发过，跳过
             self._last_emergency_refresh = now
         logging.warning("代理池：可用代理已耗尽，触发紧急补充（异步）")
-        threading.Thread(target=self._refresh_cycle, daemon=True).start()
+        threading.Thread(target=self._emergency_fetch, daemon=True).start()
+
+    def _emergency_fetch(self):
+        """紧急补充：使用更多代理源（8个），快速恢复代理池"""
+        try:
+            candidates = self._fetch_from_sources(num_sources=8)
+            if candidates:
+                random.shuffle(candidates)
+                batch = candidates[:PROXY_INIT_BATCH_SIZE]
+                verified = self._batch_validate(batch, http_only=True)
+                logging.info(f"代理池：紧急补充完成，新增 {len(verified)} 个，当前可用 {self.pool_size()} 个")
+                self._save_disk_cache()
+        except Exception as e:
+            logging.warning(f"代理池：紧急补充异常: {e}")
 
     # ══════════════════════════════════════════════
     # 免费代理源抓取
     # ══════════════════════════════════════════════
 
-    def _fetch_from_sources(self):
-        """从多个免费代理源并发抓取候选代理，返回去重列表
+    def _get_all_fetchers(self):
+        """返回所有代理源，按优先级分层
         
-        每个代理源独立抓取，单个源失败不影响其他源。
-        使用线程池并发抓取以加速启动。
+        Tier 1（快速可靠，API接口或小型列表）：优先选取
+        Tier 2（GitHub大型列表，数据量大但获取较慢）：补充选取
         """
-        candidates = set()
-        fetchers = [
+        tier1 = [
             ("proxylist.geonode.com", self._fetch_geonode),
-            ("www.fate0.com/proxylist", self._fetch_fate0),
+            ("proxy-list.download", self._fetch_proxy_list_download),
             ("proxifly/free-proxy-list", self._fetch_proxifly),
-            ("TheSpeedX/PROXY-List", self._fetch_thespeedx),
             ("monosans/proxy-list", self._fetch_monosans),
+            ("www.fate0.com/proxylist", self._fetch_fate0),
+        ]
+        tier2 = [
+            ("TheSpeedX/PROXY-List", self._fetch_thespeedx),
             ("clarketm/proxy-list", self._fetch_clarketm),
             ("mmpx12/proxy-list", self._fetch_mmpx12),
             ("roosterkid/openproxylist", self._fetch_roosterkid),
             ("sunny9577/proxy-scraper", self._fetch_sunny9577),
             ("MuRongPIG/Proxy-Master", self._fetch_murongpig),
             ("rdavydov/proxy-list", self._fetch_rdavydov),
-            ("proxy-list.download", self._fetch_proxy_list_download),
         ]
+        return tier1, tier2
+
+    def _fetch_from_sources(self, num_sources=None):
+        """从代理源中随机选取 num_sources 个并发抓取，返回去重列表
+        
+        选取策略：
+        - num_sources=None: 全部源（仅在定时全量刷新时使用）
+        - num_sources=N: 先选满 Tier1，不足部分从 Tier2 随机补
+        - 早停机制：已获取足够候选时不再等未完成的慢源
+        
+        每个代理源独立抓取，单个源失败不影响其他源。
+        """
+        tier1, tier2 = self._get_all_fetchers()
+        all_fetchers = tier1 + tier2
+
+        if num_sources is not None and num_sources < len(all_fetchers):
+            # 优先选 Tier1，不足部分从 Tier2 随机补充
+            selected = list(tier1)
+            if num_sources > len(tier1):
+                remaining = num_sources - len(tier1)
+                selected += random.sample(tier2, min(remaining, len(tier2)))
+            else:
+                selected = random.sample(tier1, num_sources)
+            fetchers = selected
+        else:
+            fetchers = all_fetchers
+
+        candidates = set()
+        # 排除已在池中的代理（避免重复验证）
+        with self._lock:
+            existing = set(self._pool.keys())
+        # 候选目标数：需要补充到 PROXY_TARGET_POOL_SIZE 的量 + 冗余（验证通过率约5-15%）
+        target_candidates = max(PROXY_INIT_BATCH_SIZE, (PROXY_TARGET_POOL_SIZE - self.pool_size()) * 15)
 
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(fetchers), 10)) as executor:
@@ -412,12 +462,20 @@ class proxys(metaclass=singleton_type):
                 try:
                     proxies = future.result()
                     if proxies:
-                        candidates.update(proxies)
-                        logging.debug(f"代理池：从 {name} 获取 {len(proxies)} 个候选")
+                        new_proxies = [p for p in proxies if p not in existing]
+                        candidates.update(new_proxies)
+                        logging.debug(f"代理池：从 {name} 获取 {len(proxies)} 个候选（新 {len(new_proxies)} 个）")
                 except Exception as e:
                     logging.debug(f"代理池：从 {name} 获取失败: {e}")
+                # 早停：已获取足够候选就不再等待（但不强制取消未完成的任务）
+                if len(candidates) >= target_candidates:
+                    logging.debug(f"代理池：已获取 {len(candidates)} 个候选，达到目标 {target_candidates}，跳过剩余源")
+                    # 取消未开始的任务
+                    for f in future_to_name:
+                        f.cancel()
+                    break
 
-        logging.info(f"代理池：共从 {len(fetchers)} 个来源获取 {len(candidates)} 个候选代理")
+        logging.info(f"代理池：从 {len(fetchers)} 个来源获取 {len(candidates)} 个候选代理")
         return list(candidates)
 
     def _fetch_geonode(self):
@@ -823,18 +881,38 @@ class proxys(metaclass=singleton_type):
                 logging.debug(f"代理池：后台刷新异常: {e}")
 
     def _refresh_cycle(self):
-        """单次刷新：重新验证现有代理 + 补充新代理"""
+        """单次刷新：重新验证现有代理 + 按需补充新代理
+        
+        补充策略（分级响应）：
+        - pool_size < PROXY_MIN_POOL_SIZE (3): 紧急，选8个源大量补充
+        - pool_size < PROXY_TARGET_POOL_SIZE (15): 常规，选4个源适量补充
+        - pool_size >= PROXY_TARGET_POOL_SIZE: 健康，不补充
+        """
         # Step 1: 重新验证现有代理
         self._revalidate_existing()
 
-        # Step 2: 如果代理池不足，补充新代理
+        # Step 2: 按需补充新代理（分级响应）
         current_size = self.pool_size()
         if current_size < PROXY_MIN_POOL_SIZE:
-            logging.info(f"代理池：可用代理不足（{current_size}/{PROXY_MIN_POOL_SIZE}），正在补充...")
-            candidates = self._fetch_from_sources()
+            # 紧急：代理严重不足，多选源快速补充
+            num_sources = 8
+            logging.info(f"代理池：可用代理严重不足（{current_size}/{PROXY_MIN_POOL_SIZE}），紧急补充（{num_sources}个源）...")
+            candidates = self._fetch_from_sources(num_sources=num_sources)
             if candidates:
-                verified = self._batch_validate(candidates)
-                logging.info(f"代理池：补充完成，新增 {len(verified)} 个，当前可用 {self.pool_size()} 个")
+                random.shuffle(candidates)
+                verified = self._batch_validate(candidates[:PROXY_INIT_BATCH_SIZE], http_only=True)
+                logging.info(f"代理池：紧急补充完成，新增 {len(verified)} 个，当前可用 {self.pool_size()} 个")
+        elif current_size < PROXY_TARGET_POOL_SIZE:
+            # 常规：代理偏少，少选源适量补充
+            num_sources = 4
+            logging.info(f"代理池：可用代理偏少（{current_size}/{PROXY_TARGET_POOL_SIZE}），常规补充（{num_sources}个源）...")
+            candidates = self._fetch_from_sources(num_sources=num_sources)
+            if candidates:
+                random.shuffle(candidates)
+                need = PROXY_TARGET_POOL_SIZE - current_size
+                batch_size = min(len(candidates), max(need * 15, 100))  # 按需验证，通过率约5-15%
+                verified = self._batch_validate(candidates[:batch_size], http_only=True)
+                logging.info(f"代理池：常规补充完成，新增 {len(verified)} 个，当前可用 {self.pool_size()} 个")
         else:
             logging.debug(f"代理池：当前可用 {current_size} 个代理，状态健康")
 
