@@ -42,6 +42,13 @@ def create_new_base_table():
                                   ) CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;"""
             db.execute(create_table_sql)
 
+            # 交易日历表（由 fetch_stocks_trade_date 在首次获取时自动填充）
+            create_trade_date_sql = """CREATE TABLE IF NOT EXISTS `cn_stock_trade_date` (
+                                  `trade_date` date NOT NULL,
+                                  PRIMARY KEY (`trade_date`)
+                                  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;"""
+            db.execute(create_trade_date_sql)
+
 
 def check_database():
     with pymysql.connect(**mdb.MYSQL_CONN_DBAPI) as conn:

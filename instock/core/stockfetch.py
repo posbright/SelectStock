@@ -220,12 +220,30 @@ def is_open_with_line(price):
     return price != '-'
 
 
-# 读取股票交易日历数据（DB 优先 → Sina API fallback）
+# 读取股票交易日历数据（DB 优先 → Sina API fallback → 回写缓存）
+# 数据源优先级：cn_stock_trade_date > cn_stock_spot > Sina API
 # 设计原则：数据采集和数据分析分离。交易日历数据一旦入库就很少变动，
 # 优先从 DB 读取可避免触发代理池初始化（~11分钟），让 Web 服务器和分析作业
 # 不依赖外部 API / 代理即可获得交易日历。
 def fetch_stocks_trade_date():
-    # 首选：从数据库 cn_stock_spot 表提取历史交易日期（零代理、零API）
+    # 首选：从 cn_stock_trade_date 表读取（最优，专用交易日历表）
+    try:
+        import instock.lib.database as mdb
+        if mdb.checkTableIsExist('cn_stock_trade_date'):
+            import pandas as pd
+            sql = "SELECT `trade_date` FROM `cn_stock_trade_date` ORDER BY `trade_date`"
+            df = pd.read_sql(sql, con=mdb.engine())
+            if df is not None and len(df) > 30:
+                dates = set(pd.to_datetime(df['trade_date']).dt.date.tolist())
+                logging.info(f"fetch_stocks_trade_date: 从 cn_stock_trade_date 获取 {len(dates)} 个交易日")
+                return dates
+            else:
+                logging.info(f"fetch_stocks_trade_date: cn_stock_trade_date 仅有 {len(df) if df is not None else 0} 条记录，尝试其他数据源")
+    except Exception as e:
+        logging.warning(f"fetch_stocks_trade_date: cn_stock_trade_date 查询失败: {e}")
+
+    # 次选：从 cn_stock_spot 表提取历史交易日期（零代理、零API）
+    spot_dates = None
     try:
         import instock.lib.database as mdb
         if mdb.checkTableIsExist('cn_stock_spot'):
@@ -233,11 +251,13 @@ def fetch_stocks_trade_date():
             sql = "SELECT DISTINCT `date` FROM `cn_stock_spot` ORDER BY `date`"
             df = pd.read_sql(sql, con=mdb.engine())
             if df is not None and len(df) > 0:
-                dates = set(pd.to_datetime(df['date']).dt.date.tolist())
-                if len(dates) > 30:
-                    return dates
+                spot_dates = set(pd.to_datetime(df['date']).dt.date.tolist())
+                if len(spot_dates) > 30:
+                    logging.info(f"fetch_stocks_trade_date: 从 cn_stock_spot 获取 {len(spot_dates)} 个交易日")
+                    _persist_trade_dates(spot_dates)
+                    return spot_dates
                 else:
-                    logging.warning(f"fetch_stocks_trade_date: DB仅有{len(dates)}个交易日，数据不足，降级到Sina API")
+                    logging.warning(f"fetch_stocks_trade_date: DB仅有{len(spot_dates)}个交易日，数据不足，降级到Sina API")
     except Exception as e:
         logging.warning(f"fetch_stocks_trade_date: DB查询失败: {e}")
 
@@ -246,11 +266,44 @@ def fetch_stocks_trade_date():
         data = tdh.tool_trade_date_hist_sina()
         if data is not None and len(data.index) > 0:
             data_date = set(data['trade_date'].values.tolist())
+            _persist_trade_dates(data_date)
             return data_date
     except Exception as e:
         logging.error(f"stockfetch.fetch_stocks_trade_date处理异常", exc_info=True)
 
     return None
+
+
+def _persist_trade_dates(dates):
+    """将交易日历数据持久化到 cn_stock_trade_date 表（INSERT IGNORE 去重）"""
+    try:
+        import instock.lib.database as mdb
+        import pandas as pd
+
+        # 确保表存在
+        mdb.executeSql(
+            "CREATE TABLE IF NOT EXISTS `cn_stock_trade_date` ("
+            "  `trade_date` date NOT NULL,"
+            "  PRIMARY KEY (`trade_date`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
+        )
+
+        # 转成 DataFrame 写入
+        date_list = sorted(dates)
+        df = pd.DataFrame({'trade_date': date_list})
+        df['trade_date'] = pd.to_datetime(df['trade_date'])
+
+        from sqlalchemy import Date
+        mdb.insert_db_from_df(
+            df,
+            'cn_stock_trade_date',
+            cols_type={'trade_date': Date},
+            write_index=False,
+            primary_keys=['trade_date'],
+        )
+        logging.info(f"_persist_trade_dates: 已写入/更新 {len(date_list)} 个交易日到 cn_stock_trade_date")
+    except Exception as e:
+        logging.warning(f"_persist_trade_dates: 持久化交易日历失败（不影响当前查询）: {e}")
 
 
 # 读取当天ETF数据（支持多数据源自动切换）

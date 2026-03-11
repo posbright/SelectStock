@@ -45,7 +45,6 @@ except Exception:
     )
 import init_job as bj
 import subprocess
-import fetch_data_job as fdj
 import basic_data_daily_job as hdj
 import selection_data_daily_job as sddj
 
@@ -112,19 +111,10 @@ def main():
         logging.debug("释放单例缓存异常", exc_info=True)
 
     # Phase 1: 历史K线缓存更新（内存密集型，放在最后执行）
-    # 即使此步骤因 OOM 失败，上面的轻量级数据已经成功入库
-    try:
-        fdj.main()
-    except Exception as e:
-        logging.error(f"数据获取 fetch_data(K线缓存) 异常", exc_info=True)
-
-    # 最终释放单例
-    try:
-        from instock.core.singleton_stock import stock_data
-        stock_data.release()
-        gc.collect()
-    except Exception as e:
-        logging.debug(f"释放单例跳过: {e}")
+    # 以独立子进程运行：该步骤处理 ~5000 只股票的K线缓存，
+    # 在 1.6GB 内存服务器上经常因 OOM 被杀（exit code 137）。
+    # 即使此子进程被杀，上面的轻量级数据已经成功入库。
+    _run_job_subprocess('fetch_data_job.py', '数据获取 fetch_data(K线缓存)', timeout=36000)
 
     elapsed = time.time() - start
     logging.info("====== 数据获取任务完成，耗时 %.1f 秒 ======" % elapsed)

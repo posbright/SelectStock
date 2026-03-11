@@ -28,7 +28,6 @@ except Exception:
     )
 import init_job as bj
 import subprocess
-import fetch_data_job as fdj
 import basic_data_daily_job as hdj
 import streaming_analysis_job as saj
 import backtest_data_daily_job as bdj
@@ -165,19 +164,19 @@ def main():
     # 在 1.6GB 内存服务器上可能因 OOM 被杀，因此放在轻量级任务之后。
     # 即使此步骤失败，Phase 1 的关键数据已安全入库。
     # ================================================================
+    # 释放 stock_data 单例以腾出内存给 K线缓存更新
     try:
-        # 释放 stock_data 单例以腾出内存给 K线缓存更新
-        try:
-            from instock.core.singleton_stock import stock_data
-            stock_data.release()
-            gc.collect()
-            logging.info("Phase 2: 已释放 stock_data 单例，回收内存")
-        except Exception:
-            logging.debug("释放 stock_data 单例异常", exc_info=True)
+        from instock.core.singleton_stock import stock_data
+        stock_data.release()
+        gc.collect()
+        logging.info("Phase 2: 已释放 stock_data 单例，回收内存")
+    except Exception:
+        logging.debug("释放 stock_data 单例异常", exc_info=True)
 
-        fdj.main()  # 历史K线缓存增量更新（低内存模式）
-    except Exception as e:
-        logging.error(f"execute_daily_job K线缓存更新异常（不影响已入库数据）", exc_info=True)
+    # 以独立子进程运行：该步骤处理 ~5000 只股票的K线缓存，
+    # 在 1.6GB 内存服务器上经常因 OOM 被杀（exit code 137）。
+    # 即使此子进程被杀，Phase 1 的关键数据已安全入库。
+    _run_job_subprocess('fetch_data_job.py', 'execute_daily_job K线缓存更新', timeout=36000)
 
     # 释放 stock_data 单例：如果预加载失败，单例缓存了 None，
     # Phase 3 流式分析调用 stock_data(date).get_data() 会得到缓存的 None 从而跳过。
