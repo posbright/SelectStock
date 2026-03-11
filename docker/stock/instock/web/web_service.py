@@ -109,6 +109,13 @@ class SPAHandler(tornado.web.RequestHandler, ABC):
     def get(self, path=""):
         # 如果请求的是一个实际存在的静态文件，直接返回
         full_path = os.path.join(self.spa_path, path)
+        # 安全检查：防止路径遍历攻击（如 ../../etc/passwd）
+        real_spa = os.path.realpath(self.spa_path)
+        real_full = os.path.realpath(full_path)
+        if not real_full.startswith(real_spa + os.sep) and real_full != real_spa:
+            self.set_status(403)
+            self.write("Forbidden")
+            return
         if path and os.path.isfile(full_path):
             # 根据扩展名设置 Content-Type
             import mimetypes

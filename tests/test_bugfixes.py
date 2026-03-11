@@ -275,8 +275,8 @@ print("\n🔧 测试 4: singleton_trade_date.py 修复")
 def _():
     import inspect
     from instock.core import singleton_trade_date
-    source = inspect.getsource(singleton_trade_date.stock_trade_date.__init__)
-    assert 'self.data = None' in source, "except 中应设置 self.data = None"
+    source = inspect.getsource(singleton_trade_date.stock_trade_date._refresh)
+    assert 'self.data = None' in source, "_refresh 的 except 中应设置 self.data = None"
 
 
 # ============================================================
@@ -392,12 +392,12 @@ def _():
 # ============================================================
 print("\n🔧 测试 8: eastmoney_fetcher.py 修复")
 
-@test("默认 retry=2")
+@test("默认 retry=3")
 def _():
     import inspect
     from instock.core.eastmoney_fetcher import eastmoney_fetcher
     sig = inspect.signature(eastmoney_fetcher.make_request)
-    assert sig.parameters['retry'].default == 2, f"retry 默认值应为 2，实际 {sig.parameters['retry'].default}"
+    assert sig.parameters['retry'].default == 3, f"retry 默认值应为 3，实际 {sig.parameters['retry'].default}"
 
 @test("无过度预延迟")
 def _():

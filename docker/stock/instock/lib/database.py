@@ -3,38 +3,23 @@
 
 import logging
 import os
+import time
 import pymysql
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.types import NVARCHAR
 from sqlalchemy import inspect
+from sqlalchemy.dialects.mysql import insert as mysql_insert
 from urllib.parse import quote_plus
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
 
-db_host = "115.29.213.22"  # 数据库服务主机
-db_user = "root"  # 数据库访问用户
-db_password = "Dzm@ming&662"  # 数据库访问密码
-db_database = "instockdb"  # 数据库名称
-db_port = 3306  # 数据库服务端口
+db_host = os.environ.get('db_host', '127.0.0.1')  # 数据库服务主机（默认本地）
+db_user = os.environ.get('db_user', 'root')  # 数据库访问用户
+db_password = os.environ.get('db_password', '')  # 数据库访问密码（生产环境务必通过环境变量配置）
+db_database = os.environ.get('db_database', 'instockdb')  # 数据库名称
+db_port = int(os.environ.get('db_port', '3306'))  # 数据库服务端口
 db_charset = "utf8mb4"  # 数据库字符集
-
-# 使用环境变量获得数据库,docker -e 传递
-_db_host = os.environ.get('db_host')
-if _db_host is not None:
-    db_host = _db_host
-_db_user = os.environ.get('db_user')
-if _db_user is not None:
-    db_user = _db_user
-_db_password = os.environ.get('db_password')
-if _db_password is not None:
-    db_password = _db_password
-_db_database = os.environ.get('db_database')
-if _db_database is not None:
-    db_database = _db_database
-_db_port = os.environ.get('db_port')
-if _db_port is not None:
-    db_port = int(_db_port)
 
 # 对密码进行URL编码，处理特殊字符
 _encoded_password = quote_plus(db_password)
@@ -76,11 +61,42 @@ def engine_to_db(to_db):
 
 # DB Api -数据库连接对象connection
 def get_connection():
-    try:
-        return pymysql.connect(**MYSQL_CONN_DBAPI)
-    except Exception as e:
-        logging.error(f"database.get_connection处理异常", exc_info=True)
-        raise
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            return pymysql.connect(**MYSQL_CONN_DBAPI)
+        except Exception as e:
+            if attempt < max_retries and _is_retryable_error(e):
+                logging.warning(f"database.get_connection瞬态错误（第{attempt}/{max_retries}次重试）：{type(e).__name__}")
+                time.sleep(1 * attempt)
+            else:
+                logging.error(f"database.get_connection处理异常", exc_info=True)
+                raise
+
+
+# MySQL upsert方法：INSERT ... ON DUPLICATE KEY UPDATE
+# 解决并发写入时的主键冲突、死锁等问题
+def _mysql_upsert(table, conn, keys, data_iter):
+    """pandas to_sql 的自定义 method，使用 INSERT ... ON DUPLICATE KEY UPDATE"""
+    data = [dict(zip(keys, row)) for row in data_iter]
+    if not data:
+        return 0
+    stmt = mysql_insert(table.table).values(data)
+    # 主键冲突时，更新所有非主键列
+    update_dict = {k: stmt.inserted[k] for k in keys}
+    upsert_stmt = stmt.on_duplicate_key_update(**update_dict)
+    result = conn.execute(upsert_stmt)
+    return result.rowcount
+
+
+# 判断是否为可重试的数据库瞬态错误（死锁、锁超时、连接异常等）
+def _is_retryable_error(e):
+    error_str = str(e)
+    retryable_codes = ['1205', '1213', 'Deadlock', 'Lock wait timeout',
+                       'Packet sequence', 'PendingRollbackError',
+                       'Lost connection', 'Gone away', 'Can\'t connect',
+                       'Connection refused', 'broken pipe']
+    return any(code.lower() in error_str.lower() for code in retryable_codes)
 
 
 # 定义通用方法函数，插入数据库表，并创建数据库主键，保证重跑数据的时候索引唯一。
@@ -104,21 +120,53 @@ def insert_other_db_from_df(to_db, data, table_name, cols_type, write_index, pri
     if write_index:
         # 插入到第一个位置：
         col_name_list.insert(0, data.index.name)
-    try:
-        if cols_type is None:
-            data.to_sql(name=table_name, con=engine_mysql, schema=to_db, if_exists='append',
-                        index=write_index, )
-        elif not cols_type:
-            data.to_sql(name=table_name, con=engine_mysql, schema=to_db, if_exists='append',
-                        dtype={col_name: NVARCHAR(255) for col_name in col_name_list}, index=write_index, )
-        else:
-            data.to_sql(name=table_name, con=engine_mysql, schema=to_db, if_exists='append',
-                        dtype=cols_type, index=write_index, )
-    except Exception as e:
-        logging.error(f"database.insert_other_db_from_df处理异常：{table_name}表", exc_info=True)
-        return
 
-    # 判断是否存在主键
+    # 检查表是否已存在主键，决定是否使用upsert模式
+    has_primary_key = False
+    try:
+        pk_cols = ipt.get_pk_constraint(table_name)['constrained_columns']
+        has_primary_key = bool(pk_cols)
+    except Exception:
+        logging.debug(f"检查主键约束异常（表可能不存在，首次创建）：{table_name}", exc_info=True)
+
+    # 选择插入方法：有主键时使用upsert避免重复插入错误，否则普通append
+    insert_method = _mysql_upsert if has_primary_key else None
+
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            if cols_type is None:
+                data.to_sql(name=table_name, con=engine_mysql, schema=to_db, if_exists='append',
+                            index=write_index, method=insert_method)
+            elif not cols_type:
+                data.to_sql(name=table_name, con=engine_mysql, schema=to_db, if_exists='append',
+                            dtype={col_name: NVARCHAR(255) for col_name in col_name_list},
+                            index=write_index, method=insert_method)
+            else:
+                data.to_sql(name=table_name, con=engine_mysql, schema=to_db, if_exists='append',
+                            dtype=cols_type, index=write_index, method=insert_method)
+            break  # 成功则跳出重试循环
+        except Exception as e:
+            if attempt < max_retries and _is_retryable_error(e):
+                logging.warning(f"database.insert_other_db_from_df瞬态错误（第{attempt}/{max_retries}次重试）：{table_name}表 - {type(e).__name__}")
+                # 清理连接池中可能损坏的连接
+                try:
+                    engine_mysql.dispose()
+                except Exception:
+                    logging.debug(f"database.insert_other_db_from_df: dispose引擎异常", exc_info=True)
+                # 重新获取engine（单例模式下dispose后需要重建）
+                if to_db is None:
+                    global _engine_instance
+                    _engine_instance = None
+                    engine_mysql = engine()
+                else:
+                    engine_mysql = engine_to_db(to_db)
+                time.sleep(2 * attempt)  # 递增等待时间
+            else:
+                logging.error(f"database.insert_other_db_from_df处理异常：{table_name}表", exc_info=True)
+                return
+
+    # 判断是否存在主键（仅在首次创建表时添加）
     try:
         pk_exists = ipt.get_pk_constraint(table_name)['constrained_columns']
     except Exception as e:
@@ -184,9 +232,9 @@ def checkTableIsExist(tableName):
                 db.execute("""
                     SELECT COUNT(*)
                     FROM information_schema.tables
-                    WHERE table_name = %s
-                    """, (tableName,))
-                if db.fetchone()[0] == 1:
+                    WHERE table_schema = %s AND table_name = %s
+                    """, (db_database, tableName))
+                if db.fetchone()[0] >= 1:
                     return True
     except Exception as e:
         logging.error(f"database.checkTableIsExist处理异常", exc_info=True)
@@ -194,11 +242,18 @@ def checkTableIsExist(tableName):
 
 # 增删改数据
 def executeSql(sql, params=()):
-    with get_connection() as conn:
-        with conn.cursor() as db:
-            try:
-                db.execute(sql, params)
-            except Exception as e:
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as db:
+                    db.execute(sql, params)
+                    return
+        except Exception as e:
+            if attempt < max_retries and _is_retryable_error(e):
+                logging.warning(f"database.executeSql瞬态错误（第{attempt}/{max_retries}次重试）：{type(e).__name__}")
+                time.sleep(1 * attempt)
+            else:
                 logging.error(f"database.executeSql处理异常：{sql}", exc_info=True)
                 raise
 

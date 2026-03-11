@@ -14,29 +14,12 @@ from urllib.parse import quote_plus
 __author__ = 'InStock'
 __date__ = '2026/02/14'
 
-db_host = "115.29.213.22"  # 数据库服务主机
-db_user = "root"  # 数据库访问用户
-db_password = "Dzm@ming&662"  # 数据库访问密码
-db_database = "instockdb"  # 数据库名称
-db_port = 3306  # 数据库服务端口
+db_host = os.environ.get('db_host', '127.0.0.1')  # 数据库服务主机（默认本地）
+db_user = os.environ.get('db_user', 'root')  # 数据库访问用户
+db_password = os.environ.get('db_password', '')  # 数据库访问密码（生产环境务必通过环境变量配置）
+db_database = os.environ.get('db_database', 'instockdb')  # 数据库名称
+db_port = int(os.environ.get('db_port', '3306'))  # 数据库服务端口
 db_charset = "utf8mb4"  # 数据库字符集
-
-# 使用环境变量获得数据库,docker -e 传递
-_db_host = os.environ.get('db_host')
-if _db_host is not None:
-    db_host = _db_host
-_db_user = os.environ.get('db_user')
-if _db_user is not None:
-    db_user = _db_user
-_db_password = os.environ.get('db_password')
-if _db_password is not None:
-    db_password = _db_password
-_db_database = os.environ.get('db_database')
-if _db_database is not None:
-    db_database = _db_database
-_db_port = os.environ.get('db_port')
-if _db_port is not None:
-    db_port = int(_db_port)
 
 # 对密码进行URL编码，处理特殊字符
 _encoded_password = quote_plus(db_password)
@@ -249,9 +232,9 @@ def checkTableIsExist(tableName):
                 db.execute("""
                     SELECT COUNT(*)
                     FROM information_schema.tables
-                    WHERE table_name = %s
-                    """, (tableName,))
-                if db.fetchone()[0] == 1:
+                    WHERE table_schema = %s AND table_name = %s
+                    """, (db_database, tableName))
+                if db.fetchone()[0] >= 1:
                     return True
     except Exception as e:
         logging.error(f"database.checkTableIsExist处理异常", exc_info=True)

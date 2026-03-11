@@ -88,6 +88,9 @@ def fetch_all_data(date):
         
         _subset = spot[list(tbs.TABLE_CN_STOCK_FOREIGN_KEY['columns'])]
         stocks = [tuple(x) for x in _subset.values]
+        if not stocks:
+            logging.warning("股票列表为空，跳过K线缓存更新")
+            return
         
         years = stf.HIST_DATA_DEFAULT_YEARS
         date_start, _ = trd.get_trade_hist_interval(stocks[0][0], years)

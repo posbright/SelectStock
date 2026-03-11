@@ -64,7 +64,12 @@ def main():
         logging.warning("执行信息：数据库不存在，将创建。")
         # 检查数据库失败，
         create_new_database()
-    # 执行数据初始化。
+
+    # 无论数据库是新建还是已存在，确保基础表存在（CREATE TABLE IF NOT EXISTS 幂等）
+    try:
+        create_new_base_table()
+    except Exception as e:
+        logging.error(f"init_job.create_new_base_table处理异常", exc_info=True)
 
 
 # main函数入口
