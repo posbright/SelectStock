@@ -1638,6 +1638,23 @@ def read_stock_hist_from_cache(code, date_start, date_end):
         
         if len(data) == 0:
             return None
+
+        # ── DB 回填：缓存不含目标日期时，从 cn_stock_spot 补充当日行情 ──
+        # 场景：Phase 2（K线缓存更新）因 OOM 被杀，缓存停留在前一天，
+        # 但 Phase 1 已成功入库当日 cn_stock_spot 行情。
+        # 此处从 DB 读取当日行情并追加到缓存 DataFrame，使分析能产出当日指标。
+        try:
+            data_max_str = _to_date_str(data['date'].max())
+            if data_max_str < date_end:
+                _spot_row = _backfill_from_spot(code, date_end)
+                if _spot_row is not None:
+                    # 保留与缓存相同的列
+                    valid_cols = [c for c in data.columns if c in _spot_row.columns]
+                    _spot_row = _spot_row[valid_cols]
+                    data = pd.concat([data, _spot_row], ignore_index=True)
+                    logging.debug(f"DB回填：{code} 补充 {_to_dash_date(date_end)} 行情（来自 cn_stock_spot）")
+        except Exception:
+            pass  # 回填失败不影响已有数据的正常处理
         
         # 添加 p_change 列和 volume 单位转换
         data['p_change'] = tl.ROC(data['close'].values, 1)
@@ -1646,4 +1663,39 @@ def read_stock_hist_from_cache(code, date_start, date_end):
         return data
     except Exception as e:
         logging.error(f"read_stock_hist_from_cache处理异常：{code} -", exc_info=True)
+    return None
+
+
+def _backfill_from_spot(code, date_end_yyyymmdd):
+    """
+    从 cn_stock_spot 表读取指定日期的行情，转换为 K线缓存兼容的格式。
+    
+    cn_stock_spot 列名与 K线缓存列名的映射：
+      new_price → close, open_price → open, high_price → high, low_price → low
+      volume → volume（单位：股，缓存中是手，需要 /100）
+      deal_amount → amount, amplitude → amplitude
+      change_rate → quote_change, ups_downs → ups_downs
+      turnoverrate → turnover
+    
+    Returns:
+        pd.DataFrame | None: 包含一行的 DataFrame（与缓存列名兼容），或 None
+    """
+    try:
+        import instock.lib.database as mdb
+        date_dash = _to_dash_date(date_end_yyyymmdd)
+        if not mdb.checkTableIsExist('cn_stock_spot'):
+            return None
+        sql = (
+            "SELECT `date`, `new_price` AS `close`, `open_price` AS `open`, "
+            "`high_price` AS `high`, `low_price` AS `low`, "
+            "`volume` / 100 AS `volume`, `deal_amount` AS `amount`, "
+            "`amplitude`, `change_rate` AS `quote_change`, "
+            "`ups_downs`, `turnoverrate` AS `turnover` "
+            "FROM `cn_stock_spot` WHERE `code` = %s AND `date` = %s LIMIT 1"
+        )
+        df = pd.read_sql(sql, mdb.engine(), params=(code, date_dash))
+        if df is not None and len(df) > 0:
+            return df
+    except Exception as e:
+        logging.debug(f"_backfill_from_spot 异常：{code} {date_end_yyyymmdd} - {e}")
     return None

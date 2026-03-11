@@ -126,6 +126,14 @@ def streaming_analysis(date):
     date_str = date.strftime("%Y-%m-%d")
     logging.info(f"===== Phase 4: 流式分析开始 [{date_str}] =====")
 
+    # 检查 Phase 2 是否失败（由 execute_daily_job 设置环境变量）
+    phase2_failed = os.environ.get('INSTOCK_PHASE2_FAILED', '') == '1'
+    if phase2_failed:
+        logging.warning(
+            "⚠ Phase 2 K线缓存更新失败（可能 OOM），本次分析将使用已有缓存。"
+            "指标/策略结果基于缓存中最后一根K线，可能不包含当日行情。"
+        )
+
     # 1. 获取股票列表 — 优先从数据库读取（零API），单例作为降级方案
     spot = _get_stock_list_from_db(date)
     if spot is not None:
@@ -195,6 +203,7 @@ def streaming_analysis(date):
     processed = 0
     skipped = 0
     errors = 0
+    stale_cache = 0  # 缓存数据不含目标日期的股票数
 
     # 6. 逐只股票流式处理（多线程并发，但控制同时在内存中的数据量）
     # workers=2 意味着同时最多 2 只股票的历史数据在内存中（~0.7 MB）
@@ -204,12 +213,23 @@ def streaming_analysis(date):
         result = {
             'indicator': None,
             'kline': None,
-            'strategies': {}  # {table_name: True/False}
+            'strategies': {},  # {table_name: True/False}
+            'stale': False,    # 缓存不含目标日期
         }
 
         hist_data = stf.read_stock_hist_from_cache(code, date_start, date_end)
         if hist_data is None or len(hist_data) == 0:
             return stock, 'skipped', result
+
+        # 检测缓存新鲜度：缓存最后日期是否 >= 目标日期
+        try:
+            cache_max_date = hist_data['date'].max()
+            cache_max_str = cache_max_date.strftime("%Y-%m-%d") if hasattr(cache_max_date, 'strftime') else str(cache_max_date)[:10]
+            if cache_max_str < date_str:
+                result['stale'] = True
+                # 仍然继续处理：基于最后可用K线计算指标（优于跳过）
+        except Exception:
+            pass  # 日期解析异常不影响后续计算
 
         # --- 指标计算 ---
         try:
@@ -260,6 +280,9 @@ def streaming_analysis(date):
                         skipped += 1
                         continue
 
+                    if result.get('stale'):
+                        stale_cache += 1
+
                     if result['indicator'] is not None:
                         indicator_results[stock] = result['indicator']
                     if result['kline'] is not None:
@@ -281,14 +304,27 @@ def streaming_analysis(date):
         for k in strategy_results:
             strategy_results[k] = []
         gc.collect()
-        logging.info(f"流式分析进度：{processed}/{total_stocks}（跳过 {skipped}，错误 {errors}）")
+        logging.info(f"流式分析进度：{processed}/{total_stocks}（跳过 {skipped}，过期缓存 {stale_cache}，错误 {errors}）")
 
     # 7. 最后一批已在循环内写入，无需额外 flush
 
     elapsed = time.time() - start_time
+
+    # 缓存过期率检测：大量过期缓存意味着 Phase 2 可能失败
+    if stale_cache > 0:
+        stale_pct = stale_cache / max(processed, 1) * 100
+        if stale_pct > 80:
+            logging.warning(
+                f"⚠ 缓存过期率 {stale_pct:.0f}%（{stale_cache}/{processed}）！"
+                f"K线缓存未包含 {date_str} 的数据，指标/策略结果基于前一交易日。"
+                f"请检查 Phase 2（fetch_data_job）是否因 OOM 被杀。"
+            )
+        else:
+            logging.info(f"缓存过期：{stale_cache} 只股票的缓存未覆盖 {date_str}（占比 {stale_pct:.1f}%）")
+
     logging.info(
         f"===== Phase 4: 流式分析完成 =====\n"
-        f"  总数: {total_stocks}，处理: {processed}，跳过: {skipped}，错误: {errors}\n"
+        f"  总数: {total_stocks}，处理: {processed}，跳过: {skipped}，过期缓存: {stale_cache}，错误: {errors}\n"
         f"  耗时: {elapsed:.1f}秒"
     )
 

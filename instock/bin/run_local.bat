@@ -33,11 +33,11 @@ if exist ".venv\Scripts\activate.bat" (
 cd instock\job
 
 REM === 高并发配置（利用本地充足的 CPU 和内存）===
-REM 流式分析并发线程数（服务器默认 2，本地放大到 8）
-set INSTOCK_ANALYSIS_WORKERS=8
+REM 流式分析并发线程数（服务器默认 2，本地放大到 16）
+set INSTOCK_ANALYSIS_WORKERS=16
 
-REM 批量写入大小（服务器默认 50，本地放大到 200）
-set INSTOCK_BATCH_SIZE=200
+REM 批量写入大小（服务器默认 50，本地放大到 1000）
+set INSTOCK_BATCH_SIZE=1000
 
 REM 回测内层并发线程数（服务器默认 2，本地放大到 4）
 set INSTOCK_BACKTEST_INNER_WORKERS=4

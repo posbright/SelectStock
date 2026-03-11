@@ -46,7 +46,11 @@ _JOB_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def _run_job_subprocess(script_name, label, timeout=1800):
-    """以独立子进程运行 job 脚本，防止 OOM 波及当前进程"""
+    """以独立子进程运行 job 脚本，防止 OOM 波及当前进程。
+
+    Returns:
+        bool: True 表示子进程正常退出（exit code 0），False 表示失败/超时/异常。
+    """
     script_path = os.path.join(_JOB_DIR, script_name)
     try:
         logging.info(f"{label}: 启动子进程 {script_name}")
@@ -57,12 +61,16 @@ def _run_job_subprocess(script_name, label, timeout=1800):
         )
         if result.returncode != 0:
             logging.warning(f"{label}: 子进程退出码 {result.returncode}（可能 OOM 被杀）")
+            return False
         else:
             logging.info(f"{label}: 子进程执行成功")
+            return True
     except subprocess.TimeoutExpired:
         logging.error(f"{label}: 子进程执行超时（{timeout}秒）")
+        return False
     except Exception as e:
         logging.error(f"{label}: 子进程启动异常", exc_info=True)
+        return False
 
 
 def _is_analysis_done():
@@ -176,7 +184,16 @@ def main():
     # 以独立子进程运行：该步骤处理 ~5000 只股票的K线缓存，
     # 在 1.6GB 内存服务器上经常因 OOM 被杀（exit code 137）。
     # 即使此子进程被杀，Phase 1 的关键数据已安全入库。
-    _run_job_subprocess('fetch_data_job.py', 'execute_daily_job K线缓存更新', timeout=36000)
+    phase2_ok = _run_job_subprocess('fetch_data_job.py', 'execute_daily_job K线缓存更新', timeout=36000)
+    if not phase2_ok:
+        logging.warning(
+            "⚠ Phase 2 K线缓存更新失败！Phase 3 将使用可能过期的缓存数据运行。"
+            "指标/策略结果基于最后一次成功缓存的K线，结果可能与当日实际行情不符。"
+        )
+        # 设置环境变量：让 streaming_analysis_job 能感知 Phase 2 失败
+        os.environ['INSTOCK_PHASE2_FAILED'] = '1'
+    else:
+        os.environ.pop('INSTOCK_PHASE2_FAILED', None)
 
     # 释放 stock_data 单例：如果预加载失败，单例缓存了 None，
     # Phase 3 流式分析调用 stock_data(date).get_data() 会得到缓存的 None 从而跳过。
