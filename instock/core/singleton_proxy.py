@@ -10,12 +10,15 @@
 3. 后台定时刷新：定期获取新代理、移除不可用代理
 4. 支持手动配置：proxy.txt 中的代理优先级最高
 5. 线程安全：所有操作均加锁保护
+6. 磁盘缓存：验证过的代理持久化，下次启动秒加载
+7. 非阻塞初始化：__init__ 瞬间返回，代理验证在后台完成
 
 使用方式不变：proxys().get_proxies() 返回可用代理或 None
 """
 
 import os.path
 import sys
+import json
 import random
 import time
 import logging
@@ -28,18 +31,22 @@ cpath_current = os.path.dirname(os.path.dirname(__file__))
 cpath = os.path.abspath(os.path.join(cpath_current, os.pardir))
 sys.path.append(cpath)
 proxy_filename = os.path.join(cpath_current, 'config', 'proxy.txt')
+# 磁盘缓存路径：保存已验证代理，下次启动时快速恢复
+_PROXY_CACHE_FILE = os.path.join(cpath_current, 'cache', 'proxy_cache.json')
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
 
 # ── 配置 ──
 PROXY_VALIDATE_URL = "http://datacenter.eastmoney.com/api/data/get"  # HTTP验证（免费代理多不支持HTTPS隧道）
-PROXY_VALIDATE_TIMEOUT = 8          # 验证超时（秒）
+PROXY_VALIDATE_TIMEOUT = 5          # 验证超时（秒）— 好代理通常1-3s内响应
 PROXY_REFRESH_INTERVAL = 600        # 后台刷新间隔（秒），默认10分钟
 PROXY_MIN_POOL_SIZE = 3             # 代理池最少保有量，低于此数触发紧急补充
-PROXY_FETCH_WORKERS = 20            # 并发验证线程数
+PROXY_FETCH_WORKERS = 50            # 并发验证线程数（I/O密集型，可开高）
+PROXY_INIT_BATCH_SIZE = 200         # 初始化时最多验证的候选数（加速启动）
 PROXY_MAX_FAIL_COUNT = 3            # 连续失败次数阈值，超过则移除
 PROXY_STALE_SECONDS = 600           # 代理验证新鲜度阈值（秒），超过此时间未验证的代理权重降低
+PROXY_CACHE_MAX_AGE = 86400         # 磁盘缓存最长有效期（秒），超过则丢弃
 
 
 class proxys(metaclass=singleton_type):
@@ -47,10 +54,11 @@ class proxys(metaclass=singleton_type):
     代理池管理器（单例）
 
     生命周期：
-    1. 首次 proxys() 时初始化：加载 proxy.txt + 抓取免费代理 + 启动后台刷新
-    2. get_proxies() 随机返回一个已验证的可用代理
-    3. report_failure(proxy) 报告代理失败，累积失败次数达阈值后自动移除
-    4. 后台线程每 PROXY_REFRESH_INTERVAL 秒自动刷新
+    1. 首次 proxys() 时初始化：加载 proxy.txt + 磁盘缓存（瞬间完成）
+    2. 后台线程异步验证：缓存代理快速验证 → 抓取新代理 → 补充验证
+    3. get_proxies() 随机返回一个可用代理（初始化完成前返回 None → 直连）
+    4. report_failure(proxy) 报告代理失败，累积失败次数达阈值后自动移除
+    5. 后台线程每 PROXY_REFRESH_INTERVAL 秒自动刷新
     """
 
     def __init__(self):
@@ -62,10 +70,45 @@ class proxys(metaclass=singleton_type):
         self._refresh_thread = None
         self._initialized = False
 
-        # 初始加载
+        # 同步加载（瞬间完成）：手动代理 + 磁盘缓存
         self._load_manual_proxies()
-        self._initial_fetch()
-        self._start_background_refresh()
+        cached_count = self._load_disk_cache()
+
+        # 异步初始化：后台线程完成验证和抓取，不阻塞调用方
+        self._init_thread = threading.Thread(target=self._async_init, args=(cached_count,), daemon=True)
+        self._init_thread.start()
+        logging.info("代理池：初始化已启动（后台异步，不阻塞）")
+
+    def _async_init(self, cached_count):
+        """后台异步初始化：验证缓存代理 → 不足时抓取新代理 → 启动定时刷新"""
+        init_start = time.time()
+        try:
+            # Phase 1: 快速验证磁盘缓存中的代理（通常 <10s）
+            if cached_count > 0:
+                self._revalidate_existing(http_only=True)
+                usable = self.pool_size()
+                logging.info(f"代理池：缓存验证完成，{usable}/{cached_count} 个可用 ({time.time() - init_start:.1f}s)")
+                if usable >= PROXY_MIN_POOL_SIZE:
+                    self._initialized = True
+
+            # Phase 2: 代理不足时抓取新代理
+            if self.pool_size() < PROXY_MIN_POOL_SIZE:
+                self._initial_fetch()
+
+            self._initialized = True
+
+            # Phase 3: 后台补充 HTTPS 验证（不阻塞，低优先级）
+            self._upgrade_https_in_background()
+        except Exception as e:
+            logging.warning(f"代理池：异步初始化异常: {e}")
+            self._initialized = True  # 即使失败也标记完成，避免永远阻塞
+        finally:
+            elapsed = time.time() - init_start
+            logging.info(f"代理池：初始化完成，可用 {self.pool_size()} 个 ({elapsed:.1f}s)")
+            # 持久化到磁盘
+            self._save_disk_cache()
+            # 启动后台定时刷新
+            self._start_background_refresh()
 
     def _load_manual_proxies(self):
         """从 proxy.txt 加载手动配置的代理"""
@@ -80,16 +123,120 @@ class proxys(metaclass=singleton_type):
         except Exception:
             logging.debug("代理池：加载 proxy.txt 异常", exc_info=True)
 
+    def _load_disk_cache(self):
+        """
+        从磁盘缓存加载上次验证过的代理（瞬间完成）。
+        仅加载到 _pool 中（fail_count=0 但 last_verified 保留原始时间），
+        后续 _revalidate_existing 会重新验证。
+        返回加载的代理数量。
+        """
+        try:
+            if not os.path.isfile(_PROXY_CACHE_FILE):
+                return 0
+            with open(_PROXY_CACHE_FILE, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+            if not isinstance(cache, dict):
+                return 0
+            now = time.time()
+            loaded = 0
+            for proxy_url, info in cache.get('proxies', {}).items():
+                # 跳过过期缓存
+                last_verified = info.get('last_verified', 0)
+                if now - last_verified > PROXY_CACHE_MAX_AGE:
+                    continue
+                # 跳过已在池中的（手动代理优先）
+                if proxy_url in self._pool:
+                    continue
+                self._pool[proxy_url] = {
+                    "fail_count": 0,
+                    "last_verified": last_verified,
+                    "manual": False,
+                    "https_ok": info.get("https_ok", False),
+                }
+                loaded += 1
+            if loaded > 0:
+                logging.info(f"代理池：从磁盘缓存加载了 {loaded} 个代理（待验证）")
+            return loaded
+        except Exception:
+            logging.debug("代理池：加载磁盘缓存异常", exc_info=True)
+            return 0
+
+    def _save_disk_cache(self):
+        """将当前可用代理持久化到磁盘"""
+        try:
+            with self._lock:
+                available = {
+                    p: {"last_verified": info["last_verified"], "https_ok": info.get("https_ok", False)}
+                    for p, info in self._pool.items()
+                    if info["fail_count"] < PROXY_MAX_FAIL_COUNT and not info.get("manual", False)
+                }
+            if not available:
+                return
+            os.makedirs(os.path.dirname(_PROXY_CACHE_FILE), exist_ok=True)
+            cache = {"saved_at": time.time(), "proxies": available}
+            with open(_PROXY_CACHE_FILE, 'w', encoding='utf-8') as f:
+                json.dump(cache, f, indent=2)
+            logging.debug(f"代理池：已缓存 {len(available)} 个代理到磁盘")
+        except Exception:
+            logging.debug("代理池：保存磁盘缓存异常", exc_info=True)
+
+    def _upgrade_https_in_background(self):
+        """对池中未测试 HTTPS 的代理补充 HTTPS 验证（低优先级）"""
+        with self._lock:
+            to_upgrade = [p for p, info in self._pool.items()
+                          if info["fail_count"] < PROXY_MAX_FAIL_COUNT and not info.get("https_ok")]
+        if not to_upgrade:
+            return
+
+        import concurrent.futures
+        https_upgraded = 0
+        with concurrent.futures.ThreadPoolExecutor(max_workers=PROXY_FETCH_WORKERS) as executor:
+            futures = {}
+            for proxy_url in to_upgrade:
+                # 只做 HTTPS 单项验证
+                futures[executor.submit(self._validate_https_only, proxy_url)] = proxy_url
+            for future in concurrent.futures.as_completed(futures):
+                proxy_url = futures[future]
+                try:
+                    https_ok = future.result()
+                    if https_ok:
+                        with self._lock:
+                            if proxy_url in self._pool:
+                                self._pool[proxy_url]["https_ok"] = True
+                                https_upgraded += 1
+                except Exception:
+                    pass
+        if https_upgraded > 0:
+            logging.info(f"代理池：HTTPS升级完成，{https_upgraded} 个代理支持 HTTPS 隧道")
+
+    def _validate_https_only(self, proxy_url):
+        """仅验证 HTTPS 隧道（假设 HTTP 已通过验证）"""
+        proxies = {"http": proxy_url, "https": proxy_url}
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'https://quote.eastmoney.com/',
+        }
+        try:
+            r = requests.get(
+                "https://push2.eastmoney.com/api/qt/clist/get",
+                headers=headers,
+                proxies=proxies,
+                timeout=PROXY_VALIDATE_TIMEOUT,
+                params={"pn": "1", "pz": "3", "fields": "f2,f12,f14",
+                        "fs": "m:0+t:6+f:!2", "ut": "fa5fd1943c7b386f172d6893dbfba10b"}
+            )
+            return r.status_code == 200 and len(r.text) > 50
+        except Exception:
+            return False
+
     def _initial_fetch(self):
-        """初始化时抓取免费代理（限制候选数量加速启动）"""
+        """抓取免费代理并验证（仅HTTP，跳过HTTPS以加速）"""
         logging.info("代理池：正在从免费代理源获取代理...")
         candidates = self._fetch_from_sources()
         if candidates:
-            # 初始化时验证前800个，加速启动；后台刷新时会验证更多
-            # 随机打乱以混合不同来源的代理，避免总是验证同一批
             random.shuffle(candidates)
-            batch = candidates[:800]
-            verified = self._batch_validate(batch)
+            batch = candidates[:PROXY_INIT_BATCH_SIZE]
+            verified = self._batch_validate(batch, http_only=True)
             logging.info(f"代理池：获取 {len(candidates)} 个候选代理，验证 {len(batch)} 个，通过 {len(verified)} 个")
         else:
             logging.warning("代理池：未能从免费代理源获取到候选代理")
@@ -512,11 +659,11 @@ class proxys(metaclass=singleton_type):
     # 代理验证
     # ══════════════════════════════════════════════
 
-    def _validate_one(self, proxy_url):
+    def _validate_one(self, proxy_url, http_only=False):
         """
         验证单个代理是否可用
         1. 先测 HTTP 连通性（用东方财富 datacenter API）
-        2. 再测 HTTPS 隧道支持（用 push2 API）
+        2. http_only=False 时，再测 HTTPS 隧道支持（用 push2 API）
         返回 (http_ok, https_ok)
         """
         proxies = {"http": proxy_url, "https": proxy_url}
@@ -546,6 +693,10 @@ class proxys(metaclass=singleton_type):
         if not http_ok:
             return False, False
 
+        # http_only 模式跳过 HTTPS 验证（初始化时用，节省一半时间）
+        if http_only:
+            return True, False
+
         # Step 2: HTTPS 隧道验证（可选，不通过也保留为 HTTP-only 代理）
         https_ok = False
         try:
@@ -564,9 +715,10 @@ class proxys(metaclass=singleton_type):
 
         return http_ok, https_ok
 
-    def _batch_validate(self, candidates, max_workers=None):
+    def _batch_validate(self, candidates, max_workers=None, http_only=False):
         """
         批量并发验证代理，将通过验证的加入池中
+        http_only=True 时跳过 HTTPS 验证（初始化加速）
         返回通过验证的代理列表
         """
         if not candidates:
@@ -587,7 +739,7 @@ class proxys(metaclass=singleton_type):
         https_count = 0
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_proxy = {executor.submit(self._validate_one, p): p for p in new_candidates}
+            future_to_proxy = {executor.submit(self._validate_one, p, http_only): p for p in new_candidates}
             for future in concurrent.futures.as_completed(future_to_proxy):
                 proxy = future_to_proxy[future]
                 try:
@@ -610,7 +762,7 @@ class proxys(metaclass=singleton_type):
             logging.info(f"代理池：其中 {https_count} 个支持 HTTPS 隧道")
         return verified
 
-    def _revalidate_existing(self):
+    def _revalidate_existing(self, http_only=False):
         """重新验证池中已有代理，移除不可用的"""
         with self._lock:
             to_check = list(self._pool.keys())
@@ -621,7 +773,7 @@ class proxys(metaclass=singleton_type):
         removed = 0
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor(max_workers=PROXY_FETCH_WORKERS) as executor:
-            future_to_proxy = {executor.submit(self._validate_one, p): p for p in to_check}
+            future_to_proxy = {executor.submit(self._validate_one, p, http_only): p for p in to_check}
             for future in concurrent.futures.as_completed(future_to_proxy):
                 proxy = future_to_proxy[future]
                 try:
@@ -688,6 +840,9 @@ class proxys(metaclass=singleton_type):
 
         # Step 3: 重新加载 proxy.txt（支持运行时修改）
         self._load_manual_proxies()
+
+        # Step 4: 持久化到磁盘
+        self._save_disk_cache()
 
     def stop(self):
         """停止后台刷新"""
