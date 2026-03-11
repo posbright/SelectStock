@@ -13,6 +13,11 @@ export LANG=zh_CN.UTF-8
 export PYTHONPATH=$PROJECT_ROOT
 export LC_CTYPE=zh_CN.UTF-8
 
+# 加载项目 .env 文件中的数据库等配置
+if [ -f "$PROJECT_ROOT/.env" ]; then
+    set -a; source "$PROJECT_ROOT/.env"; set +a
+fi
+
 LOG_DIR=$PROJECT_ROOT/instock/log
 mkdir -p $LOG_DIR
 LOG_FILE=$LOG_DIR/workdayly.log

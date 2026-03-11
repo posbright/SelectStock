@@ -11,6 +11,18 @@ from sqlalchemy import inspect
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from urllib.parse import quote_plus
 
+# 自动加载项目根目录下的 .env 文件（兼容方法 B）
+# .env 中的变量不会覆盖已存在的环境变量（方法 A 优先）
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    # 向上查找到项目根目录（instock/lib/database.py → 项目根）
+    _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    _env_path = os.path.join(_project_root, '.env')
+    if os.path.isfile(_env_path):
+        _load_dotenv(_env_path, override=False)
+except ImportError:
+    pass  # python-dotenv 未安装时静默跳过，仅使用环境变量
+
 __author__ = 'InStock'
 __date__ = '2026/02/14'
 
