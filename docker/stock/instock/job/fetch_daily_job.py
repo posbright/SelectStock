@@ -106,18 +106,28 @@ def _run_job_subprocess(script_name, label, timeout=_JOB_TIMEOUT):
 
 
 def _check_and_skip(table_name, date_str, task_label):
-    """检查数据新鲜度，决定是否跳过该任务。
+    """检查 API 数据新鲜度，决定是否跳过该任务。
+
+    跳过条件（同时满足）：
+    1. 未设置 INSTOCK_FORCE_FETCH=1
+    2. 当前时间已过结算时间（默认 18:00），API 数据不再变化
+    3. 表中当日数据行数 >= 阈值
 
     Returns:
-        bool: True 表示数据已完整，应跳过该任务。
+        bool: True 表示数据已完整且已结算，应跳过该任务。
     """
     if _cfg.get_bool('INSTOCK_FORCE_FETCH', False):
+        return False
+
+    # API 数据仅在结算时间后（默认 18:00）才可信赖跳过
+    if not trd.is_post_settlement(date_str):
+        logging.info(f"[{task_label}] 尚未过结算时间，需更新 API 数据")
         return False
 
     threshold = _FRESHNESS_THRESHOLDS.get(table_name, 1)
     fresh, count = is_data_fresh(table_name, date_str, threshold)
     if fresh:
-        logging.info(f"[{task_label}] 数据已完整（{table_name}: {count} 条 >= {threshold}），跳过")
+        logging.info(f"[{task_label}] 数据已完整且已过结算时间（{table_name}: {count} 条 >= {threshold}），跳过")
         return True
     return False
 
@@ -134,10 +144,12 @@ def main():
         logging.error("获取交易日期失败，无法继续", exc_info=True)
         return
 
-    # 检查整体作业是否已完成（备份 cron 跳过）
-    if is_job_completed(_JOB_NAME, run_date_nph):
-        logging.info(f"数据获取任务已于今日（{date_str}）成功完成，跳过。设置 INSTOCK_FORCE_FETCH=1 可强制执行。")
+    # 检查整体作业是否已完成（仅在结算时间后才信赖跳过）
+    if is_job_completed(_JOB_NAME, run_date_nph) and trd.is_post_settlement(run_date_nph):
+        logging.info(f"数据获取任务已于今日（{date_str}）成功完成且已过结算时间，跳过。设置 INSTOCK_FORCE_FETCH=1 可强制执行。")
         return
+    elif is_job_completed(_JOB_NAME, run_date_nph):
+        logging.info(f"数据获取任务已完成，但尚未过结算时间，将重新获取 API 数据")
 
     overall_start = record_task_start(_JOB_NAME, '__overall__', run_date_nph)
     all_success = True

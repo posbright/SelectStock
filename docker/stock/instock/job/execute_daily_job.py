@@ -137,13 +137,25 @@ def _is_analysis_done():
 
 
 def _check_and_skip(table_name, date_str, task_label):
-    """检查数据新鲜度，决定是否跳过该任务。"""
+    """检查 API 数据新鲜度，决定是否跳过该任务。
+
+    跳过条件（同时满足）：
+    1. 未设置 INSTOCK_FORCE_FETCH=1
+    2. 当前时间已过结算时间（默认 18:00），API 数据不再变化
+    3. 表中当日数据行数 >= 阈值
+    """
     if _cfg.get_bool('INSTOCK_FORCE_FETCH', False):
         return False
+
+    # API 数据仅在结算时间后（默认 18:00）才可信赖跳过
+    if not trd.is_post_settlement(date_str):
+        logging.info(f"[{task_label}] 尚未过结算时间，需更新 API 数据")
+        return False
+
     threshold = _FRESHNESS_THRESHOLDS.get(table_name, 1)
     fresh, count = is_data_fresh(table_name, date_str, threshold)
     if fresh:
-        logging.info(f"[{task_label}] 数据已完整（{table_name}: {count} 条 >= {threshold}），跳过")
+        logging.info(f"[{task_label}] 数据已完整且已过结算时间（{table_name}: {count} 条 >= {threshold}），跳过")
         return True
     return False
 

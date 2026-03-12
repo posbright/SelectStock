@@ -99,6 +99,40 @@
 | **Analysis管道** | 计算指标、识别形态、策略选股 | 否 | DB + 缓存 → DB |
 | **Web管道** | 展示数据、K线图表 | 否 | DB + 缓存 → 前端 |
 
+### API数据新鲜度检测机制
+
+**原则**：API数据仅在「结算时间后 + 数据行数达标」时跳过重复获取。
+
+#### 判定逻辑（_check_and_skip）
+
+```
+跳过条件（需同时满足）：
+  ① INSTOCK_FORCE_FETCH != 1     （未强制获取）
+  ② is_post_settlement() == True  （已过结算时间）
+  ③ is_data_fresh() == True       （数据行数 >= 阈值）
+
+is_post_settlement() 逻辑：
+  当前日期 > 交易日 → True（隔日/周末，数据已稳定）
+  当前日期 = 交易日 且 当前小时 >= INSTOCK_SETTLEMENT_HOUR(18) → True
+  其他情况 → False（数据可能仍在更新）
+```
+
+#### 不同类型数据的处理策略
+
+| 数据类型 | 示例 | 跳过策略 | 原因 |
+|----------|------|----------|------|
+| **API行情数据** | cn_stock_spot, cn_etf_spot | 结算后+行数达标可跳过 | 收盘后数据稳定 |
+| **API选股数据** | cn_stock_selection | 结算后+行数达标可跳过 | 收盘后数据稳定 |
+| **API延迟数据** | 龙虎榜、大宗交易、资金流向 | 每次执行都获取 | 无行数阈值检查，幂等覆盖 |
+| **计算型数据** | 指标、策略、K线形态、回测 | 每次执行都计算 | 非API数据，需用最新基础数据 |
+
+#### 结算时间配置
+
+```bash
+# .env
+INSTOCK_SETTLEMENT_HOUR=18   # A股收盘15:00，龙虎榜/大宗交易等约17:00-18:00更新完毕
+```
+
 ```
 Fetch管道（有API调用）:
   fetch_daily_job → init_job → basic_data_daily_job
@@ -262,7 +296,7 @@ SelectStock/
 │   │   ├── envconfig.py        # 集中式环境变量配置（.env 加载 + 类型安全读取）
 │   │   ├── database.py         # 数据库连接（SQLAlchemy引擎）
 │   │   ├── torndb.py           # Tornado数据库封装
-│   │   ├── trade_time.py       # 交易时间/日历工具
+│   │   ├── trade_time.py       # 交易时间/日历工具 + API 数据结算时间判定
 │   │   ├── query_cache.py      # 线程安全LRU查询缓存
 │   │   ├── run_template.py     # 运行模板（支持日期参数解析）
 │   │   ├── singleton_type.py   # 单例类型

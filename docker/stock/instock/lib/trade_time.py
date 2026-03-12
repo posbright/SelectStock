@@ -4,9 +4,13 @@
 import datetime
 import logging
 from instock.core.singleton_trade_date import stock_trade_date
+import instock.lib.envconfig as _cfg
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
+
+# API 数据结算时间（小时），只有在此时间之后才认为当日 API 数据已完全更新
+_SETTLEMENT_HOUR = _cfg.get_int('INSTOCK_SETTLEMENT_HOUR', 18)
 
 
 def is_trade_date(date=None):
@@ -181,6 +185,47 @@ def get_trade_date_last():
         run_date = get_previous_trade_date(run_date)
         run_date_nph = run_date
     return run_date, run_date_nph
+
+
+def is_post_settlement(trade_date, settlement_hour=None, _now=None):
+    """判断当前是否已过指定交易日的数据结算时间。
+
+    A股收盘 15:00, 但部分数据源（龙虎榜、大宗交易、资金流向排名等）
+    延迟发布，通常在 18:00 后数据完全就绪。
+
+    逻辑：
+    - 当前日期 > trade_date → True（已过结算日）
+    - 当前日期 == trade_date 且 当前小时 >= settlement_hour → True
+    - 其他情况 → False（数据可能仍在更新）
+
+    Args:
+        trade_date: 交易日期（date / datetime / 'YYYY-MM-DD' 字符串）
+        settlement_hour: 结算小时, 默认 INSTOCK_SETTLEMENT_HOUR (18)
+        _now: 仅用于测试，注入当前时间
+
+    Returns:
+        bool: True 表示 API 数据已结算，可安全跳过重复获取
+    """
+    if settlement_hour is None:
+        settlement_hour = _SETTLEMENT_HOUR
+
+    now = _now or datetime.datetime.now()
+
+    if isinstance(trade_date, str):
+        td = datetime.date.fromisoformat(trade_date)
+    elif isinstance(trade_date, datetime.datetime):
+        td = trade_date.date()
+    else:
+        td = trade_date
+
+    today = now.date()
+
+    if today > td:
+        return True
+    elif today == td:
+        return now.hour >= settlement_hour
+    else:
+        return False
 
 
 def get_quarterly_report_date():
