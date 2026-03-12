@@ -44,7 +44,17 @@ def stock_chip_race_open(date: str = "") -> pd.DataFrame:
         proxy_pool.report_failure(proxy_url)
         logging.debug(f"stock_chip_race_open请求失败: {e}")
         return pd.DataFrame()
-    data_json = r.json()
+
+    if r.status_code != 200:
+        logging.warning(f"stock_chip_race_open HTTP {r.status_code}")
+        return pd.DataFrame()
+
+    try:
+        data_json = r.json()
+    except (ValueError, requests.exceptions.JSONDecodeError):
+        logging.warning(f"stock_chip_race_open返回非JSON响应(长度{len(r.text)})")
+        return pd.DataFrame()
+
     data = data_json.get("datas")
     if not data:
         return pd.DataFrame()
@@ -121,7 +131,17 @@ def stock_chip_race_end(date: str = "") -> pd.DataFrame:
         proxy_pool.report_failure(proxy_url)
         logging.debug(f"stock_chip_race_end请求失败: {e}")
         return pd.DataFrame()
-    data_json = r.json()
+
+    if r.status_code != 200:
+        logging.warning(f"stock_chip_race_end HTTP {r.status_code}")
+        return pd.DataFrame()
+
+    try:
+        data_json = r.json()
+    except (ValueError, requests.exceptions.JSONDecodeError):
+        logging.warning(f"stock_chip_race_end返回非JSON响应(长度{len(r.text)})")
+        return pd.DataFrame()
+
     data = data_json.get("datas")
     if not data:
         return pd.DataFrame()

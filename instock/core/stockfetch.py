@@ -736,7 +736,7 @@ def fetch_stock_chip_race_open(date):
         data.columns = list(tbs.TABLE_CN_STOCK_CHIP_RACE_OPEN['columns'])
         return data
     except Exception as e:
-        logging.error(f"stockfetch.fetch_stock_chip_race_open处理异常", exc_info=True)
+        logging.warning(f"stockfetch.fetch_stock_chip_race_open处理异常: {e}")
     return None
 
 # 读取尾盘抢筹
@@ -755,7 +755,7 @@ def fetch_stock_chip_race_end(date):
         data.columns = list(tbs.TABLE_CN_STOCK_CHIP_RACE_END['columns'])
         return data
     except Exception as e:
-        logging.error(f"stockfetch.fetch_stock_chip_race_end处理异常", exc_info=True)
+        logging.warning(f"stockfetch.fetch_stock_chip_race_end处理异常: {e}")
     return None
 
 # 读取涨停原因
