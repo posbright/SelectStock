@@ -651,6 +651,344 @@ run_workdayly  ──→  完整任务  ──→  run_fetch + run_analysis 的�
 - `run_workdayly` 是两者的组合，适合单机部署
 - 多机部署时可让一台机器运行 `run_fetch`（API 调用），另一台运行 `run_analysis`（计算密集）
 
+---
+
+## 十九：定时任务 `run_analysis` 详细分析
+
+### 概述
+
+`run_analysis` 是工作日定时执行的**数据分析管道**，位于 `cron/cron.workdayly/run_analysis`，负责执行所有本地计算任务（技术指标、K线形态、策略选股、回测验证）。与 `run_fetch`（数据获取管道）配合使用，实现**获取与分析解耦**。
+
+- **调用入口**：`instock/job/analysis_daily_job.py`
+- **建议执行时间**：每个交易日 `run_fetch` 完成后（约 19:00~20:00）
+- **预计总耗时**：约 **3~10 分钟**（取决于 CPU 性能和股票数量）
+- **非交易日**：自动跳过（脚本内置交易日检测）
+- **零 API 调用**：所有数据来源为本地磁盘缓存 + 数据库，不发起任何外部网络请求
+- **峰值内存**：< 100 MB（流式处理架构）
+
+---
+
+### 执行流程
+
+```
+run_analysis (Shell)
+  ├── 加载 .env 环境变量
+  ├── 交易日检测 → 非交易日直接退出
+  └── 调用 analysis_daily_job.py
+        ├── 跳过检查 → 分析数据已完成则直接退出
+        ├── Step 1: gpt_value_data_job — GPT综合选股（纯DB读取+筛选）
+        ├── Step 2: streaming_analysis_job — 流式分析
+        │     ├── 2a: 获取股票列表（从DB读取，零API）
+        │     ├── 2b: 逐只股票流式处理（从缓存读取K线数据）
+        │     │     ├── 技术指标计算（32项指标，77个字段）
+        │     │     ├── K线形态识别（61种形态）
+        │     │     └── 策略选股检测（13种策略）
+        │     ├── 2c: 批量写入数据库（每50只一批）
+        │     └── 2d: 指标二次筛选（买入/卖出信号）
+        ├── Step 3: backtest_data_daily_job — 策略回测
+        │     ├── 3a: 逐表扫描待回测记录（backtest列为NULL）
+        │     ├── 3b: 从缓存按需读取历史K线计算收益率
+        │     └── 3c: 汇总回测结果到 cn_stock_backtest 表
+        └── 释放单例 + GC 回收内存
+```
+
+---
+
+### 跳过已完成检查（本地优先模式）
+
+`run_analysis` 内置**智能跳过机制**，适用于多机部署场景：
+
+| 项目 | 说明 |
+|------|------|
+| **检查目标** | `cn_stock_indicators` 表中当日数据行数 |
+| **跳过阈值** | 默认 1000 条（正常交易日约 4800+ 条，该阈值避免误跳过部分完成的情况） |
+| **强制执行** | 设置环境变量 `INSTOCK_FORCE_ANALYSIS=1` 可绕过跳过检查 |
+| **阈值调整** | 环境变量 `INSTOCK_ANALYSIS_DONE_THRESHOLD`（默认 1000） |
+| **应用场景** | 本地计算机已执行完分析并写入 DB → 服务器 cron 触发时自动跳过，节省低内存环境的计算资源 |
+
+---
+
+### 各步骤任务详解
+
+#### Step 1：GPT 综合选股
+
+| 项目 | 说明 |
+|------|------|
+| **执行模块** | `gpt_value_data_job.py` → `gptj.main()` |
+| **执行方式** | 进程内直接调用 |
+| **API 调用** | **无**（纯数据库读取 + 内存筛选） |
+| **数据来源** | 从 `cn_stock_selection` 表读取综合选股数据（由 `run_fetch` 的 `selection_data_daily_job` 入库） |
+| **功能** | 基于基本面指标执行多条件筛选 |
+| **预计耗时** | **1~5 秒** |
+| **写入表** | `cn_stock_strategy_gpt_value` |
+
+**筛选条件（全部满足）**：
+
+| 指标 | 条件 |
+|------|------|
+| 资产负债率 | < 60% |
+| 每股经营现金流 | > 0 |
+| ROE（加权） | >= 15% |
+| 毛利率 | >= 30% |
+| 净利率 | >= 10% |
+| 营收 3 年 CAGR | > 10% |
+| 净利润 3 年 CAGR | > 10% |
+| PE（TTM） | 在 (0, 50] 之间 |
+
+**特性**：
+- 支持日期回退：若当天 `cn_stock_selection` 无数据，自动查找最近 7 天内有数据的交易日
+- 筛选结果按 `gpt_score` 综合评分降序排序
+- 输出包含评分和各项指标原值，便于前端展示
+
+---
+
+#### Step 2：流式分析（核心计算模块）
+
+| 项目 | 说明 |
+|------|------|
+| **执行模块** | `streaming_analysis_job.py` → `saj.main()` |
+| **执行方式** | 进程内直接调用 |
+| **API 调用** | **无**（股票列表从 DB 读取，K 线从磁盘缓存读取） |
+| **数据来源** | 股票列表：`cn_stock_spot` 表；K线历史：`instock/cache/hist/*.gzip.pickle` 缓存文件 |
+| **功能** | 单次遍历全市场 ~4900 只股票，同时完成三大计算任务 |
+| **预计耗时** | **2~8 分钟** |
+| **峰值内存** | < 100 MB（vs 旧版独立作业 ~1670 MB） |
+
+##### 核心架构：单次遍历 + 按需读取 + 及时释放
+
+```
+对每只股票（~4900只）:
+  1. 从磁盘缓存读取历史K线（~350 KB/只）
+  2. 同时执行三大计算：
+     ├── 技术指标计算 → 结果暂存内存
+     ├── K线形态识别 → 结果暂存内存
+     └── 策略选股检测 → 结果暂存内存
+  3. 释放该股票的DataFrame
+  4. 每50只股票批量写入数据库 + GC回收
+```
+
+> **效率对比**：原架构 3+13=16 次遍历 × 4900 = **78,400 次 I/O**；流式架构 1 次遍历 × 4900 = **4,900 次 I/O**（减少 93%）
+
+##### 2a. 技术指标计算（32 项指标，77 个数据字段）
+
+基于 TA-Lib 和 pandas 计算，结果与同花顺、通信达一致。
+
+| 指标类别 | 具体指标 |
+|---------|---------|
+| 趋势指标 | MACD（DIF/DEA/柱状）、TRIX/TRMA、TEMA、CR（及 CR-MA1/2/3）、DMA/AMA、SAR、Supertrend、DPO/MADPO |
+| 动量指标 | KDJ（K/D/J）、RSI（6/12/14/24日）、ROC/ROCMA/ROCEMA、CCI（14/84日）、W&R（6/10/14日）、PSY/PSYMA、StochRSI（K/D） |
+| 波动指标 | BOLL（上/中/下轨）、TR/ATR、VHF、RVI/RVIS、ENE（上/中/下轨） |
+| 成交量指标 | VR/MAVR、OBV、EMV/EMVA、MFI/MFISMA、VWMA/MVWMA、FI（Force Index 2/13日） |
+| 能量指标 | BRAR（BR/AR）、BIAS、PPO/PPOS/PPOH、WT（WT1/WT2） |
+
+| 项目 | 说明 |
+|------|------|
+| **写入表** | `cn_stock_indicators`（77 列） |
+
+##### 2b. K 线形态识别（61 种形态）
+
+基于 TA-Lib 的形态识别函数（`CDL` 系列），对每只股票的最新 K 线进行 61 种形态匹配。
+
+| 结果值 | 含义 |
+|-------|------|
+| 正数 | 出现买入信号 |
+| 0 | 未出现该形态 |
+| 负数 | 出现卖出信号 |
+
+**识别形态举例**：两只乌鸦、三只乌鸦、乌云压顶、十字星、锤头、上吊线、射击之星、暮星、晨星、吞噬模式、十字孕线、刺透形态、三线打击、母子线等共 61 种。
+
+| 项目 | 说明 |
+|------|------|
+| **写入表** | `cn_stock_kline_pattern`（61 列） |
+
+##### 2c. 策略选股检测（13 种策略）
+
+对每只股票逐一检测是否满足各策略的买入/卖出条件。
+
+| 策略名称 | 策略逻辑 | 写入表 |
+|---------|---------|--------|
+| 放量上涨 | 涨幅<2%且收阳、成交额≥2亿、量比≥2 | `cn_stock_strategy_enter` |
+| 均线多头 | MA30 连续30日向上、涨幅>20% | `cn_stock_strategy_keep_increasing` |
+| 停机坪 | 15日内涨停+放量上涨，后续高开缩量整理 | `cn_stock_strategy_parking_apron` |
+| 回踩年线 | 突破250日均线后回踩不破+缩量 | `cn_stock_strategy_backtrace_ma250` |
+| 突破平台 | 收盘价穿越60日均线+放量 | `cn_stock_strategy_breakthrough_platform` |
+| 无大幅回撤 | 60日涨幅<60%、无单日跌7%或两日跌10% | `cn_stock_strategy_low_backtrace_increase` |
+| 海龟交易法则 | 收盘价为近60日最高价 | `cn_stock_strategy_turtle_trade` |
+| 高而窄的旗形 | 24~10日前涨幅≥90%+连续两日涨停 | `cn_stock_strategy_high_tight_flag` |
+| 放量跌停 | 跌幅>9.5%、成交额≥2亿、量比≥4 | `cn_stock_strategy_climax_limitdown` |
+| 低ATR成长 | 上市≥250日、近10日最高/最低价比≥1.1 | `cn_stock_strategy_low_atr` |
+| 趋势回调 | 长期趋势向上时的回调买入机会 | `cn_stock_strategy_trend_pullback` |
+| 超跌反弹 | 基本面未变、市场恐慌时超跌修复机会 | `cn_stock_strategy_oversold_rebound` |
+| 突破确认 | 横盘整理后放量突破确认 | `cn_stock_strategy_breakout_confirm` |
+
+> **注意**：「高而窄的旗形」策略需要龙虎榜数据（`cn_stock_lhb` 表），该数据由 `run_fetch` 入库，若无数据则此策略自动跳过。
+
+##### 2d. 指标二次筛选（买入/卖出信号）
+
+基于已入库的 `cn_stock_indicators` 数据进行二次 SQL 筛选。
+
+| 信号类型 | 筛选条件 | 写入表 |
+|---------|---------|--------|
+| **买入信号** | KDJ-K≥80、KDJ-D≥70、KDJ-J≥100、RSI6≥80、CCI≥100、CR≥300、WR6≥-20、VR≥160 | `cn_stock_indicators_buy` |
+| **卖出信号** | KDJ-K<20、KDJ-D<30、KDJ-J<10、RSI6<20、CCI<-100、CR<40、WR6<-80、VR<40 | `cn_stock_indicators_sell` |
+
+| 项目 | 说明 |
+|------|------|
+| **预计耗时** | **< 1 秒**（纯 SQL 查询，不读取缓存） |
+
+---
+
+#### Step 3：策略回测
+
+| 项目 | 说明 |
+|------|------|
+| **执行模块** | `backtest_data_daily_job.py` → `bdj.main()` |
+| **执行方式** | 进程内直接调用 |
+| **API 调用** | **无**（从磁盘缓存按需读取历史 K 线） |
+| **功能** | 对各策略选出的股票进行历史收益率回测验证 |
+| **预计耗时** | **1~3 分钟** |
+| **峰值内存** | ~50 MB（流式读取，每批 50 只） |
+
+##### 3a. 回测数据计算
+
+| 项目 | 说明 |
+|------|------|
+| **回测对象** | 所有策略表中 backtest 列为 NULL 的记录（仅补算未回测的） |
+| **覆盖策略表** | 指标买入、指标卖出、13 种 K 线策略、GPT 综合选股 = 共 **16 个表** |
+| **计算方式** | 从磁盘缓存读取该股票历史 K 线 → 计算选出日后 1/3/5/10/20/30/60/90/120 日收益率 |
+| **并发策略** | 外层逐表顺序处理（默认 1 线程），内层每批 50 只 × 2 线程并发读取缓存 |
+| **写入方式** | UPDATE 更新原策略表的 `rate_1` ~ `rate_120` 等回测字段 |
+
+**回测收益率字段**（共 9 个 horizon）:
+
+| 字段 | 含义 |
+|------|------|
+| `rate_1` | 选出后 1 个交易日收益率 |
+| `rate_3` | 选出后 3 个交易日收益率 |
+| `rate_5` | 选出后 5 个交易日收益率 |
+| `rate_10` | 选出后 10 个交易日收益率 |
+| `rate_20` | 选出后 20 个交易日收益率 |
+| `rate_30` | 选出后 30 个交易日收益率 |
+| `rate_60` | 选出后 60 个交易日收益率 |
+| `rate_90` | 选出后 90 个交易日收益率 |
+| `rate_120` | 选出后 120 个交易日收益率 |
+
+##### 3b. 回测汇总
+
+| 项目 | 说明 |
+|------|------|
+| **功能** | 汇总各策略表的回测结果，按日期 × 策略维度统计 |
+| **统计指标** | 选股数量、已回测数量、成功数量（rate>0）、成功率、各 horizon 平均收益率 |
+| **成功率算法** | 优先使用 `rate_5`，不存在时降级 `rate_3` → `rate_1`，判断 > 0 的比例 |
+| **写入表** | `cn_stock_backtest`（回测汇总表） |
+| **预计耗时** | **1~5 秒** |
+
+---
+
+### 执行时间汇总
+
+| 步骤 | 模块 | 主要计算内容 | 预计耗时 |
+|------|------|------------|---------|
+| 跳过检查 | `_is_analysis_done()` | 查询 DB 行数 | < 1 秒 |
+| Step 1 | `gpt_value_data_job` | GPT 综合选股 | 1~5 秒 |
+| Step 2a | `streaming_analysis_job` | 获取股票列表 | < 1 秒 |
+| Step 2b | `streaming_analysis_job` | 流式分析（指标+形态+策略） | 2~8 分钟 |
+| Step 2d | `streaming_analysis_job` | 指标二次筛选 | < 1 秒 |
+| Step 3a | `backtest_data_daily_job` | 策略回测计算 | 1~3 分钟 |
+| Step 3b | `backtest_data_daily_job` | 回测汇总统计 | 1~5 秒 |
+| 清理 | 释放单例 + GC | 内存回收 | < 1 秒 |
+| **总计** | | | **约 3~10 分钟** |
+
+> **说明**：总耗时主要取决于 Step 2b（流式分析，~4900 只股票逐只处理）和 Step 3a（回测计算，仅处理 backtest 为 NULL 的记录）。首次运行回测量最大，后续每日仅补算新增选股记录。
+
+---
+
+### 数据写入表汇总
+
+| 数据库表 | 数据类型 | 数据量级 | 来源步骤 |
+|---------|---------|---------|---------|
+| `cn_stock_strategy_gpt_value` | GPT 综合选股结果 | ~50~200 条/日 | Step 1 |
+| `cn_stock_indicators` | 技术指标（77 列） | ~4800 条/日 | Step 2b |
+| `cn_stock_kline_pattern` | K 线形态识别（61 列） | ~4800 条/日 | Step 2b |
+| `cn_stock_strategy_enter` | 放量上涨策略 | ~10~100 条/日 | Step 2b |
+| `cn_stock_strategy_keep_increasing` | 均线多头策略 | ~10~50 条/日 | Step 2b |
+| `cn_stock_strategy_parking_apron` | 停机坪策略 | ~0~20 条/日 | Step 2b |
+| `cn_stock_strategy_backtrace_ma250` | 回踩年线策略 | ~0~30 条/日 | Step 2b |
+| `cn_stock_strategy_breakthrough_platform` | 突破平台策略 | ~5~50 条/日 | Step 2b |
+| `cn_stock_strategy_low_backtrace_increase` | 无大幅回撤策略 | ~50~200 条/日 | Step 2b |
+| `cn_stock_strategy_turtle_trade` | 海龟交易法则 | ~10~50 条/日 | Step 2b |
+| `cn_stock_strategy_high_tight_flag` | 高而窄的旗形 | ~0~10 条/日 | Step 2b |
+| `cn_stock_strategy_climax_limitdown` | 放量跌停策略 | ~0~30 条/日 | Step 2b |
+| `cn_stock_strategy_low_atr` | 低 ATR 成长 | ~10~50 条/日 | Step 2b |
+| `cn_stock_strategy_trend_pullback` | 趋势回调策略 | ~10~50 条/日 | Step 2b |
+| `cn_stock_strategy_oversold_rebound` | 超跌反弹策略 | ~10~50 条/日 | Step 2b |
+| `cn_stock_strategy_breakout_confirm` | 突破确认策略 | ~5~30 条/日 | Step 2b |
+| `cn_stock_indicators_buy` | 买入信号筛选 | ~0~20 条/日 | Step 2d |
+| `cn_stock_indicators_sell` | 卖出信号筛选 | ~0~20 条/日 | Step 2d |
+| `cn_stock_backtest` | 回测汇总统计 | ~16 × 日期数 条 | Step 3b |
+
+---
+
+### 数据依赖关系
+
+`run_analysis` 的所有数据来源均为本地，不发起任何外部 API 请求。
+
+| 数据依赖 | 来源 | 提供方 | 缺失时行为 |
+|---------|------|--------|-----------|
+| `cn_stock_spot` 股票列表 | 数据库 | `run_fetch` → `basic_data_daily_job` | 降级为 `stock_data` 单例（可能发起 API） |
+| `cn_stock_selection` 选股数据 | 数据库 | `run_fetch` → `selection_data_daily_job` | GPT 选股跳过，自动回退 7 天 |
+| `cn_stock_lhb` 龙虎榜数据 | 数据库 | `run_fetch` → `basic_data_other_daily_job` | 高而窄旗形策略跳过 |
+| `cache/hist/*.gzip.pickle` K 线缓存 | 磁盘文件 | `run_fetch` → `fetch_data_job` | 该股票跳过分析 |
+
+> **重要**：即使 `run_fetch` 未执行或部分失败，`run_analysis` 仍可基于历史缓存数据运行（结果可能不包含当日行情）。
+
+---
+
+### 可调参数
+
+| 环境变量 | 默认值 | 说明 |
+|---------|-------|------|
+| `INSTOCK_FORCE_ANALYSIS` | 空 | 设为 `1` 强制执行分析（跳过完成检查） |
+| `INSTOCK_ANALYSIS_DONE_THRESHOLD` | `1000` | 分析完成判断阈值（`cn_stock_indicators` 行数） |
+| `INSTOCK_BATCH_SIZE` | `50` | 流式分析每批处理股票数（越大内存越高） |
+| `INSTOCK_ANALYSIS_WORKERS` | `2` | 流式分析并发线程数（适配 ≤2GB 服务器） |
+| `INSTOCK_BACKTEST_OUTER_WORKERS` | `1` | 回测外层并发（逐表处理，默认顺序执行） |
+| `INSTOCK_BACKTEST_INNER_WORKERS` | `2` | 回测内层并发（每批 50 只股票的读取线程数） |
+
+---
+
+### 容错机制
+
+| 机制 | 说明 |
+|------|------|
+| **跳过已完成** | 检查 `cn_stock_indicators` 行数，已有足够数据则直接跳过 |
+| **延迟删除** | 不在开头一次性 DELETE 所有表的当日数据，而是首次写入某表时才清理，避免中途崩溃丢数据 |
+| **单只容错** | 单只股票处理失败不影响其他股票，错误计数记录到日志 |
+| **表 Schema 自动修复** | 旧版数据库表列数不足时自动 DROP + 重建（如旧版 26 列 → 新版 77 列） |
+| **缓存降级** | K 线缓存未覆盖当日时仍基于历史缓存计算（标记为 stale，日志告警） |
+| **缓存过期检测** | 过期率 > 80% 时发出告警，提示 Phase 2（K 线缓存更新）可能 OOM 失败 |
+| **GC 回收** | 每个 Step 完成后执行 `gc.collect()`，每批写入后也触发 GC，控制内存增长 |
+| **日期回退** | GPT 选股支持 7 天日期回退，选股数据某天缺失不影响筛选 |
+
+---
+
+### 与 `run_fetch` 的协作关系
+
+```
+run_fetch（数据获取）                  run_analysis（数据分析）
+─────────────────────                ──────────────────────
+Phase 0: DB初始化                     
+Phase 2: 实时行情 → cn_stock_spot  ─→  读取股票列表
+Phase 2: 选股数据 → cn_stock_selection ─→  GPT综合选股
+Phase 3: 龙虎榜   → cn_stock_lhb  ─→  高而窄旗形策略
+Phase 1: K线缓存  → cache/hist/    ─→  流式分析 + 回测
+```
+
+- **独立运行**：`run_analysis` 可在 `run_fetch` 完成后任意时间运行
+- **数据隔离**：获取和分析通过数据库表 + 缓存文件解耦，无进程间依赖
+- **多机部署**：`run_fetch` 在高带宽机器运行（API 密集），`run_analysis` 在高 CPU 机器运行（计算密集）
+- **容错降级**：即使 `run_fetch` 部分失败，`run_analysis` 仍可基于历史数据运行
+
 
 # 安装说明
 
