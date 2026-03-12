@@ -454,7 +454,7 @@ def _ensure_params_table():
             with mdb.get_connection() as conn:
                 with conn.cursor() as db:
                     db.execute("""
-                        CREATE TABLE `cn_strategy_params` (
+                        CREATE TABLE IF NOT EXISTS `cn_strategy_params` (
                             `strategy_key` VARCHAR(50) NOT NULL COMMENT '策略标识',
                             `param_key` VARCHAR(100) NOT NULL COMMENT '参数标识',
                             `param_value` TEXT COMMENT '参数值(JSON)',

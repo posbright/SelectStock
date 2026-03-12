@@ -276,5 +276,69 @@ class TestIndicatorInfHandling(unittest.TestCase):
         self.assertTrue(found_m_price_fix, "m_price 应使用 _fill_nan_inf 清理 inf (volume=0)")
 
 
+# ---------------------------------------------------------------------------
+# Bug: get_indicators 收到 tuple 导致 TypeError
+# ---------------------------------------------------------------------------
+
+class TestGetIndicatorsTupleGuard(unittest.TestCase):
+    """验证 get_indicators 对非 DataFrame 输入的防御"""
+
+    def test_tuple_input_returns_none(self):
+        """传入 tuple 时应返回 None 而非抛出 TypeError"""
+        import sys, os
+        sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+        import instock.core.indicator.calculate_indicator as idr
+        result = idr.get_indicators(("2026-03-12", "600519"), end_date="2026-03-12")
+        self.assertIsNone(result)
+
+    def test_none_input_returns_none(self):
+        """传入 None 时应返回 None"""
+        import sys, os
+        sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+        import instock.core.indicator.calculate_indicator as idr
+        result = idr.get_indicators(None)
+        self.assertIsNone(result)
+
+    def test_valid_dataframe_not_rejected(self):
+        """传入有效 DataFrame 时不应被类型检查拦截"""
+        import sys, os
+        sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+        import instock.core.indicator.calculate_indicator as idr
+        dates = pd.date_range("2025-01-01", periods=200, freq="B")
+        np.random.seed(42)
+        closes = np.random.uniform(10, 20, 200)
+        df = pd.DataFrame({
+            'date': dates,
+            'open': np.random.uniform(10, 20, 200),
+            'high': np.random.uniform(15, 25, 200),
+            'low': np.random.uniform(5, 15, 200),
+            'close': closes,
+            'volume': np.random.randint(1000, 100000, 200).astype(float),
+            'amount': np.random.uniform(10000, 500000, 200),
+            'p_change': np.concatenate([[0], np.diff(closes) / closes[:-1] * 100]),
+        })
+        result = idr.get_indicators(df, threshold=120)
+        self.assertIsNotNone(result)
+        self.assertIsInstance(result, pd.DataFrame)
+
+
+# ---------------------------------------------------------------------------
+# Bug: _ensure_params_table 使用 CREATE TABLE 无 IF NOT EXISTS
+# ---------------------------------------------------------------------------
+
+class TestEnsureParamsTableSQL(unittest.TestCase):
+    """验证 _ensure_params_table 使用 IF NOT EXISTS 避免竞态"""
+
+    def test_create_table_has_if_not_exists(self):
+        """SQL 中应包含 IF NOT EXISTS 防止并发创建报错"""
+        import inspect
+        import sys, os
+        sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+        import instock.web.strategyParamsHandler as sph
+        source = inspect.getsource(sph._ensure_params_table)
+        self.assertIn("IF NOT EXISTS", source.upper(),
+                       "_ensure_params_table 的 CREATE TABLE 应包含 IF NOT EXISTS")
+
+
 if __name__ == '__main__':
     unittest.main()
