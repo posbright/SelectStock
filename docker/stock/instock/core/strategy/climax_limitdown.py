@@ -3,6 +3,7 @@
 
 
 import numpy as np
+import pandas as pd
 import talib as tl
 
 __author__ = 'InStock'
@@ -18,6 +19,10 @@ def check(code_name, data, date=None, threshold=60):
     else:
         end_date = date.strftime("%Y-%m-%d")
     if end_date is not None:
+        if not pd.api.types.is_datetime64_any_dtype(data['date']):
+            data = data.copy()
+            data['date'] = pd.to_datetime(data['date'])
+        end_date = pd.Timestamp(end_date)
         mask = (data['date'] <= end_date)
         data = data.loc[mask].copy()
     if len(data.index) < threshold:

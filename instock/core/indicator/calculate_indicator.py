@@ -23,6 +23,14 @@ def _fill_nan_inf(data, col):
 def get_indicators(data, end_date=None, threshold=120, calc_threshold=None):
     try:
         if end_date is not None:
+            # 统一 date 类型：缓存数据的 date 列可能是 datetime64/Timestamp/datetime.date，
+            # 而 end_date 来自 strftime 或 code_name[0]（字符串），
+            # 混合类型无法直接比较，需统一为 pd.Timestamp。
+            if not pd.api.types.is_datetime64_any_dtype(data['date']):
+                data = data.copy()
+                data['date'] = pd.to_datetime(data['date'])
+            if not isinstance(end_date, pd.Timestamp):
+                end_date = pd.Timestamp(end_date)
             mask = (data['date'] <= end_date)
             data = data.loc[mask]
         if calc_threshold is not None:

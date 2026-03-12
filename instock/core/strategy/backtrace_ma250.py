@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import numpy as np
+import pandas as pd
 import talib as tl
 from datetime import datetime, timedelta
 
@@ -21,6 +22,10 @@ def check(code_name, data, date=None, threshold=60):
         end_date = date.strftime("%Y-%m-%d")
 
     if end_date is not None:
+        if not pd.api.types.is_datetime64_any_dtype(data['date']):
+            data = data.copy()
+            data['date'] = pd.to_datetime(data['date'])
+        end_date = pd.Timestamp(end_date)
         mask = (data['date'] <= end_date)
         data = data.loc[mask].copy()
     if len(data.index) < 250:
@@ -74,8 +79,7 @@ def check(code_name, data, date=None, threshold=60):
 
     if not recent_lowest_row[2] or not highest_row[2]:
         return False
-    date_diff = datetime.date(datetime.strptime(recent_lowest_row[2], '%Y-%m-%d')) - \
-                datetime.date(datetime.strptime(highest_row[2], '%Y-%m-%d'))
+    date_diff = pd.Timestamp(recent_lowest_row[2]) - pd.Timestamp(highest_row[2])
 
     if not (timedelta(days=10) <= date_diff <= timedelta(days=50)):
         return False

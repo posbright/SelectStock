@@ -6,6 +6,7 @@ import logging
 import pymysql
 import os.path
 import sys
+import time
 
 cpath_current = os.path.dirname(os.path.dirname(__file__))
 cpath = os.path.abspath(os.path.join(cpath_current, os.pardir))
@@ -14,6 +15,10 @@ import instock.lib.database as mdb
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
+
+# 远程连接重试配置
+_MAX_RETRIES = int(os.environ.get('INSTOCK_DB_MAX_RETRIES', '3'))
+_RETRY_DELAY = int(os.environ.get('INSTOCK_DB_RETRY_DELAY', '5'))  # 秒
 
 
 # 创建新数据库。
@@ -56,14 +61,53 @@ def check_database():
             db.execute(" select 1 ")
 
 
+def _connect_with_retry(conn_params, label="数据库连接"):
+    """带重试的数据库连接，应对远程服务器间歇性超时。"""
+    last_err = None
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            conn = pymysql.connect(**conn_params)
+            if attempt > 1:
+                logging.info(f"{label}: 第{attempt}次重试成功")
+            return conn
+        except (pymysql.err.OperationalError, pymysql.err.InterfaceError) as e:
+            last_err = e
+            err_code = e.args[0] if e.args else 0
+            # 2003=Can't connect, 2013=Lost connection (timeout)
+            if err_code in (2003, 2013) and attempt < _MAX_RETRIES:
+                logging.warning(
+                    f"{label}: 连接超时（第{attempt}/{_MAX_RETRIES}次），"
+                    f"{_RETRY_DELAY}秒后重试... [{e}]"
+                )
+                time.sleep(_RETRY_DELAY)
+            else:
+                raise
+    raise last_err
+
+
 def main():
     # 检查，如果执行 select 1 失败，说明数据库不存在，然后创建一个新的数据库。
     try:
-        check_database()
-    except Exception as e:
-        logging.warning("执行信息：数据库不存在，将创建。")
-        # 检查数据库失败，
-        create_new_database()
+        conn = _connect_with_retry(mdb.MYSQL_CONN_DBAPI, "检查数据库")
+        with conn:
+            with conn.cursor() as db:
+                db.execute(" select 1 ")
+    except pymysql.err.OperationalError as e:
+        err_code = e.args[0] if e.args else 0
+        if err_code in (1049,):  # 1049 = Unknown database
+            logging.warning("执行信息：数据库不存在，将创建。")
+            _MYSQL_CONN_DBAPI = mdb.MYSQL_CONN_DBAPI.copy()
+            _MYSQL_CONN_DBAPI['database'] = "mysql"
+            conn = _connect_with_retry(_MYSQL_CONN_DBAPI, "创建数据库")
+            with conn:
+                with conn.cursor() as db:
+                    try:
+                        create_sql = f"CREATE DATABASE IF NOT EXISTS `{mdb.db_database}` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci"
+                        db.execute(create_sql)
+                    except Exception as e2:
+                        logging.error(f"init_job.create_new_database处理异常", exc_info=True)
+        else:
+            raise  # 非数据库不存在错误，向上抛出
 
     # 无论数据库是新建还是已存在，确保基础表存在（CREATE TABLE IF NOT EXISTS 幂等）
     try:

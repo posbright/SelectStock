@@ -328,7 +328,10 @@ def calculate_simple_returns(data: pd.DataFrame,
     if days is None:
         days = [1, 3, 5, 10, 20, 60]
     
-    mask = data['date'] >= signal_date
+    if not pd.api.types.is_datetime64_any_dtype(data['date']):
+        data = data.copy()
+        data['date'] = pd.to_datetime(data['date'])
+    mask = data['date'] >= pd.Timestamp(signal_date)
     future_data = data.loc[mask].copy()
     
     # 至少需要信号日(T) + 执行日(T+1) = 2行

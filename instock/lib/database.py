@@ -39,9 +39,14 @@ MYSQL_CONN_URL = "mysql+pymysql://%s:%s@%s:%s/%s?charset=%s" % (
     db_user, _encoded_password, db_host, db_port, db_database, db_charset)
 logging.info(f"数据库链接信息：mysql+pymysql://{db_user}:***@{db_host}:{db_port}/{db_database}?charset={db_charset}")
 
+# 超时配置：支持通过环境变量覆盖（本地连远程时适当放宽）
+_connect_timeout = int(os.environ.get('INSTOCK_DB_CONNECT_TIMEOUT', '10'))
+_read_timeout = int(os.environ.get('INSTOCK_DB_READ_TIMEOUT', '30'))
+_write_timeout = int(os.environ.get('INSTOCK_DB_WRITE_TIMEOUT', '30'))
+
 MYSQL_CONN_DBAPI = {'host': db_host, 'user': db_user, 'password': db_password, 'database': db_database,
                     'charset': db_charset, 'port': db_port, 'autocommit': True,
-                    'connect_timeout': 10, 'read_timeout': 30, 'write_timeout': 30}
+                    'connect_timeout': _connect_timeout, 'read_timeout': _read_timeout, 'write_timeout': _write_timeout}
 
 MYSQL_CONN_TORNDB = {'host': f'{db_host}:{str(db_port)}', 'user': db_user, 'password': db_password,
                      'database': db_database, 'charset': db_charset, 'max_idle_time': 3600, 'connect_timeout': 1000}

@@ -80,6 +80,12 @@ class BaseStrategy(ABC):
             end_date = date.strftime("%Y-%m-%d")
             
         if end_date is not None:
+            # 统一 date 类型，避免 datetime.date vs str 比较异常
+            if not pd.api.types.is_datetime64_any_dtype(data['date']):
+                data = data.copy()
+                data['date'] = pd.to_datetime(data['date'])
+            if not isinstance(end_date, pd.Timestamp):
+                end_date = pd.Timestamp(end_date)
             mask = (data['date'] <= end_date)
             data = data.loc[mask].copy()
             

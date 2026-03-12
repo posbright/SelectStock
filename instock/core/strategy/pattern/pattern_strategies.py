@@ -11,6 +11,7 @@
 """
 
 import numpy as np
+import pandas as pd
 import talib as tl
 from datetime import datetime
 from ..base import PatternStrategy, register_strategy
@@ -43,6 +44,10 @@ class BreakthroughPlatformStrategy(PatternStrategy):
         else:
             end_date = date.strftime("%Y-%m-%d")
         if end_date is not None:
+            if not pd.api.types.is_datetime64_any_dtype(data['date']):
+                data = data.copy()
+                data['date'] = pd.to_datetime(data['date'])
+            end_date = pd.Timestamp(end_date)
             mask = (data['date'] <= end_date)
             data = data.loc[mask].copy()
         if len(data.index) < self.threshold:
@@ -59,7 +64,7 @@ class BreakthroughPlatformStrategy(PatternStrategy):
         for _close, _open, _date, _ma60 in zip(data['close'].values, data['open'].values, 
                                                 data['date'].values, data['ma60'].values):
             if _open < _ma60 <= _close:
-                check_date = datetime.date(datetime.strptime(_date, '%Y-%m-%d'))
+                check_date = pd.Timestamp(_date)
                 if volume_strategy.check(code_name, origin_data, date=check_date):
                     breakthrough_row = _date
                     break
@@ -101,6 +106,10 @@ class ParkingApronStrategy(PatternStrategy):
         else:
             end_date = date.strftime("%Y-%m-%d")
         if end_date is not None:
+            if not pd.api.types.is_datetime64_any_dtype(data['date']):
+                data = data.copy()
+                data['date'] = pd.to_datetime(data['date'])
+            end_date = pd.Timestamp(end_date)
             mask = (data['date'] <= end_date)
             data = data.loc[mask]
         if len(data.index) < self.threshold:
@@ -113,7 +122,7 @@ class ParkingApronStrategy(PatternStrategy):
         limitup_row = [1000000, '']
         for _close, _p_change, _date in zip(data['close'].values, data['p_change'].values, data['date'].values):
             if _p_change > 9.5:
-                check_date = datetime.date(datetime.strptime(_date, '%Y-%m-%d'))
+                check_date = pd.Timestamp(_date)
                 if turtle_strategy.check(code_name, origin_data, date=check_date):
                     limitup_row = [_close, _date]
                     if self._check_internal(data, limitup_row):
@@ -174,6 +183,10 @@ class HighTightFlagStrategy(PatternStrategy):
         else:
             end_date = date.strftime("%Y-%m-%d")
         if end_date is not None:
+            if not pd.api.types.is_datetime64_any_dtype(data['date']):
+                data = data.copy()
+                data['date'] = pd.to_datetime(data['date'])
+            end_date = pd.Timestamp(end_date)
             mask = (data['date'] <= end_date)
             data = data.loc[mask]
         if len(data.index) < self.threshold:
@@ -223,6 +236,10 @@ class LowBacktraceIncreaseStrategy(PatternStrategy):
         else:
             end_date = date.strftime("%Y-%m-%d")
         if end_date is not None:
+            if not pd.api.types.is_datetime64_any_dtype(data['date']):
+                data = data.copy()
+                data['date'] = pd.to_datetime(data['date'])
+            end_date = pd.Timestamp(end_date)
             mask = (data['date'] <= end_date)
             data = data.loc[mask]
         if len(data.index) < self.threshold:

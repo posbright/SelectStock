@@ -1,6 +1,7 @@
 #!/usr/local/bin/python
 # -*- coding: utf-8 -*-
 
+import pandas as pd
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
@@ -15,6 +16,10 @@ def check_low_increase(code_name, data, date=None, ma_short=30, ma_long=250, thr
     else:
         end_date = date.strftime("%Y-%m-%d")
     if end_date is not None:
+        if not pd.api.types.is_datetime64_any_dtype(data['date']):
+            data = data.copy()
+            data['date'] = pd.to_datetime(data['date'])
+        end_date = pd.Timestamp(end_date)
         mask = (data['date'] <= end_date)
         data = data.loc[mask]
     if len(data.index) < ma_long:

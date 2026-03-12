@@ -3,6 +3,7 @@
 
 from datetime import datetime
 import numpy as np
+import pandas as pd
 import talib as tl
 from instock.core.strategy import enter
 
@@ -21,6 +22,10 @@ def check(code_name, data, date=None, threshold=60):
     else:
         end_date = date.strftime("%Y-%m-%d")
     if end_date is not None:
+        if not pd.api.types.is_datetime64_any_dtype(data['date']):
+            data = data.copy()
+            data['date'] = pd.to_datetime(data['date'])
+        end_date = pd.Timestamp(end_date)
         mask = (data['date'] <= end_date)
         data = data.loc[mask].copy()
     if len(data.index) < threshold:
@@ -34,7 +39,7 @@ def check(code_name, data, date=None, threshold=60):
     breakthrough_row = None
     for _close, _open, _date, _ma60 in zip(data['close'].values, data['open'].values, data['date'].values, data['ma60'].values):
         if _open < _ma60 <= _close:
-            if enter.check_volume(code_name, origin_data, date=datetime.date(datetime.strptime(_date, '%Y-%m-%d')), threshold=threshold):
+            if enter.check_volume(code_name, origin_data, date=pd.Timestamp(_date), threshold=threshold):
                 breakthrough_row = _date
                 break
 

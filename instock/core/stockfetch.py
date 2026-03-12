@@ -1695,6 +1695,9 @@ def _backfill_from_spot(code, date_end_yyyymmdd):
         )
         df = pd.read_sql(sql, mdb.engine(), params=(code, date_dash))
         if df is not None and len(df) > 0:
+            # 统一 date 列类型为 Timestamp（与缓存 pickle 中的 datetime64 一致）
+            if 'date' in df.columns:
+                df['date'] = pd.to_datetime(df['date'])
             return df
     except Exception as e:
         logging.debug(f"_backfill_from_spot 异常：{code} {date_end_yyyymmdd} - {e}")

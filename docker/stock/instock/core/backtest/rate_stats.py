@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import datetime
 import logging
 import numpy as np
 import pandas as pd
@@ -58,6 +59,14 @@ def get_rates(code_name, data, stock_column, threshold=101):
         start_date = code_name[0]
         code = code_name[1]
         stock_data_list = [start_date, code]
+
+        # 统一 date 类型：缓存数据的 date 列可能是 datetime64/Timestamp/datetime.date，
+        # 而 start_date 来自 SQL 结果转字符串（如 '2026-03-09'），
+        # 混合类型无法直接比较，需统一为 pd.Timestamp。
+        if not pd.api.types.is_datetime64_any_dtype(data['date']):
+            data['date'] = pd.to_datetime(data['date'])
+        if not isinstance(start_date, (pd.Timestamp, datetime.datetime)):
+            start_date = pd.Timestamp(start_date)
 
         mask = (data['date'] >= start_date)
         data = data.loc[mask].copy()

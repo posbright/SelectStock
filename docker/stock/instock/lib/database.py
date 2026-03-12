@@ -33,6 +33,11 @@ db_database = os.environ.get('db_database', 'instockdb')  # 数据库名称
 db_port = int(os.environ.get('db_port', '3306'))  # 数据库服务端口
 db_charset = "utf8mb4"  # 数据库字符集
 
+# 超时配置（秒），可通过环境变量覆盖（本地远程连接时适当放宽）
+_connect_timeout = int(os.environ.get('INSTOCK_DB_CONNECT_TIMEOUT', '10'))
+_read_timeout = int(os.environ.get('INSTOCK_DB_READ_TIMEOUT', '30'))
+_write_timeout = int(os.environ.get('INSTOCK_DB_WRITE_TIMEOUT', '30'))
+
 # 对密码进行URL编码，处理特殊字符
 _encoded_password = quote_plus(db_password)
 MYSQL_CONN_URL = "mysql+pymysql://%s:%s@%s:%s/%s?charset=%s" % (
@@ -41,7 +46,7 @@ logging.info(f"数据库链接信息：mysql+pymysql://{db_user}:***@{db_host}:{
 
 MYSQL_CONN_DBAPI = {'host': db_host, 'user': db_user, 'password': db_password, 'database': db_database,
                     'charset': db_charset, 'port': db_port, 'autocommit': True,
-                    'connect_timeout': 10, 'read_timeout': 30, 'write_timeout': 30}
+                    'connect_timeout': _connect_timeout, 'read_timeout': _read_timeout, 'write_timeout': _write_timeout}
 
 MYSQL_CONN_TORNDB = {'host': f'{db_host}:{str(db_port)}', 'user': db_user, 'password': db_password,
                      'database': db_database, 'charset': db_charset, 'max_idle_time': 3600, 'connect_timeout': 1000}
