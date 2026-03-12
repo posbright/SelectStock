@@ -29,7 +29,7 @@ failed = 0
 errors = []
 
 
-def test(name):
+def check(name):
     """测试装饰器"""
     def decorator(func):
         global passed, failed, errors
@@ -53,7 +53,7 @@ def test(name):
 # ============================================================
 print("\n🔧 测试 1: job_tracker 模块")
 
-@test("job_tracker 模块可导入")
+@check("job_tracker 模块可导入")
 def _():
     from instock.lib.job_tracker import (
         record_task_start, record_task_end, record_task_skipped,
@@ -68,7 +68,7 @@ def _():
     assert callable(get_task_status)
     assert JOB_STATUS_TABLE == 'cn_job_status'
 
-@test("record_task_start 返回时间戳")
+@check("record_task_start 返回时间戳")
 def _():
     import time
     from instock.lib.job_tracker import record_task_start
@@ -79,7 +79,7 @@ def _():
     assert 'task_name' in params
     assert 'job_date' in params
 
-@test("is_data_fresh 返回 (bool, int) 元组")
+@check("is_data_fresh 返回 (bool, int) 元组")
 def _():
     from instock.lib.job_tracker import is_data_fresh
     sig = inspect.signature(is_data_fresh)
@@ -88,7 +88,7 @@ def _():
     assert 'date_str' in params
     assert 'min_rows' in params
 
-@test("record_task_end 接受 success/message/rows_affected 参数")
+@check("record_task_end 接受 success/message/rows_affected 参数")
 def _():
     from instock.lib.job_tracker import record_task_end
     sig = inspect.signature(record_task_end)
@@ -97,7 +97,7 @@ def _():
     assert 'message' in params
     assert 'rows_affected' in params
 
-@test("is_job_completed 检查 __overall__ 记录")
+@check("is_job_completed 检查 __overall__ 记录")
 def _():
     from instock.lib.job_tracker import is_job_completed
     source = inspect.getsource(is_job_completed)
@@ -109,13 +109,13 @@ def _():
 # ============================================================
 print("\n🔧 测试 2: fetch_daily_job 重构验证")
 
-@test("fetch_daily_job 不再包含 fetch_data_job 引用")
+@check("fetch_daily_job 不再包含 fetch_data_job 引用")
 def _():
     import instock.job.fetch_daily_job as fdj
     source = inspect.getsource(fdj)
     assert 'fetch_data_job' not in source, "K线缓存应已从 fetch_daily_job 移除"
 
-@test("fetch_daily_job 使用 job_tracker 记录任务状态")
+@check("fetch_daily_job 使用 job_tracker 记录任务状态")
 def _():
     import instock.job.fetch_daily_job as fdj
     source = inspect.getsource(fdj)
@@ -123,7 +123,7 @@ def _():
     assert 'record_task_end' in source
     assert 'is_job_completed' in source
 
-@test("fetch_daily_job 有数据新鲜度检查")
+@check("fetch_daily_job 有数据新鲜度检查")
 def _():
     import instock.job.fetch_daily_job as fdj
     source = inspect.getsource(fdj)
@@ -131,7 +131,7 @@ def _():
     assert 'is_data_fresh' in source
     assert '_FRESHNESS_THRESHOLDS' in source
 
-@test("fetch_daily_job _FRESHNESS_THRESHOLDS 包含核心表")
+@check("fetch_daily_job _FRESHNESS_THRESHOLDS 包含核心表")
 def _():
     import instock.job.fetch_daily_job as fdj
     thresholds = fdj._FRESHNESS_THRESHOLDS
@@ -139,24 +139,24 @@ def _():
     assert 'cn_etf_spot' in thresholds
     assert 'cn_stock_selection' in thresholds
 
-@test("fetch_daily_job JOB_NAME 为 run_fetch")
+@check("fetch_daily_job JOB_NAME 为 run_fetch")
 def _():
     import instock.job.fetch_daily_job as fdj
     assert fdj._JOB_NAME == 'run_fetch'
 
-@test("fetch_daily_job 支持 INSTOCK_FORCE_FETCH 环境变量")
+@check("fetch_daily_job 支持 INSTOCK_FORCE_FETCH 环境变量")
 def _():
     import instock.job.fetch_daily_job as fdj
     source = inspect.getsource(fdj)
     assert 'INSTOCK_FORCE_FETCH' in source
 
-@test("fetch_daily_job 记录 __overall__ 完成状态")
+@check("fetch_daily_job 记录 __overall__ 完成状态")
 def _():
     import instock.job.fetch_daily_job as fdj
     source = inspect.getsource(fdj.main)
     assert '__overall__' in source, "应记录整体完成状态供 kline_cache 查询"
 
-@test("fetch_daily_job 子进程仍保持隔离（_run_job_subprocess）")
+@check("fetch_daily_job 子进程仍保持隔离（_run_job_subprocess）")
 def _():
     import instock.job.fetch_daily_job as fdj
     source = inspect.getsource(fdj)
@@ -169,13 +169,13 @@ def _():
 # ============================================================
 print("\n🔧 测试 3: analysis_daily_job 重构验证")
 
-@test("analysis_daily_job 包含 _run_stock_spot_buy")
+@check("analysis_daily_job 包含 _run_stock_spot_buy")
 def _():
     import instock.job.analysis_daily_job as adj
     assert hasattr(adj, '_run_stock_spot_buy'), "应包含 _run_stock_spot_buy 函数"
     assert callable(adj._run_stock_spot_buy)
 
-@test("analysis_daily_job._run_stock_spot_buy 执行正确的 SQL 筛选")
+@check("analysis_daily_job._run_stock_spot_buy 执行正确的 SQL 筛选")
 def _():
     import instock.job.analysis_daily_job as adj
     source = inspect.getsource(adj._run_stock_spot_buy)
@@ -184,7 +184,7 @@ def _():
     assert 'roe_weight' in source, "应筛选 ROE"
     assert 'cn_stock_spot_buy' in source or 'TABLE_CN_STOCK_SPOT_BUY' in source
 
-@test("analysis_daily_job.main 在 GPT 选股后执行 stock_spot_buy")
+@check("analysis_daily_job.main 在 GPT 选股后执行 stock_spot_buy")
 def _():
     import instock.job.analysis_daily_job as adj
     source = inspect.getsource(adj.main)
@@ -197,14 +197,14 @@ def _():
     assert gpt_pos < spot_buy_pos < streaming_pos, \
         "执行顺序应为: GPT选股 → 基本面选股 → 流式分析"
 
-@test("analysis_daily_job 使用 job_tracker 记录任务状态")
+@check("analysis_daily_job 使用 job_tracker 记录任务状态")
 def _():
     import instock.job.analysis_daily_job as adj
     source = inspect.getsource(adj)
     assert 'record_task_start' in source
     assert 'record_task_end' in source
 
-@test("analysis_daily_job 记录每个子任务的耗时")
+@check("analysis_daily_job 记录每个子任务的耗时")
 def _():
     import instock.job.analysis_daily_job as adj
     source = inspect.getsource(adj.main)
@@ -218,19 +218,19 @@ def _():
 # ============================================================
 print("\n🔧 测试 4: basic_data_other_daily_job 验证 (stock_spot_buy 移除)")
 
-@test("save_nph_stock_lhb_data 不再调用 stock_spot_buy")
+@check("save_nph_stock_lhb_data 不再调用 stock_spot_buy")
 def _():
     import instock.job.basic_data_other_daily_job as bdo
     source = inspect.getsource(bdo.save_nph_stock_lhb_data)
     assert 'stock_spot_buy(date)' not in source, \
         "save_nph_stock_lhb_data 不应再调用 stock_spot_buy"
 
-@test("basic_data_other 仍保留 stock_spot_buy 函数定义（向后兼容）")
+@check("basic_data_other 仍保留 stock_spot_buy 函数定义（向后兼容）")
 def _():
     import instock.job.basic_data_other_daily_job as bdo
     assert hasattr(bdo, 'stock_spot_buy'), "stock_spot_buy 函数定义应保留（向后兼容）"
 
-@test("save_nph_stock_lhb_data 包含移除注释说明")
+@check("save_nph_stock_lhb_data 包含移除注释说明")
 def _():
     import instock.job.basic_data_other_daily_job as bdo
     source = inspect.getsource(bdo.save_nph_stock_lhb_data)
@@ -242,46 +242,46 @@ def _():
 # ============================================================
 print("\n🔧 测试 5: kline_cache_daily_job 验证")
 
-@test("kline_cache_daily_job 可导入")
+@check("kline_cache_daily_job 可导入")
 def _():
     import instock.job.kline_cache_daily_job as kcj
     assert hasattr(kcj, 'main')
     assert hasattr(kcj, 'fetch_all_data')
     assert hasattr(kcj, '_check_fetch_completed')
 
-@test("kline_cache_daily_job 检查 run_fetch 完成状态")
+@check("kline_cache_daily_job 检查 run_fetch 完成状态")
 def _():
     import instock.job.kline_cache_daily_job as kcj
     source = inspect.getsource(kcj._check_fetch_completed)
     assert 'is_job_completed' in source
     assert 'run_fetch' in source
 
-@test("kline_cache_daily_job 支持 INSTOCK_FORCE_KLINE_CACHE 跳过检查")
+@check("kline_cache_daily_job 支持 INSTOCK_FORCE_KLINE_CACHE 跳过检查")
 def _():
     import instock.job.kline_cache_daily_job as kcj
     source = inspect.getsource(kcj)
     assert 'INSTOCK_FORCE_KLINE_CACHE' in source
 
-@test("kline_cache_daily_job 包含缓存清理步骤")
+@check("kline_cache_daily_job 包含缓存清理步骤")
 def _():
     import instock.job.kline_cache_daily_job as kcj
     source = inspect.getsource(kcj.fetch_all_data)
     assert 'clean_expired_cache' in source
 
-@test("kline_cache_daily_job 包含K线缓存更新步骤")
+@check("kline_cache_daily_job 包含K线缓存更新步骤")
 def _():
     import instock.job.kline_cache_daily_job as kcj
     source = inspect.getsource(kcj.fetch_all_data)
     assert 'update_all_caches' in source
 
-@test("kline_cache_daily_job 使用 job_tracker 记录状态")
+@check("kline_cache_daily_job 使用 job_tracker 记录状态")
 def _():
     import instock.job.kline_cache_daily_job as kcj
     source = inspect.getsource(kcj)
     assert 'record_task_start' in source
     assert 'record_task_end' in source
 
-@test("kline_cache_daily_job JOB_NAME 为 run_kline_cache")
+@check("kline_cache_daily_job JOB_NAME 为 run_kline_cache")
 def _():
     import instock.job.kline_cache_daily_job as kcj
     assert kcj._JOB_NAME == 'run_kline_cache'
@@ -292,33 +292,33 @@ def _():
 # ============================================================
 print("\n🔧 测试 6: execute_daily_job 一致性验证")
 
-@test("execute_daily_job 使用 kline_cache_daily_job 替代 fetch_data_job")
+@check("execute_daily_job 使用 kline_cache_daily_job 替代 fetch_data_job")
 def _():
     import instock.job.execute_daily_job as edj
     source = inspect.getsource(edj.main)
     assert 'kline_cache_daily_job.py' in source, "应使用 kline_cache_daily_job.py 替代 fetch_data_job.py"
 
-@test("execute_daily_job 包含 stock_spot_buy")
+@check("execute_daily_job 包含 stock_spot_buy")
 def _():
     import instock.job.execute_daily_job as edj
     source = inspect.getsource(edj)
     assert '_run_stock_spot_buy' in source, "应包含基本面选股函数"
 
-@test("execute_daily_job 使用 job_tracker")
+@check("execute_daily_job 使用 job_tracker")
 def _():
     import instock.job.execute_daily_job as edj
     source = inspect.getsource(edj)
     assert 'record_task_start' in source
     assert 'record_task_end' in source
 
-@test("execute_daily_job 有数据新鲜度检查")
+@check("execute_daily_job 有数据新鲜度检查")
 def _():
     import instock.job.execute_daily_job as edj
     source = inspect.getsource(edj)
     assert '_check_and_skip' in source
     assert 'is_data_fresh' in source
 
-@test("execute_daily_job stock_spot_buy 在 GPT 之后执行")
+@check("execute_daily_job stock_spot_buy 在 GPT 之后执行")
 def _():
     import instock.job.execute_daily_job as edj
     source = inspect.getsource(edj.main)
@@ -333,27 +333,27 @@ def _():
 # ============================================================
 print("\n🔧 测试 7: cron 脚本验证")
 
-@test("run_kline_cache cron 脚本存在")
+@check("run_kline_cache cron 脚本存在")
 def _():
     cron_path = os.path.join(project_root, 'cron', 'cron.workdayly', 'run_kline_cache')
     assert os.path.isfile(cron_path), f"cron 脚本不存在: {cron_path}"
 
-@test("run_kline_cache 调用 kline_cache_daily_job.py")
+@check("run_kline_cache 调用 kline_cache_daily_job.py")
 def _():
     cron_path = os.path.join(project_root, 'cron', 'cron.workdayly', 'run_kline_cache')
     with open(cron_path, 'r', encoding='utf-8') as f:
         content = f.read()
     assert 'kline_cache_daily_job.py' in content
 
-@test("run_kline_cache 包含非交易日检查")
+@check("run_kline_cache 包含非交易日检查")
 def _():
     cron_path = os.path.join(project_root, 'cron', 'cron.workdayly', 'run_kline_cache')
     with open(cron_path, 'r', encoding='utf-8') as f:
         content = f.read()
-    assert 'IS_TRADE_DAY' in content
-    assert 'is_trade_date' in content
+    # 新架构通过 _common.sh 的 check_trade_day 函数实现
+    assert 'check_trade_day' in content or ('IS_TRADE_DAY' in content and 'is_trade_date' in content)
 
-@test("run_fetch cron 脚本仍然存在且调用 fetch_daily_job")
+@check("run_fetch cron 脚本仍然存在且调用 fetch_daily_job")
 def _():
     cron_path = os.path.join(project_root, 'cron', 'cron.workdayly', 'run_fetch')
     assert os.path.isfile(cron_path)
@@ -361,7 +361,7 @@ def _():
         content = f.read()
     assert 'fetch_daily_job.py' in content
 
-@test("run_analysis cron 脚本仍然存在且调用 analysis_daily_job")
+@check("run_analysis cron 脚本仍然存在且调用 analysis_daily_job")
 def _():
     cron_path = os.path.join(project_root, 'cron', 'cron.workdayly', 'run_analysis')
     assert os.path.isfile(cron_path)
@@ -375,12 +375,12 @@ def _():
 # ============================================================
 print("\n🔧 测试 8: 向后兼容性验证")
 
-@test("fetch_data_job.py 原文件保留（独立运行仍可用）")
+@check("fetch_data_job.py 原文件保留（独立运行仍可用）")
 def _():
     fdj_path = os.path.join(project_root, 'instock', 'job', 'fetch_data_job.py')
     assert os.path.isfile(fdj_path), "fetch_data_job.py 应保留以支持独立手动运行"
 
-@test("fetch_three_pages.py 已更新 stock_spot_buy 引用")
+@check("fetch_three_pages.py 已更新 stock_spot_buy 引用")
 def _():
     ftp_path = os.path.join(project_root, 'instock', 'job', 'fetch_three_pages.py')
     if os.path.isfile(ftp_path):
@@ -396,7 +396,7 @@ def _():
 # ============================================================
 print("\n🔧 测试 9: 重构完整性交叉检查")
 
-@test("所有 job 文件可正常导入")
+@check("所有 job 文件可正常导入")
 def _():
     modules = [
         'instock.job.fetch_daily_job',
@@ -408,7 +408,7 @@ def _():
     for mod in modules:
         __import__(mod)
 
-@test("fetch_daily_job 不依赖 fetch_data_job")
+@check("fetch_daily_job 不依赖 fetch_data_job")
 def _():
     import instock.job.fetch_daily_job as fdj
     source = inspect.getsource(fdj)
@@ -416,7 +416,7 @@ def _():
     assert 'import fetch_data_job' not in source
     assert "fetch_data_job.py" not in source
 
-@test("analysis_daily_job._run_stock_spot_buy 筛选条件与原 basic_data_other 一致")
+@check("analysis_daily_job._run_stock_spot_buy 筛选条件与原 basic_data_other 一致")
 def _():
     import instock.job.analysis_daily_job as adj
     import instock.job.basic_data_other_daily_job as bdo
@@ -439,4 +439,5 @@ if errors:
         print(f"  - {e}")
 print(f"{'='*60}")
 
-sys.exit(0 if failed == 0 else 1)
+if __name__ == "__main__":
+    sys.exit(0 if failed == 0 else 1)

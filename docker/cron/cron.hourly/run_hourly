@@ -1,41 +1,10 @@
 #!/bin/bash
-
-# 获取脚本所在目录，计算项目根目录
-# Docker 环境：项目固定在 /data/InStock
+# 每小时任务 — 采集实时股票/ETF行情数据（Docker 版）
 PROJECT_ROOT=/data/InStock
+source /etc/cron/_common.sh
 
-export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH
-export PYTHONIOENCODING=utf-8
-export LANG=zh_CN.UTF-8
-export PYTHONPATH=$PROJECT_ROOT
-export LC_CTYPE=zh_CN.UTF-8
-
-LOG_DIR=$PROJECT_ROOT/instock/log
-mkdir -p $LOG_DIR
+init_env
 LOG_FILE=$LOG_DIR/hourly.log
 
-# 非交易日跳过：避免周末/节假日浪费代理池初始化和API配额
-# 使用 Python 检测当日是否为交易日（读取交易日历）
-IS_TRADE_DAY=$(python3 -c "
-import sys, os
-sys.path.insert(0, '$PROJECT_ROOT')
-try:
-    import instock.lib.trade_time as trd
-    print('1' if trd.is_trade_date() else '0')
-except Exception:
-    print('1')  # 检测失败时保守执行
-" 2>/dev/null)
-
-if [ "$IS_TRADE_DAY" = "0" ]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 非交易日，跳过 hourly 任务" >> $LOG_FILE
-    exit 0
-fi
-
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始执行 basic_data_daily_job" >> $LOG_FILE
-python3 $PROJECT_ROOT/instock/job/basic_data_daily_job.py >> $LOG_FILE 2>&1
-EXIT_CODE=$?
-if [ $EXIT_CODE -eq 0 ]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 执行完成 (成功)" >> $LOG_FILE
-else
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 执行完成 (失败, 退出码: $EXIT_CODE)" >> $LOG_FILE
-fi
+check_trade_day "hourly 任务"
+run_job "实时行情采集 (basic_data_daily_job)" "instock/job/basic_data_daily_job.py"

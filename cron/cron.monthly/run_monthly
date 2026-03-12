@@ -1,28 +1,24 @@
 #!/bin/bash
-
-# 获取脚本所在目录，计算项目根目录
+# 月度缓存清理 — 智能清理退市/除权缓存，释放磁盘空间
+# 默认模式：智能清理（退市+除权+损坏）
+# --all 模式：删除所有缓存（下次运行将全量重新拉取）
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PROJECT_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
+source "$PROJECT_ROOT/cron/_common.sh"
 
-# cron环境PATH极其有限，必须显式设置
-export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH
-export PYTHONIOENCODING=utf-8
-export LANG=zh_CN.UTF-8
-export PYTHONPATH=$PROJECT_ROOT
-export LC_CTYPE=zh_CN.UTF-8
-
-LOG_DIR=$PROJECT_ROOT/instock/log
-mkdir -p $LOG_DIR
+init_env
 LOG_FILE=$LOG_DIR/monthly.log
 
-# 清理过期缓存数据（仅删除超过指定天数未更新的缓存）
-# 使用 --all 参数可全量清除所有缓存
 if [ "$1" = "--all" ]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始全量清除缓存" >> $LOG_FILE
-    rm -rf $PROJECT_ROOT/instock/cache/hist/*
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 已全量清除所有历史K线缓存" >> $LOG_FILE
+    log_info "开始全量清除缓存"
+    rm -rf "$PROJECT_ROOT/instock/cache/hist"/*
+    log_info "已全量清除所有历史K线缓存"
 else
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始智能清理缓存" >> $LOG_FILE
-    python3 -c "from instock.core.stockfetch import clean_expired_cache; clean_expired_cache()" >> $LOG_FILE 2>&1
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 缓存清理完成" >> $LOG_FILE
+    log_info "开始智能清理缓存"
+    python3 -c "
+import sys; sys.path.insert(0, '$PROJECT_ROOT')
+from instock.core.stockfetch import clean_expired_cache
+clean_expired_cache()
+" >> "$LOG_FILE" 2>&1
+    log_info "缓存清理完成"
 fi

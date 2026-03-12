@@ -1,4 +1,4 @@
-# 基础镜像
+﻿# 基础镜像
 # https://hub.docker.com/_/python/tags
 # 使用 python:3.11-slim 更通用，兼容各种Docker环境和镜像加速器
 FROM python:3.11-slim
@@ -126,17 +126,19 @@ WORKDIR /data
 
 # 复制应用代码和定时任务配置
 COPY stock /data/InStock
+COPY cron/_common.sh /etc/cron/_common.sh
 COPY cron/cron.hourly /etc/cron.hourly
 COPY cron/cron.workdayly /etc/cron.workdayly
 COPY cron/cron.monthly /etc/cron.monthly
 
 # 配置定时任务
 RUN set -eux; \
-    chmod 755 /data/InStock/instock/bin/run_*.sh; \
+    chmod 755 /data/InStock/instock/bin/run_*.sh;
+    chmod 755 /etc/cron/_common.sh; \
     find /etc/cron.hourly /etc/cron.workdayly /etc/cron.monthly -type f -exec chmod 755 {} \; 2>/dev/null || true; \
     # 创建crontab配置
-    # 使用拆分模式：获取(run_fetch)与分析(run_analysis)独立运行
-    # 优势：数据获取失败不会阻塞分析任务（可用历史缓存），反之亦然
+    # 拆分模式：fetch → kline_cache → analysis 三阶段独立运行
+    # 优势：每阶段可独立运行/重试，互不阻塞
     # 每个任务都有 flock 防并发 + 重试计划
     printf '%s\n' \
         'SHELL=/bin/sh' \
@@ -146,10 +148,14 @@ RUN set -eux; \
         '# ── 盘中行情快照（轻量级，用于盘中监控）──' \
         '0 12 * * 1-5 flock -xn /tmp/instock_hourly.lock /etc/cron.hourly/run_hourly' \
         '18 15 * * 1-5 flock -xn /tmp/instock_hourly.lock /etc/cron.hourly/run_hourly' \
-        '# ── 收盘后数据获取（API调用：行情+选股+资金流向+K线缓存）──' \
+        '# ── 收盘后数据获取（API调用：行情+选股+资金流向）──' \
         '0 18 * * 1-5 flock -xn /tmp/instock_fetch.lock /etc/cron.workdayly/run_fetch' \
         '# ── 数据获取重试（如18:00仍在运行则flock跳过）──' \
         '0 1 * * 2-6 flock -xn /tmp/instock_fetch.lock /etc/cron.workdayly/run_fetch' \
+        '# ── K线缓存增量更新（依赖 fetch 完成）──' \
+        '0 20 * * 1-5 flock -xn /tmp/instock_kline.lock /etc/cron.workdayly/run_kline_cache' \
+        '# ── K线缓存重试 ──' \
+        '30 1 * * 2-6 flock -xn /tmp/instock_kline.lock /etc/cron.workdayly/run_kline_cache' \
         '# ── 数据分析（本地计算：指标+K线形态+策略+回测）──' \
         '0 22 * * 1-5 flock -xn /tmp/instock_analysis.lock /etc/cron.workdayly/run_analysis' \
         '# ── 数据分析重试 ──' \
