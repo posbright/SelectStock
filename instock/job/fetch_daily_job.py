@@ -58,6 +58,9 @@ import instock.lib.envconfig as _cfg
 __author__ = 'InStock'
 __date__ = '2026/03/12'
 
+# 子进程超时（秒）
+_JOB_TIMEOUT = _cfg.get_int('INSTOCK_JOB_TIMEOUT', 1800)
+
 _JOB_DIR = os.path.dirname(os.path.abspath(__file__))
 _JOB_NAME = 'run_fetch'
 
@@ -74,7 +77,7 @@ _FRESHNESS_THRESHOLDS = {
 }
 
 
-def _run_job_subprocess(script_name, label, timeout=1800):
+def _run_job_subprocess(script_name, label, timeout=_JOB_TIMEOUT):
     """以独立子进程运行 job 脚本，防止 OOM 波及当前进程。
 
     Returns:

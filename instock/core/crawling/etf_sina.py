@@ -11,9 +11,12 @@ import random
 import requests
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import instock.lib.envconfig as _cfg
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
+
+_CRAWL_WORKERS = _cfg.get_int('INSTOCK_CRAWL_WORKERS', 5)
 
 
 def _get_etf_codes():
@@ -150,7 +153,7 @@ def fund_etf_spot_sina() -> pd.DataFrame:
     batches = [all_codes[i:i + batch_size] for i in range(0, len(all_codes), batch_size)]
     
     # 使用多线程并发获取
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    with ThreadPoolExecutor(max_workers=_CRAWL_WORKERS) as executor:
         futures = []
         for i, batch in enumerate(batches):
             if i > 0 and i % 10 == 0:

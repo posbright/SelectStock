@@ -17,6 +17,9 @@ import instock.lib.envconfig as _cfg  # noqa: F401
 __author__ = 'InStock'
 __date__ = '2026/02/14'
 
+# 数据库连接重试次数（应用于 get_connection / insert / executeSql）
+_DB_CONN_RETRIES = _cfg.get_int('INSTOCK_DB_CONN_RETRIES', 3)
+
 db_host = _cfg.get_str('db_host', '127.0.0.1')       # 数据库服务主机
 db_user = _cfg.get_str('db_user', 'root')            # 数据库访问用户
 db_password = _cfg.get_str('db_password', '')         # 数据库访问密码（生产环境务必配置）
@@ -69,7 +72,7 @@ def engine_to_db(to_db):
 
 # DB Api -数据库连接对象connection
 def get_connection():
-    max_retries = 3
+    max_retries = _DB_CONN_RETRIES
     for attempt in range(1, max_retries + 1):
         try:
             return pymysql.connect(**MYSQL_CONN_DBAPI)
@@ -140,7 +143,7 @@ def insert_other_db_from_df(to_db, data, table_name, cols_type, write_index, pri
     # 选择插入方法：有主键时使用upsert避免重复插入错误，否则普通append
     insert_method = _mysql_upsert if has_primary_key else None
 
-    max_retries = 3
+    max_retries = _DB_CONN_RETRIES
     for attempt in range(1, max_retries + 1):
         try:
             if cols_type is None:
@@ -250,7 +253,7 @@ def checkTableIsExist(tableName):
 
 # 增删改数据
 def executeSql(sql, params=()):
-    max_retries = 3
+    max_retries = _DB_CONN_RETRIES
     for attempt in range(1, max_retries + 1):
         try:
             with get_connection() as conn:

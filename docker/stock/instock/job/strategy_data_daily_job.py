@@ -15,9 +15,13 @@ import instock.core.tablestructure as tbs
 import instock.lib.database as mdb
 from instock.core.singleton_stock import stock_hist_data
 from instock.core.stockfetch import fetch_stock_top_entity_data
+import instock.lib.envconfig as _cfg
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
+
+_STRATEGY_WORKERS = _cfg.get_int('INSTOCK_STRATEGY_WORKERS', 4)
+_STRATEGY_OUTER_WORKERS = _cfg.get_int('INSTOCK_STRATEGY_OUTER_WORKERS', 2)
 
 
 def prepare(date, strategy):
@@ -35,8 +39,8 @@ def prepare(date, strategy):
 
         # 删除老数据。
         if mdb.checkTableIsExist(table_name):
-            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
-            mdb.executeSql(del_sql)
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
             cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_STRATEGIES[0]['columns'])
@@ -56,7 +60,7 @@ def prepare(date, strategy):
         logging.error(f"strategy_data_daily_job.prepare处理异常：{strategy}策略", exc_info=True)
 
 
-def run_check(strategy_fun, table_name, stocks, date, workers=4):
+def run_check(strategy_fun, table_name, stocks, date, workers=_STRATEGY_WORKERS):
     is_check_high_tight = False
     if strategy_fun.__name__ == 'check_high_tight':
         stock_tops = fetch_stock_top_entity_data(date)
@@ -85,8 +89,8 @@ def run_check(strategy_fun, table_name, stocks, date, workers=4):
 
 
 def main():
-    # 使用方法传递。限制并发数以控制内存占用（适配2GB服务器）
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+    # 使用方法传递。并发数通过 INSTOCK_STRATEGY_OUTER_WORKERS 配置
+    with concurrent.futures.ThreadPoolExecutor(max_workers=_STRATEGY_OUTER_WORKERS) as executor:
         for strategy in tbs.TABLE_CN_STOCK_STRATEGIES:
             executor.submit(runt.run_with_args, prepare, strategy)
 

@@ -54,24 +54,29 @@ from instock.lib.job_tracker import (
     record_task_start, record_task_end, record_task_skipped,
     is_data_fresh,
 )
+import instock.lib.envconfig as _cfg
 
 __author__ = 'InStock'
 __date__ = '2026/03/12'
 
 # 分析数据跳过阈值（同 analysis_daily_job.py）
-ANALYSIS_DONE_THRESHOLD = int(os.environ.get('INSTOCK_ANALYSIS_DONE_THRESHOLD', '1000'))
+ANALYSIS_DONE_THRESHOLD = _cfg.get_int('INSTOCK_ANALYSIS_DONE_THRESHOLD', 1000)
 
 _JOB_DIR = os.path.dirname(os.path.abspath(__file__))
 _JOB_NAME = 'run_workdayly'
 
+# 子进程超时（秒）
+_JOB_TIMEOUT = _cfg.get_int('INSTOCK_JOB_TIMEOUT', 1800)
+_KLINE_JOB_TIMEOUT = _cfg.get_int('INSTOCK_KLINE_JOB_TIMEOUT', 36000)
+
 # 数据新鲜度阈值
 _FRESHNESS_THRESHOLDS = {
-    'cn_stock_spot': int(os.environ.get('INSTOCK_FRESH_STOCK_SPOT', '3000')),
-    'cn_stock_selection': int(os.environ.get('INSTOCK_FRESH_SELECTION', '100')),
+    'cn_stock_spot': _cfg.get_int('INSTOCK_FRESH_STOCK_SPOT', 3000),
+    'cn_stock_selection': _cfg.get_int('INSTOCK_FRESH_SELECTION', 100),
 }
 
 
-def _run_job_subprocess(script_name, label, timeout=1800):
+def _run_job_subprocess(script_name, label, timeout=_JOB_TIMEOUT):
     """以独立子进程运行 job 脚本，防止 OOM 波及当前进程。
 
     Returns:
@@ -106,7 +111,7 @@ def _is_analysis_done():
     但仍执行 Phase 0/1/2（初始化+轻量数据+K线缓存）。
     可通过 INSTOCK_FORCE_ANALYSIS=1 强制执行。
     """
-    if os.environ.get('INSTOCK_FORCE_ANALYSIS', '').strip() == '1':
+    if _cfg.get_bool('INSTOCK_FORCE_ANALYSIS', False):
         return False
     try:
         run_date, run_date_nph = trd.get_trade_date_last()
@@ -133,7 +138,7 @@ def _is_analysis_done():
 
 def _check_and_skip(table_name, date_str, task_label):
     """检查数据新鲜度，决定是否跳过该任务。"""
-    if os.environ.get('INSTOCK_FORCE_FETCH', '').strip() == '1':
+    if _cfg.get_bool('INSTOCK_FORCE_FETCH', False):
         return False
     threshold = _FRESHNESS_THRESHOLDS.get(table_name, 1)
     fresh, count = is_data_fresh(table_name, date_str, threshold)
@@ -284,7 +289,7 @@ def main():
         logging.debug("释放 stock_data 单例异常", exc_info=True)
 
     t2 = record_task_start(_JOB_NAME, 'kline_cache', run_date_nph)
-    phase2_ok = _run_job_subprocess('kline_cache_daily_job.py', 'execute_daily_job K线缓存更新', timeout=36000)
+    phase2_ok = _run_job_subprocess('kline_cache_daily_job.py', 'execute_daily_job K线缓存更新', timeout=_KLINE_JOB_TIMEOUT)
     record_task_end(_JOB_NAME, 'kline_cache', run_date_nph, t2, success=phase2_ok)
     if not phase2_ok:
         logging.warning(

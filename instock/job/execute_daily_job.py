@@ -65,6 +65,10 @@ ANALYSIS_DONE_THRESHOLD = _cfg.get_int('INSTOCK_ANALYSIS_DONE_THRESHOLD', 1000)
 _JOB_DIR = os.path.dirname(os.path.abspath(__file__))
 _JOB_NAME = 'run_workdayly'
 
+# 子进程超时（秒）
+_JOB_TIMEOUT = _cfg.get_int('INSTOCK_JOB_TIMEOUT', 1800)
+_KLINE_JOB_TIMEOUT = _cfg.get_int('INSTOCK_KLINE_JOB_TIMEOUT', 36000)
+
 # 数据新鲜度阈值
 _FRESHNESS_THRESHOLDS = {
     'cn_stock_spot': _cfg.get_int('INSTOCK_FRESH_STOCK_SPOT', 3000),
@@ -72,7 +76,7 @@ _FRESHNESS_THRESHOLDS = {
 }
 
 
-def _run_job_subprocess(script_name, label, timeout=1800):
+def _run_job_subprocess(script_name, label, timeout=_JOB_TIMEOUT):
     """以独立子进程运行 job 脚本，防止 OOM 波及当前进程。
 
     Returns:
@@ -285,7 +289,7 @@ def main():
         logging.debug("释放 stock_data 单例异常", exc_info=True)
 
     t2 = record_task_start(_JOB_NAME, 'kline_cache', run_date_nph)
-    phase2_ok = _run_job_subprocess('kline_cache_daily_job.py', 'execute_daily_job K线缓存更新', timeout=36000)
+    phase2_ok = _run_job_subprocess('kline_cache_daily_job.py', 'execute_daily_job K线缓存更新', timeout=_KLINE_JOB_TIMEOUT)
     record_task_end(_JOB_NAME, 'kline_cache', run_date_nph, t2, success=phase2_ok)
     if not phase2_ok:
         logging.warning(

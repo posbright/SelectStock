@@ -9,9 +9,12 @@ import os
 import sys
 import time
 import instock.lib.trade_time as trd
+import instock.lib.envconfig as _cfg
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
+
+_BATCH_DATE_WORKERS = _cfg.get_int('INSTOCK_BATCH_DATE_WORKERS', 3)
 
 
 # 通用函数，获得日期参数，支持批量作业。
@@ -42,7 +45,7 @@ def run_with_args(run_fun, *args):
         run_date = start_date
         try:
             futures = []
-            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=_BATCH_DATE_WORKERS) as executor:
                 while run_date <= end_date:
                     if trd.is_trade_date(run_date):
                         if run_fun.__name__.startswith('save_nph'):
@@ -63,7 +66,7 @@ def run_with_args(run_fun, *args):
         dates = sys.argv[1].split(',')
         try:
             futures = []
-            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=_BATCH_DATE_WORKERS) as executor:
                 for date in dates:
                     tmp_year, tmp_month, tmp_day = date.split("-")
                     run_date = datetime.datetime(int(tmp_year), int(tmp_month), int(tmp_day)).date()

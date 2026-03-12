@@ -11,27 +11,21 @@ from sqlalchemy import inspect
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from urllib.parse import quote_plus
 
-# 自动加载项目根目录下的 .env 文件（兼容方法 B）
-# .env 中的变量不会覆盖已存在的环境变量（方法 A 优先）
-try:
-    from dotenv import load_dotenv as _load_dotenv
-    # 向上查找到项目根目录（instock/lib/database.py → 项目根）
-    _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-    _env_path = os.path.join(_project_root, '.env')
-    if os.path.isfile(_env_path):
-        _load_dotenv(_env_path, override=False)
-except ImportError:
-    pass  # python-dotenv 未安装时静默跳过，仅使用环境变量
+# 集中式 .env 加载（通过 envconfig 模块完成，import 即触发）
+import instock.lib.envconfig as _cfg  # noqa: F401
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
 
-db_host = os.environ.get('db_host', '127.0.0.1')  # 数据库服务主机（默认本地）
-db_user = os.environ.get('db_user', 'root')  # 数据库访问用户
-db_password = os.environ.get('db_password', '')  # 数据库访问密码（生产环境务必通过环境变量配置）
-db_database = os.environ.get('db_database', 'instockdb')  # 数据库名称
-db_port = int(os.environ.get('db_port', '3306'))  # 数据库服务端口
-db_charset = "utf8mb4"  # 数据库字符集
+# 数据库连接重试次数（应用于 get_connection / insert / executeSql）
+_DB_CONN_RETRIES = _cfg.get_int('INSTOCK_DB_CONN_RETRIES', 3)
+
+db_host = _cfg.get_str('db_host', '127.0.0.1')       # 数据库服务主机
+db_user = _cfg.get_str('db_user', 'root')            # 数据库访问用户
+db_password = _cfg.get_str('db_password', '')         # 数据库访问密码（生产环境务必配置）
+db_database = _cfg.get_str('db_database', 'instockdb')  # 数据库名称
+db_port = _cfg.get_int('db_port', 3306)               # 数据库服务端口
+db_charset = _cfg.get_str('db_charset', 'utf8mb4')    # 数据库字符集
 
 # 对密码进行URL编码，处理特殊字符
 _encoded_password = quote_plus(db_password)
@@ -39,10 +33,10 @@ MYSQL_CONN_URL = "mysql+pymysql://%s:%s@%s:%s/%s?charset=%s" % (
     db_user, _encoded_password, db_host, db_port, db_database, db_charset)
 logging.info(f"数据库链接信息：mysql+pymysql://{db_user}:***@{db_host}:{db_port}/{db_database}?charset={db_charset}")
 
-# 超时配置：支持通过环境变量覆盖（本地连远程时适当放宽）
-_connect_timeout = int(os.environ.get('INSTOCK_DB_CONNECT_TIMEOUT', '10'))
-_read_timeout = int(os.environ.get('INSTOCK_DB_READ_TIMEOUT', '30'))
-_write_timeout = int(os.environ.get('INSTOCK_DB_WRITE_TIMEOUT', '30'))
+# 超时配置（本地连远程时适当放宽）
+_connect_timeout = _cfg.get_int('INSTOCK_DB_CONNECT_TIMEOUT', 10)
+_read_timeout = _cfg.get_int('INSTOCK_DB_READ_TIMEOUT', 30)
+_write_timeout = _cfg.get_int('INSTOCK_DB_WRITE_TIMEOUT', 30)
 
 MYSQL_CONN_DBAPI = {'host': db_host, 'user': db_user, 'password': db_password, 'database': db_database,
                     'charset': db_charset, 'port': db_port, 'autocommit': True,
@@ -62,11 +56,11 @@ def engine():
     if _engine_instance is None:
         _engine_instance = create_engine(
             MYSQL_CONN_URL,
-            pool_size=2,
-            max_overflow=3,
-            pool_recycle=600,
+            pool_size=_cfg.get_int('INSTOCK_DB_POOL_SIZE', 2),
+            max_overflow=_cfg.get_int('INSTOCK_DB_MAX_OVERFLOW', 3),
+            pool_recycle=_cfg.get_int('INSTOCK_DB_POOL_RECYCLE', 600),
             pool_pre_ping=True,
-            pool_timeout=30
+            pool_timeout=_cfg.get_int('INSTOCK_DB_POOL_TIMEOUT', 30)
         )
     return _engine_instance
 
@@ -78,7 +72,7 @@ def engine_to_db(to_db):
 
 # DB Api -数据库连接对象connection
 def get_connection():
-    max_retries = 3
+    max_retries = _DB_CONN_RETRIES
     for attempt in range(1, max_retries + 1):
         try:
             return pymysql.connect(**MYSQL_CONN_DBAPI)
@@ -149,7 +143,7 @@ def insert_other_db_from_df(to_db, data, table_name, cols_type, write_index, pri
     # 选择插入方法：有主键时使用upsert避免重复插入错误，否则普通append
     insert_method = _mysql_upsert if has_primary_key else None
 
-    max_retries = 3
+    max_retries = _DB_CONN_RETRIES
     for attempt in range(1, max_retries + 1):
         try:
             if cols_type is None:
@@ -259,7 +253,7 @@ def checkTableIsExist(tableName):
 
 # 增删改数据
 def executeSql(sql, params=()):
-    max_retries = 3
+    max_retries = _DB_CONN_RETRIES
     for attempt in range(1, max_retries + 1):
         try:
             with get_connection() as conn:

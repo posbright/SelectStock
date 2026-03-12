@@ -48,23 +48,63 @@ if exist "%PROJECT_ROOT%\.venv\Scripts\activate.bat" (
 cd instock\job
 
 REM === 高并发配置（利用本地充足的 CPU 和内存）===
-REM 流式分析并发线程数（服务器默认 2，本地放大到 16）
-set INSTOCK_ANALYSIS_WORKERS=16
+REM 以下参数仅在 .env 未定义时使用本地默认值。
+REM 若需自定义，请在 .env 中设置，无需修改此脚本。
 
-REM 批量写入大小（服务器默认 50，本地放大到 3000）
-set INSTOCK_BATCH_SIZE=3000
+REM 流式分析并发线程数（服务器默认 2，本地推荐 8-16）
+if not defined INSTOCK_ANALYSIS_WORKERS set INSTOCK_ANALYSIS_WORKERS=16
 
-REM 回测内层并发线程数（服务器默认 2，本地放大到 4）
-set INSTOCK_BACKTEST_INNER_WORKERS=4
+REM 流式分析每批股票数（服务器默认 50，本地推荐 200-3000）
+if not defined INSTOCK_BATCH_SIZE set INSTOCK_BATCH_SIZE=3000
+
+REM 回测外层并发（按策略表，服务器默认 1，本地推荐 2-4）
+if not defined INSTOCK_BACKTEST_OUTER_WORKERS set INSTOCK_BACKTEST_OUTER_WORKERS=4
+
+REM 回测内层并发线程数（按股票，服务器默认 2，本地推荐 4-8）
+if not defined INSTOCK_BACKTEST_INNER_WORKERS set INSTOCK_BACKTEST_INNER_WORKERS=4
+
+REM 指标计算并发线程数（服务器默认 4，本地推荐 8-16）
+if not defined INSTOCK_INDICATOR_WORKERS set INSTOCK_INDICATOR_WORKERS=8
+
+REM K线形态识别并发线程数（服务器默认 4，本地推荐 8-16）
+if not defined INSTOCK_KLINE_PATTERN_WORKERS set INSTOCK_KLINE_PATTERN_WORKERS=8
+
+REM 策略计算并发线程数（服务器默认 4，本地推荐 8-16）
+if not defined INSTOCK_STRATEGY_WORKERS set INSTOCK_STRATEGY_WORKERS=8
+
+REM 策略外层并发数（按策略，服务器默认 2，本地推荐 4-6）
+if not defined INSTOCK_STRATEGY_OUTER_WORKERS set INSTOCK_STRATEGY_OUTER_WORKERS=4
+
+REM K线缓存更新并发数（服务器默认 2，本地推荐 4-8）
+if not defined INSTOCK_KLINE_CACHE_WORKERS set INSTOCK_KLINE_CACHE_WORKERS=6
+
+REM 批量日期作业并发数（服务器默认 3，本地推荐 4-8）
+if not defined INSTOCK_BATCH_DATE_WORKERS set INSTOCK_BATCH_DATE_WORKERS=6
+
+REM 数据爬取并发线程数（服务器默认 5，本地推荐 10-20）
+if not defined INSTOCK_CRAWL_WORKERS set INSTOCK_CRAWL_WORKERS=10
+
+REM 数据库连接池基础大小（服务器默认 2，本地推荐 5-10）
+if not defined INSTOCK_DB_POOL_SIZE set INSTOCK_DB_POOL_SIZE=8
+
+REM 数据库连接池溢出数（服务器默认 3，本地推荐 5-10）
+if not defined INSTOCK_DB_MAX_OVERFLOW set INSTOCK_DB_MAX_OVERFLOW=8
+
+REM 子进程默认超时（秒，服务器默认 1800）
+if not defined INSTOCK_JOB_TIMEOUT set INSTOCK_JOB_TIMEOUT=1800
+
+REM K线缓存子进程超时（秒，服务器默认 36000）
+if not defined INSTOCK_KLINE_JOB_TIMEOUT set INSTOCK_KLINE_JOB_TIMEOUT=36000
 
 REM === 数据库超时配置（远程连接适当放宽）===
-set INSTOCK_DB_CONNECT_TIMEOUT=30
-set INSTOCK_DB_READ_TIMEOUT=60
-set INSTOCK_DB_WRITE_TIMEOUT=60
+if not defined INSTOCK_DB_CONNECT_TIMEOUT set INSTOCK_DB_CONNECT_TIMEOUT=30
+if not defined INSTOCK_DB_READ_TIMEOUT set INSTOCK_DB_READ_TIMEOUT=60
+if not defined INSTOCK_DB_WRITE_TIMEOUT set INSTOCK_DB_WRITE_TIMEOUT=60
 
 REM === 重试配置（远程连接可能间歇性超时）===
-set INSTOCK_DB_MAX_RETRIES=3
-set INSTOCK_DB_RETRY_DELAY=10
+if not defined INSTOCK_DB_MAX_RETRIES set INSTOCK_DB_MAX_RETRIES=3
+if not defined INSTOCK_DB_RETRY_DELAY set INSTOCK_DB_RETRY_DELAY=10
+if not defined INSTOCK_DB_CONN_RETRIES set INSTOCK_DB_CONN_RETRIES=3
 
 REM === Python 编码配置（确保 cmd 中正确输出中文）===
 set PYTHONIOENCODING=utf-8
@@ -78,9 +118,12 @@ echo  超时: 连接%INSTOCK_DB_CONNECT_TIMEOUT%s 读%INSTOCK_DB_READ_TIMEOUT%s 
 echo  重试: %INSTOCK_DB_MAX_RETRIES%次 间隔%INSTOCK_DB_RETRY_DELAY%s
 echo.
 echo  并发配置:
-echo    分析线程: %INSTOCK_ANALYSIS_WORKERS%
-echo    批量大小: %INSTOCK_BATCH_SIZE%
-echo    回测线程: %INSTOCK_BACKTEST_INNER_WORKERS%
+echo    分析线程: %INSTOCK_ANALYSIS_WORKERS%  批量大小: %INSTOCK_BATCH_SIZE%
+echo    指标线程: %INSTOCK_INDICATOR_WORKERS%  K线形态: %INSTOCK_KLINE_PATTERN_WORKERS%
+echo    策略线程: %INSTOCK_STRATEGY_WORKERS%  策略外层: %INSTOCK_STRATEGY_OUTER_WORKERS%
+echo    回测外层: %INSTOCK_BACKTEST_OUTER_WORKERS%  回测内层: %INSTOCK_BACKTEST_INNER_WORKERS%
+echo    K线缓存: %INSTOCK_KLINE_CACHE_WORKERS%  日期批量: %INSTOCK_BATCH_DATE_WORKERS%
+echo    数据爬取: %INSTOCK_CRAWL_WORKERS%  DB连接池: %INSTOCK_DB_POOL_SIZE%+%INSTOCK_DB_MAX_OVERFLOW%
 echo.
 echo  执行参数: %*
 echo ============================================================
