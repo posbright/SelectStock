@@ -53,6 +53,7 @@ from instock.lib.job_tracker import (
     record_task_start, record_task_end, record_task_skipped,
     is_job_completed, is_data_fresh,
 )
+import instock.lib.envconfig as _cfg
 
 __author__ = 'InStock'
 __date__ = '2026/03/12'
@@ -63,10 +64,10 @@ _JOB_NAME = 'run_fetch'
 # 数据新鲜度阈值：当日数据行数 >= 此值时认为已完整
 # 可通过环境变量覆盖
 _FRESHNESS_THRESHOLDS = {
-    'cn_stock_spot': int(os.environ.get('INSTOCK_FRESH_STOCK_SPOT', '3000')),
-    'cn_etf_spot': int(os.environ.get('INSTOCK_FRESH_ETF_SPOT', '200')),
-    'cn_stock_selection': int(os.environ.get('INSTOCK_FRESH_SELECTION', '100')),
-    'cn_stock_fund_flow': int(os.environ.get('INSTOCK_FRESH_FUND_FLOW', '2000')),
+    'cn_stock_spot': _cfg.get_int('INSTOCK_FRESH_STOCK_SPOT', 3000),
+    'cn_etf_spot': _cfg.get_int('INSTOCK_FRESH_ETF_SPOT', 200),
+    'cn_stock_selection': _cfg.get_int('INSTOCK_FRESH_SELECTION', 100),
+    'cn_stock_fund_flow': _cfg.get_int('INSTOCK_FRESH_FUND_FLOW', 2000),
     'cn_stock_lhb': 1,  # 龙虎榜数据量不固定，有数据即可
     'cn_stock_bonus': 1,
     'cn_stock_blocktrade': 1,
@@ -107,7 +108,7 @@ def _check_and_skip(table_name, date_str, task_label):
     Returns:
         bool: True 表示数据已完整，应跳过该任务。
     """
-    if os.environ.get('INSTOCK_FORCE_FETCH', '').strip() == '1':
+    if _cfg.get_bool('INSTOCK_FORCE_FETCH', False):
         return False
 
     threshold = _FRESHNESS_THRESHOLDS.get(table_name, 1)

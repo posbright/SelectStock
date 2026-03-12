@@ -30,6 +30,7 @@ except Exception:
     )
 import instock.lib.torndb as torndb
 import instock.lib.database as mdb
+import instock.lib.envconfig as _cfg
 import instock.lib.version as version
 import instock.web.dataTableHandler as dataTableHandler
 import instock.web.dataIndicatorsHandler as dataIndicatorsHandler
@@ -136,7 +137,7 @@ def main():
     tornado.options.options.logging = None
 
     http_server = tornado.httpserver.HTTPServer(Application())
-    port = 9988
+    port = _cfg.get_int('INSTOCK_WEB_PORT', 9988)
     http_server.listen(port)
 
     logging.info(f"服务已启动，web地址 : http://localhost:{port}/")

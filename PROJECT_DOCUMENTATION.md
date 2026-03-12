@@ -259,6 +259,7 @@ SelectStock/
 │   │   └── strategies/         # 交易策略
 │   │
 │   ├── lib/                     # 📚 公共库
+│   │   ├── envconfig.py        # 集中式环境变量配置（.env 加载 + 类型安全读取）
 │   │   ├── database.py         # 数据库连接（SQLAlchemy引擎）
 │   │   ├── torndb.py           # Tornado数据库封装
 │   │   ├── trade_time.py       # 交易时间/日历工具
@@ -788,14 +789,20 @@ Body: {"code": "000001", "action": "add"}
 
 ### 数据库凭据
 
-`instock/lib/database.py` 中的数据库连接信息会被环境变量覆盖。生产环境**务必**通过环境变量（Docker `-e` 或 `.env` 文件）配置，避免在源码中暴露凭据：
+`instock/lib/envconfig.py` 统一加载项目根目录的 `.env` 文件，所有模块通过该模块读取配置。生产环境**务必**通过环境变量（Docker `-e` 或 `.env` 文件）配置，避免在源码中暴露凭据：
 
 ```bash
+# 方式一：系统环境变量（优先级最高）
 export db_host=your_host
 export db_user=your_user
 export db_password=your_password
 export db_database=instockdb
+
+# 方式二：.env 文件（复制 .env.example 为 .env 并修改）
+cp .env.example .env
 ```
+
+完整的 55 个可配置变量及默认值见 `.env.example`。配置优先级：系统环境变量 > `.env` 文件 > 代码默认值。
 
 ### SQL 参数化
 

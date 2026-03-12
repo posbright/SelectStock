@@ -35,12 +35,14 @@ import threading
 
 __author__ = 'InStock'
 
-# 数据源重试配置（支持环境变量覆盖）
-DATA_SOURCE_MAX_RETRIES = int(os.environ.get('DATA_SOURCE_MAX_RETRIES', 2))  # 单个数据源最大重试次数（失败后优先换源）
-DATA_SOURCE_RETRY_INTERVAL = int(os.environ.get('DATA_SOURCE_RETRY_INTERVAL', 90))  # 基础重试间隔（秒），实际使用指数退避
+import instock.lib.envconfig as _cfg
 
-# 历史数据配置（支持环境变量覆盖）
-HIST_DATA_DEFAULT_YEARS = int(os.environ.get('HIST_DATA_DEFAULT_YEARS', 10))  # 默认获取历史数据年数
+# 数据源重试配置
+DATA_SOURCE_MAX_RETRIES = _cfg.get_int('DATA_SOURCE_MAX_RETRIES', 2)          # 单个数据源最大重试次数
+DATA_SOURCE_RETRY_INTERVAL = _cfg.get_int('DATA_SOURCE_RETRY_INTERVAL', 90)  # 基础重试间隔（秒）
+
+# 历史数据配置
+HIST_DATA_DEFAULT_YEARS = _cfg.get_int('HIST_DATA_DEFAULT_YEARS', 10)   # 默认获取历史数据年数
 
 
 # ══════════════════════════════════════════════
@@ -56,9 +58,9 @@ _source_cooldown_until = {}    # {"东方财富": timestamp, ...}
 _source_degrade_count = {}     # {"东方财富": 3, ...}  累计降级次数（用于渐进退避）
 _source_is_degraded = {}       # {"东方财富": True, ...}  是否已处于降级状态（控制日志只输出一次）
 
-SOURCE_FAIL_THRESHOLD = 5          # 连续失败 N 次后降级该数据源
-SOURCE_COOLDOWN_SECONDS = 300      # 基础降级冷却时间（秒）
-SOURCE_MAX_COOLDOWN_SECONDS = 3600 # 最大冷却时间（秒），渐进退避上限
+SOURCE_FAIL_THRESHOLD = _cfg.get_int('DATA_SOURCE_FAIL_THRESHOLD', 5)            # 连续失败 N 次后降级
+SOURCE_COOLDOWN_SECONDS = _cfg.get_int('DATA_SOURCE_COOLDOWN_SECONDS', 300)      # 基础降级冷却时间（秒）
+SOURCE_MAX_COOLDOWN_SECONDS = _cfg.get_int('DATA_SOURCE_MAX_COOLDOWN', 3600)     # 最大冷却时间（秒）
 
 
 def _report_source_failure(source_name):

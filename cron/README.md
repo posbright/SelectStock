@@ -279,5 +279,11 @@ python3 instock/job/indicators_data_daily_job.py 2026-02-03,2026-02-05
 | `INSTOCK_FRESH_SELECTION` | 100 | selection 新鲜度阈值（行数） |
 | `INSTOCK_FRESH_FUND_FLOW` | 2000 | fund_flow 新鲜度阈值（行数） |
 | `HIST_DATA_DEFAULT_YEARS` | 10 (Docker: 3) | 历史K线默认获取年数 |
+| `INSTOCK_BATCH_SIZE` | 50 | 流式分析每批处理股票数 |
+| `INSTOCK_ANALYSIS_WORKERS` | 2 | 流式分析并发线程数 |
+| `INSTOCK_KLINE_CACHE_WORKERS` | 2 | K线缓存更新并发数 |
+| `INSTOCK_BACKTEST_OUTER_WORKERS` | 1 | 回测外层并发（按表） |
+| `INSTOCK_BACKTEST_INNER_WORKERS` | 2 | 回测内层并发（按股票） |
 
 可通过 `.env` 文件或系统环境变量设置，`_common.sh` 的 `init_env` 会自动加载 `.env` 文件。
+Python 端由 `instock/lib/envconfig.py` 统一加载 `.env`。完整变量列表见项目根目录 `.env.example`。

@@ -9,6 +9,7 @@ from pathlib import Path
 import time
 import random
 from instock.core.singleton_proxy import proxys
+import instock.lib.envconfig as _cfg
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
@@ -72,7 +73,9 @@ class eastmoney_fetcher:
             self._thread_local.session = self._create_session()
         return self._thread_local.session
 
-    def make_request(self, url, params=None, retry=3, timeout=30):
+    def make_request(self, url, params=None,
+                     retry=_cfg.get_int('INSTOCK_EM_RETRY', 3),
+                     timeout=_cfg.get_int('INSTOCK_EM_TIMEOUT', 30)):
         """
         发送请求（线程安全：每个线程使用独立的 Session）
         :param url: 请求URL

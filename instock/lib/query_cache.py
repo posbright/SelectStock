@@ -145,11 +145,12 @@ class QueryCache:
 # ============================================================
 
 # 数据查询缓存（StockData 页面）
-# TTL 5分钟，最多512条。适用于股票列表分页查询，
-# 同一用户短时间内翻页时不重复查询数据库。
-stock_data_cache = QueryCache(max_size=512, default_ttl=300)
+import instock.lib.envconfig as _cfg
+stock_data_cache = QueryCache(
+    max_size=_cfg.get_int('INSTOCK_CACHE_MAX_SIZE', 512),
+    default_ttl=_cfg.get_int('INSTOCK_CACHE_TTL', 300))
 
 # 筛选结果缓存（StrategyConfig 筛选）
-# TTL 10分钟，最多128条。筛选结果变化频率低（依赖参数保存），
-# 翻页时可大幅减少重复的复杂查询。
-filter_result_cache = QueryCache(max_size=128, default_ttl=600)
+filter_result_cache = QueryCache(
+    max_size=_cfg.get_int('INSTOCK_FILTER_CACHE_MAX_SIZE', 128),
+    default_ttl=_cfg.get_int('INSTOCK_FILTER_CACHE_TTL', 600))

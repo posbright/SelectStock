@@ -6,8 +6,9 @@ import pandas as pd
 __author__ = 'InStock'
 __date__ = '2026/02/14'
 
-# 总市值
-BALANCE = 200000
+import instock.lib.envconfig as _cfg
+# 总市值（模拟资金）
+BALANCE = _cfg.get_int('INSTOCK_TURTLE_BALANCE', 200000)
 
 # 海龟交易法则
 # 最后一个交易日收市价为指定区间内最高价

@@ -26,6 +26,7 @@ import instock.lib.database as mdb
 import instock.lib.trade_time as trd
 import instock.core.stockfetch as stf
 import instock.core.backtest.rate_stats as rate
+import instock.lib.envconfig as _cfg
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
@@ -50,7 +51,7 @@ def prepare():
 
     # 回归测试表，逐表顺序处理以控制内存占用（适配 ≤2GB 服务器）
     # 可通过环境变量 INSTOCK_BACKTEST_OUTER_WORKERS 覆盖（默认 1：顺序执行）
-    outer_workers = int(os.environ.get('INSTOCK_BACKTEST_OUTER_WORKERS', '1'))
+    outer_workers = _cfg.get_int('INSTOCK_BACKTEST_OUTER_WORKERS', 1)
     with concurrent.futures.ThreadPoolExecutor(max_workers=outer_workers) as executor:
         for table in tables:
             executor.submit(process, table, date_start, date_end, backtest_column)
@@ -88,7 +89,7 @@ def process(table, date_start, date_end, backtest_column):
 
 # 内层并发线程数（每线程加载 ~1-3MB DataFrame）
 # 默认 2（适配 ≤2GB 服务器），可通过环境变量 INSTOCK_BACKTEST_INNER_WORKERS 覆盖
-_INNER_WORKERS = int(os.environ.get('INSTOCK_BACKTEST_INNER_WORKERS', '2'))
+_INNER_WORKERS = _cfg.get_int('INSTOCK_BACKTEST_INNER_WORKERS', 2)
 
 
 def run_check(stocks, date_start, date_end, backtest_column, workers=_INNER_WORKERS):

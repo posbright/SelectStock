@@ -51,13 +51,14 @@ import gpt_value_data_job as gptj
 import streaming_analysis_job as saj
 import backtest_data_daily_job as bdj
 from instock.lib.job_tracker import record_task_start, record_task_end, record_task_skipped
+import instock.lib.envconfig as _cfg
 
 __author__ = 'InStock'
 __date__ = '2026/03/12'
 
 # 分析数据跳过阈值：cn_stock_indicators 今日行数 >= 此值时认为分析已完成
 # 正常交易日约 4800+ 条，设 1000 作为安全阈值避免误跳过部分完成的情况
-ANALYSIS_DONE_THRESHOLD = int(os.environ.get('INSTOCK_ANALYSIS_DONE_THRESHOLD', '1000'))
+ANALYSIS_DONE_THRESHOLD = _cfg.get_int('INSTOCK_ANALYSIS_DONE_THRESHOLD', 1000)
 
 _JOB_NAME = 'run_analysis'
 
@@ -74,7 +75,7 @@ def _is_analysis_done(date_str):
     服务器 cron 触发时自动跳过，避免低内存环境重复计算。
     可通过 INSTOCK_FORCE_ANALYSIS=1 环境变量强制执行。
     """
-    if os.environ.get('INSTOCK_FORCE_ANALYSIS', '').strip() == '1':
+    if _cfg.get_bool('INSTOCK_FORCE_ANALYSIS', False):
         logging.info("检测到 INSTOCK_FORCE_ANALYSIS=1，强制执行分析任务")
         return False
 

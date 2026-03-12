@@ -22,9 +22,10 @@ __date__ = '2026/02/14'
 #   卖出: 佣金 0.025% + 印花税 0.05% + 滑点 0.05% = 0.125%
 #   合计: 0.20%
 # ====================================================================
-COMMISSION_RATE = 0.00025    # 佣金比例（单边）
-STAMP_TAX_RATE = 0.0005     # 印花税（卖出方）
-SLIPPAGE_RATE = 0.0005      # 滑点（单边）
+import instock.lib.envconfig as _cfg
+COMMISSION_RATE = _cfg.get_float('INSTOCK_COMMISSION_RATE', 0.00025)   # 佣金比例（单边）
+STAMP_TAX_RATE = _cfg.get_float('INSTOCK_STAMP_TAX_RATE', 0.0005)     # 印花税（卖出方）
+SLIPPAGE_RATE = _cfg.get_float('INSTOCK_SLIPPAGE_RATE', 0.0005)       # 滑点（单边）
 
 # 单次交易（买入+卖出）总成本百分比
 ROUND_TRIP_COST_PCT = (COMMISSION_RATE + SLIPPAGE_RATE +    # 买入侧

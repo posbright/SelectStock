@@ -37,18 +37,19 @@ _PROXY_CACHE_FILE = os.path.join(cpath_current, 'cache', 'proxy_cache.json')
 __author__ = 'InStock'
 __date__ = '2026/02/14'
 
-# ── 配置 ──
-PROXY_VALIDATE_URL = "http://datacenter.eastmoney.com/api/data/get"  # HTTP验证（免费代理多不支持HTTPS隧道）
-PROXY_VALIDATE_TIMEOUT = 5          # 验证超时（秒）— 好代理通常1-3s内响应
-PROXY_REFRESH_INTERVAL = 600        # 后台刷新间隔（秒），默认10分钟
-PROXY_MIN_POOL_SIZE = 3             # 代理池最少保有量，低于此数触发紧急补充
-PROXY_FETCH_WORKERS = 50            # 并发验证线程数（I/O密集型，可开高）
-PROXY_INIT_BATCH_SIZE = 200         # 初始化时最多验证的候选数（加速启动）
-PROXY_MAX_FAIL_COUNT = 3            # 连续失败次数阈值，超过则移除
-PROXY_STALE_SECONDS = 600           # 代理验证新鲜度阈值（秒），超过此时间未验证的代理权重降低
-PROXY_CACHE_MAX_AGE = 86400         # 磁盘缓存最长有效期（秒），超过则丢弃
-PROXY_TARGET_POOL_SIZE = 15         # 代理池目标保有量，低于此数就补充
-PROXY_EMERGENCY_COOLDOWN = 30       # 紧急补充冷却时间（秒），比原60s更积极
+# ── 配置（均可通过 .env / 环境变量覆盖） ──
+import instock.lib.envconfig as _cfg
+PROXY_VALIDATE_URL = _cfg.get_str('INSTOCK_PROXY_VALIDATE_URL', 'http://datacenter.eastmoney.com/api/data/get')  # HTTP验证URL
+PROXY_VALIDATE_TIMEOUT = _cfg.get_int('INSTOCK_PROXY_VALIDATE_TIMEOUT', 5)       # 验证超时（秒）
+PROXY_REFRESH_INTERVAL = _cfg.get_int('INSTOCK_PROXY_REFRESH_INTERVAL', 600)     # 后台刷新间隔（秒）
+PROXY_MIN_POOL_SIZE = _cfg.get_int('INSTOCK_PROXY_MIN_POOL_SIZE', 3)             # 代理池最少保有量
+PROXY_FETCH_WORKERS = _cfg.get_int('INSTOCK_PROXY_FETCH_WORKERS', 50)            # 并发验证线程数
+PROXY_INIT_BATCH_SIZE = _cfg.get_int('INSTOCK_PROXY_INIT_BATCH_SIZE', 200)       # 初始化验证候选数
+PROXY_MAX_FAIL_COUNT = _cfg.get_int('INSTOCK_PROXY_MAX_FAIL_COUNT', 3)           # 连续失败次数阈值
+PROXY_STALE_SECONDS = _cfg.get_int('INSTOCK_PROXY_STALE_SECONDS', 600)           # 验证新鲜度阈值（秒）
+PROXY_CACHE_MAX_AGE = _cfg.get_int('INSTOCK_PROXY_CACHE_MAX_AGE', 86400)         # 磁盘缓存有效期（秒）
+PROXY_TARGET_POOL_SIZE = _cfg.get_int('INSTOCK_PROXY_TARGET_POOL_SIZE', 15)      # 代理池目标保有量
+PROXY_EMERGENCY_COOLDOWN = _cfg.get_int('INSTOCK_PROXY_EMERGENCY_COOLDOWN', 30)  # 紧急补充冷却时间（秒）
 
 
 class proxys(metaclass=singleton_type):

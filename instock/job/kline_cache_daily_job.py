@@ -38,6 +38,7 @@ except Exception:
         level=logging.INFO,
     )
 import instock.lib.run_template as runt
+import instock.lib.envconfig as _cfg
 import instock.core.stockfetch as stf
 import instock.lib.trade_time as trd
 import instock.core.tablestructure as tbs
@@ -59,7 +60,7 @@ def _check_fetch_completed(date):
     通过 cn_job_status 表查询 run_fetch/__overall__ 的状态。
     可通过 INSTOCK_FORCE_KLINE_CACHE=1 跳过此检查。
     """
-    if os.environ.get('INSTOCK_FORCE_KLINE_CACHE', '').strip() == '1':
+    if _cfg.get_bool('INSTOCK_FORCE_KLINE_CACHE', False):
         logging.info("检测到 INSTOCK_FORCE_KLINE_CACHE=1，跳过 run_fetch 完成检查")
         return True
 
@@ -150,7 +151,8 @@ def fetch_all_data(date):
         else:
             date_end = str(raw_date).replace("-", "").replace("/", "")[:8]
 
-        success, fail = stf.update_all_caches(stocks, date_start, date_end, workers=2)
+        success, fail = stf.update_all_caches(stocks, date_start, date_end,
+                                                workers=_cfg.get_int('INSTOCK_KLINE_CACHE_WORKERS', 2))
         elapsed_hist = time.time() - hist_start
         logging.info(f"历史K线缓存更新完成：成功 {success}，失败 {fail}，耗时 {elapsed_hist:.1f}秒")
         record_task_end(_JOB_NAME, 'update_kline_cache', date, t3, success=True,

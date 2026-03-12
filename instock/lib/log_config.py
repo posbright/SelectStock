@@ -37,8 +37,9 @@ __date__ = '2026/02/14'
 
 _LOG_FORMAT = '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
 _LOG_DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
-_LOG_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
-_LOG_BACKUP_COUNT = 5
+import instock.lib.envconfig as _cfg
+_LOG_MAX_BYTES = _cfg.get_int('INSTOCK_LOG_MAX_BYTES', 10 * 1024 * 1024)  # 默认 10 MB
+_LOG_BACKUP_COUNT = _cfg.get_int('INSTOCK_LOG_BACKUP_COUNT', 5)
 
 # 标记是否已初始化，防止同一进程内重复配置
 _initialized = False

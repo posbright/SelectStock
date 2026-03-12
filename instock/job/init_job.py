@@ -12,13 +12,14 @@ cpath_current = os.path.dirname(os.path.dirname(__file__))
 cpath = os.path.abspath(os.path.join(cpath_current, os.pardir))
 sys.path.append(cpath)
 import instock.lib.database as mdb
+import instock.lib.envconfig as _cfg
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
 
 # 远程连接重试配置
-_MAX_RETRIES = int(os.environ.get('INSTOCK_DB_MAX_RETRIES', '3'))
-_RETRY_DELAY = int(os.environ.get('INSTOCK_DB_RETRY_DELAY', '5'))  # 秒
+_MAX_RETRIES = _cfg.get_int('INSTOCK_DB_MAX_RETRIES', 3)
+_RETRY_DELAY = _cfg.get_int('INSTOCK_DB_RETRY_DELAY', 5)  # 秒
 
 
 # 创建新数据库。

@@ -41,17 +41,18 @@ import instock.core.stockfetch as stf
 import instock.core.indicator.calculate_indicator as idr
 import instock.core.pattern.pattern_recognitions as kpr
 from instock.core.singleton_stock import stock_data
+import instock.lib.envconfig as _cfg
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
 
 # 批量写入大小：每处理 BATCH_SIZE 只股票后统一写入数据库
 # 默认 50（适配 ≤2GB 服务器），可通过环境变量 INSTOCK_BATCH_SIZE 覆盖
-BATCH_SIZE = int(os.environ.get('INSTOCK_BATCH_SIZE', '50'))
+BATCH_SIZE = _cfg.get_int('INSTOCK_BATCH_SIZE', 50)
 
 # 并发线程数：控制同时读取缓存的股票数（每只 ~1-3 MB DataFrame）
 # 默认 2（适配 ≤2GB 服务器），可通过环境变量 INSTOCK_ANALYSIS_WORKERS 覆盖
-ANALYSIS_WORKERS = int(os.environ.get('INSTOCK_ANALYSIS_WORKERS', '2'))
+ANALYSIS_WORKERS = _cfg.get_int('INSTOCK_ANALYSIS_WORKERS', 2)
 
 
 def _get_stock_list_from_db(date):
@@ -127,7 +128,7 @@ def streaming_analysis(date):
     logging.info(f"===== Phase 4: 流式分析开始 [{date_str}] =====")
 
     # 检查 Phase 2 是否失败（由 execute_daily_job 设置环境变量）
-    phase2_failed = os.environ.get('INSTOCK_PHASE2_FAILED', '') == '1'
+    phase2_failed = _cfg.get_bool('INSTOCK_PHASE2_FAILED', False)
     if phase2_failed:
         logging.warning(
             "⚠ Phase 2 K线缓存更新失败（可能 OOM），本次分析将使用已有缓存。"
