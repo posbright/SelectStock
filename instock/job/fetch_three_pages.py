@@ -123,12 +123,14 @@ def fetch_for_date(run_date):
         results['cn_stock_selection'] = -1
     
     # Step 3: 基本面选股（从cn_stock_spot筛选）
+    # 注意：stock_spot_buy 已从 basic_data_other_daily_job 移至 analysis_daily_job
+    # 此处直接导入 analysis_daily_job 中的函数
     logging.info("")
     logging.info("[Step 3/4] 基本面选股 (cn_stock_spot_buy)")
     try:
-        import instock.job.basic_data_other_daily_job as hdtj
+        import instock.job.analysis_daily_job as adj
         start = time.time()
-        hdtj.stock_spot_buy(date_str)
+        adj._run_stock_spot_buy(date_str)
         elapsed = time.time() - start
         count = verify_table_data('cn_stock_spot_buy', date_str)
         logging.info(f"  完成: {count} 条, 耗时 {elapsed:.1f}s")

@@ -7,9 +7,10 @@
 | 脚本 | 执行频率 | 作用 |
 |------|---------|------|
 | `cron.hourly/run_hourly` | 每小时 | 执行基础数据采集 |
-| `cron.workdayly/run_workdayly` | 每个工作日 | 执行完整的每日任务（获取+分析一体） |
-| `cron.workdayly/run_fetch` | 每个工作日 | **仅数据获取**（API调用，可独立运行） |
-| `cron.workdayly/run_analysis` | 每个工作日 | **仅数据分析**（本地计算，可独立运行） |
+| `cron.workdayly/run_workdayly` | 每个工作日 | 执行完整的每日任务（获取+K线缓存+分析一体） |
+| `cron.workdayly/run_fetch` | 每个工作日 | **仅数据获取**（API调用，含数据新鲜度检查） |
+| `cron.workdayly/run_kline_cache` | 每个工作日 | **K线缓存增量更新**（需 run_fetch 完成后执行） |
+| `cron.workdayly/run_analysis` | 每个工作日 | **仅数据分析**（本地计算，含基本面选股） |
 | `cron.monthly/run_monthly` | 每月 | 清理历史缓存数据 |
 
 ---
@@ -35,28 +36,29 @@
 
 **Phase 1: 轻量级数据入库**（优先执行，确保关键数据不受后续 OOM 影响）
 2. **Phase 1a** - 实时行情预加载（stock_data 单例）
-3. **Phase 1b** - basic_data_daily_job - 股票/ETF实时行情入库
-4. **Phase 1c** - selection_data_daily_job - 综合选股数据入库
+3. **Phase 1b** - basic_data_daily_job - 股票/ETF实时行情入库（含数据新鲜度检查）
+4. **Phase 1c** - selection_data_daily_job - 综合选股数据入库（含数据新鲜度检查）
 5. **Phase 1d** - basic_data_other_daily_job - 资金流向、龙虎榜等扩展数据
 6. **Phase 1e** - gpt_value_data_job - GPT综合选股（纯DB读取）
-7. **Phase 1f** - basic_data_after_close_daily_job - 收盘后数据（大宗交易等）
+7. **Phase 1e2** - stock_spot_buy - 基本面选股（PE/PB/ROE筛选）
+8. **Phase 1f** - basic_data_after_close_daily_job - 收盘后数据（大宗交易等）
 
 **Phase 2: 重量级数据获取 — K线缓存批量更新**
-8. **fetch_data_job** - 历史K线缓存增量更新（~5000只股票，内存密集型）
+9. **kline_cache_daily_job** - 历史K线缓存增量更新（~5000只股票，内存密集型）
    - 在1.6GB内存服务器上可能因OOM被杀，因此放在轻量级任务之后
    - 即使此步骤失败，Phase 1的关键数据已安全入库
 
 **Phase 3: 数据分析**（流式处理，无 API 调用，峰值内存 < 100 MB）
-9. **streaming_analysis_job** - 单次遍历所有股票，同时计算：
-   - 技术指标（MACD/KDJ/RSI等）
-   - K线形态识别（锤子线/十字星等）
-   - 策略选股（放量突破/均线金叉等）
-   - 指标二次筛选（买入/卖出信号）
-   - 内置跳过检查：如果分析数据已由其他节点完成则自动跳过
+10. **streaming_analysis_job** - 单次遍历所有股票，同时计算：
+    - 技术指标（MACD/KDJ/RSI等）
+    - K线形态识别（锤子线/十字星等）
+    - 策略选股（放量突破/均线金叉等）
+    - 指标二次筛选（买入/卖出信号）
+    - 内置跳过检查：如果分析数据已由其他节点完成则自动跳过
 
 **Phase 4: 回测与收尾**
-10. **backtest_data_daily_job** - 策略回测数据（从缓存按需读取）
-11. **数据健康检查** - 检查各核心表是否有当日数据
+11. **backtest_data_daily_job** - 策略回测数据（从缓存按需读取）
+12. **数据健康检查** - 检查各核心表是否有当日数据
 
 **适用场景**: 每个交易日收盘后运行（建议18:00后执行）
 
@@ -86,13 +88,16 @@
 # 执行每小时任务
 ./cron/cron.hourly/run_hourly
 
-# 执行每日完整任务（获取+分析一体）
+# 执行每日完整任务（获取+K线缓存+分析一体）
 ./cron/cron.workdayly/run_workdayly
 
-# 仅执行数据获取（API调用部分）
+# 仅执行数据获取（API调用部分，含数据新鲜度检查）
 ./cron/cron.workdayly/run_fetch
 
-# 仅执行数据分析（本地计算部分）
+# 仅执行K线缓存增量更新（需 run_fetch 完成后执行）
+./cron/cron.workdayly/run_kline_cache
+
+# 仅执行数据分析（本地计算部分，含基本面选股）
 ./cron/cron.workdayly/run_analysis
 
 # 执行月度清理（清理过期缓存）
@@ -104,7 +109,7 @@
 
 ### 配置 Crontab 自动执行
 
-推荐使用**拆分模式**（获取和分析独立调度），避免数据获取阻塞分析任务：
+推荐使用**拆分模式**（获取、K线缓存、分析独立调度），避免数据获取阻塞分析任务：
 
 ```bash
 # 编辑 crontab
@@ -120,6 +125,10 @@ crontab -e
 0 18 * * 1-5 flock -xn /tmp/instock_fetch.lock /root/SelectStock/cron/cron.workdayly/run_fetch
 0 1 * * 2-6 flock -xn /tmp/instock_fetch.lock /root/SelectStock/cron/cron.workdayly/run_fetch
 
+# K线缓存更新（run_fetch 完成后自动检查前置条件）
+30 18 * * 1-5 flock -xn /tmp/instock_kline.lock /root/SelectStock/cron/cron.workdayly/run_kline_cache
+30 1 * * 2-6 flock -xn /tmp/instock_kline.lock /root/SelectStock/cron/cron.workdayly/run_kline_cache
+
 # 数据分析 + 重试
 0 22 * * 1-5 flock -xn /tmp/instock_analysis.lock /root/SelectStock/cron/cron.workdayly/run_analysis
 30 0 * * 2-6 flock -xn /tmp/instock_analysis.lock /root/SelectStock/cron/cron.workdayly/run_analysis
@@ -129,13 +138,15 @@ crontab -e
 ```
 
 > **说明**：
-> - **拆分模式优势**：数据获取（1-4小时）不阻塞分析计算（~10分钟），即使获取失败分析也能用历史缓存运行
+> - **拆分模式优势**：数据获取（5~15分钟）、K线缓存（20~60分钟）、分析（~10分钟）三者独立调度，互不阻塞
 > - `flock -xn` 参数：`-x` 排他锁，`-n` 非阻塞（如果锁被占用则立即退出，不等待）
-> - 获取和分析使用**不同的锁文件**，互不阻塞；`run_hourly` 也用独立锁文件避免与 `run_fetch` 写同一张表冲突
-> - 分析安排在22:00而非20:30，给首次运行的K线缓存下载留充足时间（后续增量更新速度很快）
-> - 重试服务安排在凌晨1:00/0:30（周二到周六），对应周一到周五的交易日数据
+> - 获取、K线缓存、分析使用**不同的锁文件**，互不阻塞；`run_hourly` 也用独立锁文件避免与 `run_fetch` 写同一张表冲突
+> - `run_kline_cache` 安排在 18:30，给 `run_fetch` 留 30 分钟完成时间；若 `run_fetch` 未完成，`run_kline_cache` 会自动跳过
+> - 分析安排在22:00，给K线缓存更新留充足时间（后续增量更新速度很快）
+> - 重试服务安排在凌晨（周二到周六），对应周一到周五的交易日数据
 
 ### Docker 环境 Cron 配置
+
 
 Docker 容器内使用与上述相同的拆分模式，定时任务在 Dockerfile 中配置：
 
@@ -147,6 +158,10 @@ Docker 容器内使用与上述相同的拆分模式，定时任务在 Dockerfil
 # 收盘后数据获取 + 凌晨重试
 0 18 * * 1-5 flock -xn /tmp/instock_fetch.lock /etc/cron.workdayly/run_fetch
 0 1 * * 2-6 flock -xn /tmp/instock_fetch.lock /etc/cron.workdayly/run_fetch
+
+# K线缓存更新 + 凌晨重试
+30 18 * * 1-5 flock -xn /tmp/instock_kline.lock /etc/cron.workdayly/run_kline_cache
+30 1 * * 2-6 flock -xn /tmp/instock_kline.lock /etc/cron.workdayly/run_kline_cache
 
 # 数据分析 + 凌晨重试
 0 22 * * 1-5 flock -xn /tmp/instock_analysis.lock /etc/cron.workdayly/run_analysis
@@ -182,7 +197,10 @@ Docker 容器内使用与上述相同的拆分模式，定时任务在 Dockerfil
 |------|------|
 | `flock -xn` | 排他锁+非阻塞：同类任务只能有一个在运行，后来者立即退出 |
 | `is_trade_date()` | 非交易日自动跳过（节假日、周末） |
+| `is_job_completed()` | `run_fetch` 整体完成检查（`cn_job_status` 表），避免重复获取 |
+| `is_data_fresh()` | 各表数据新鲜度检查，已有完整数据时跳过该阶段 |
 | `_is_analysis_done()` | 分析数据已存在（≥1000条）时自动跳过，避免低内存环境重复计算 |
+| `_check_fetch_completed()` | `run_kline_cache` 检查 `run_fetch` 是否完成，未完成则跳过 |
 
 ### 资源消耗
 
@@ -199,6 +217,7 @@ Docker 容器内使用与上述相同的拆分模式，定时任务在 Dockerfil
    chmod +x cron/cron.hourly/run_hourly
    chmod +x cron/cron.workdayly/run_workdayly
    chmod +x cron/cron.workdayly/run_fetch
+   chmod +x cron/cron.workdayly/run_kline_cache
    chmod +x cron/cron.workdayly/run_analysis
    chmod +x cron/cron.monthly/run_monthly
    ```
@@ -291,7 +310,7 @@ python3 fetch_data_job.py 2026-02-12
 
 ```bash
 # 默认 10 年，Docker 默认 3 年，可自行调整
-export HIST_DATA_DEFAULT_YEARS=5
+export HIST_DATA_DEFAULT_YEARS=10
 python3 fetch_data_job.py
 ```
 

@@ -321,12 +321,14 @@ cd instock/job && python fetch_data_job.py
 
 ### 概述
 
-`run_fetch` 是工作日定时执行的**数据获取管道**，位于 `cron/cron.workdayly/run_fetch`，负责集中执行所有需要外部 API 调用的数据采集任务。它与 `run_analysis`（数据分析管道）配合使用，实现**获取与分析解耦**。
+`run_fetch` 是工作日定时执行的**数据获取管道**，位于 `cron/cron.workdayly/run_fetch`，负责集中执行所有需要外部 API 调用的数据采集任务。它与 `run_analysis`（数据分析管道）、`run_kline_cache`（K线缓存更新）配合使用，实现**获取、分析、缓存三者解耦**。
 
 - **调用入口**：`instock/job/fetch_daily_job.py`
 - **建议执行时间**：每个交易日 17:30~18:00（收盘后）
-- **预计总耗时**：约 **30~90 分钟**（取决于网络状况和股票数量）
+- **预计总耗时**：约 **5~15 分钟**（K线缓存已独立为 `run_kline_cache`）
 - **非交易日**：自动跳过（脚本内置交易日检测）
+- **幂等执行**：每个任务执行前检查数据新鲜度，已有完整数据时自动跳过
+- **状态追踪**：通过 `cn_job_status` 表记录各阶段状态（供 `run_kline_cache` 查询前置条件）
 
 ---
 
@@ -339,16 +341,21 @@ run_fetch (Shell)
   ├── 加载 .env 环境变量
   ├── 交易日检测 → 非交易日直接退出
   └── 调用 fetch_daily_job.py
+        ├── 整体跳过检查 → cn_job_status 已记录今日 run_fetch 成功则退出
         ├── Phase 0: init_job — 数据库初始化
-        ├── Phase 2: basic_data_daily_job — 实时行情入库
-        ├── Phase 2: selection_data_daily_job — 综合选股入库
+        ├── Phase 1: basic_data_daily_job — 实时行情入库（含新鲜度检查）
+        ├── Phase 2: selection_data_daily_job — 综合选股入库（含新鲜度检查）
         ├── Phase 3: basic_data_other_daily_job (子进程) — 扩展数据
-        ├── Phase 5: basic_data_after_close_daily_job (子进程) — 收盘后数据
+        ├── Phase 4: basic_data_after_close_daily_job (子进程) — 收盘后数据
         ├── 释放 stock_data 单例，回收内存
-        └── Phase 1: fetch_data_job (子进程) — 历史K线缓存更新
+        └── 记录 __overall__ 状态到 cn_job_status
 ```
 
-> **设计原则**：轻量 API 调用优先于内存密集型操作。在 1.6GB 内存服务器上，K 线缓存更新可能因 OOM 被杀，放在最后确保不影响其他数据入库。
+> **设计原则**：
+> - 串行执行所有任务，子进程隔离内存密集型操作
+> - 每个任务执行前检查数据新鲜度，已有完整数据时跳过（可通过 `INSTOCK_FORCE_FETCH=1` 强制执行）
+> - 历史K线缓存更新已独立为 `kline_cache_daily_job.py`，不再包含在 `run_fetch` 中
+> - `stock_spot_buy`（基本面选股）已移至 `run_analysis`（在 GPT 综合选股后执行）
 
 ---
 
@@ -419,7 +426,8 @@ Phase 3 内部包含 6 个子任务，按顺序串行执行（每个子任务之
 | **API 地址** | `https://datacenter-web.eastmoney.com/api/data/v1/get`（`RPT_DAILYBILLBOARD_DETAILSNEW`） |
 | **预计耗时** | **3~10 秒** |
 | **写入表** | `cn_stock_lhb` |
-| **附带操作** | 自动执行 `stock_spot_buy()`（基本面选股：PE<20、PB<10、ROE>=15%），写入 `cn_stock_spot_buy` |
+
+> **变更说明**：`stock_spot_buy()`（基本面选股）已从龙虎榜附带操作移至 `run_analysis` 中 GPT 综合选股后执行，详见十九章 Step 2。
 
 ##### 子任务 3.2：股票分红配送
 
@@ -478,7 +486,7 @@ Phase 3 内部包含 6 个子任务，按顺序串行执行（每个子任务之
 
 ---
 
-#### Phase 5：收盘后数据（子进程）
+#### Phase 4：收盘后数据（子进程）
 
 | 项目 | 说明 |
 |------|------|
@@ -513,50 +521,39 @@ Phase 5 内部包含 2 个子任务：
 
 ---
 
-#### Phase 1：历史 K 线缓存增量更新（子进程，内存密集型）
+### 数据新鲜度检查
 
-| 项目 | 说明 |
+`run_fetch` 每个阶段执行前会检查目标表的当日数据行数，当数据已满足阈值时自动跳过，避免冗余 API 调用。
+
+| 目标表 | 默认阈值 | 环境变量 | 说明 |
+|-------|---------|---------|------|
+| `cn_stock_spot` | 3000 | `INSTOCK_FRESH_STOCK_SPOT` | A 股 ~5000 只，3000 即可认为已获取 |
+| `cn_etf_spot` | 200 | `INSTOCK_FRESH_ETF_SPOT` | ETF ~700 只，200 即可 |
+| `cn_stock_selection` | 100 | `INSTOCK_FRESH_SELECTION` | 综合选股数据 |
+| `cn_stock_fund_flow` | 2000 | `INSTOCK_FRESH_FUND_FLOW` | 个股资金流向 |
+| `cn_stock_lhb` | 1 | — | 龙虎榜数据量不固定，有数据即可 |
+| `cn_stock_bonus` | 1 | — | 同上 |
+| `cn_stock_blocktrade` | 1 | — | 同上 |
+
+> **强制执行**：设置 `INSTOCK_FORCE_FETCH=1` 可跳过所有数据新鲜度检查，强制重新获取。
+
+---
+
+### 作业状态追踪（cn_job_status）
+
+`run_fetch` 使用 `cn_job_status` 表记录各阶段的执行状态，包括：
+
+| 字段 | 说明 |
 |------|------|
-| **执行模块** | `fetch_data_job.py`（独立子进程） |
-| **执行方式** | `subprocess.run()` 启动独立 Python 进程，超时 **36000 秒（10 小时）** |
-| **功能** | 批量更新全市场 ~5000 只股票的历史 K 线缓存文件 |
-| **预计总耗时** | 首次运行 **2~6 小时**；增量更新 **20~60 分钟** |
+| `job_name` | 作业名称（如 `run_fetch`） |
+| `task_name` | 任务名称（如 `stock_spot`、`__overall__`） |
+| `job_date` | 作业日期 |
+| `status` | 状态：`running` / `success` / `failed` / `skipped` |
+| `start_time` / `end_time` | 开始/结束时间 |
+| `elapsed_seconds` | 耗时（秒） |
+| `message` | 附加信息 |
 
-Phase 1 内部分为 3 个步骤：
-
-##### Step 1/3：清理过期缓存
-
-| 项目 | 说明 |
-|------|------|
-| **函数** | `stf.clean_expired_cache()` |
-| **功能** | ①删除退市股票缓存 ②刷新近 35 天内除权除息股票的前复权缓存 ③删除损坏的 `.meta` 文件 |
-| **API 调用** | 无（纯本地文件操作） |
-| **预计耗时** | **1~5 秒** |
-
-##### Step 2/3：预加载实时行情
-
-| 项目 | 说明 |
-|------|------|
-| **函数** | `stock_data(date).get_data()` |
-| **功能** | 加载 `stock_data` 单例获取全市场股票列表，作为后续 K 线更新的股票清单 |
-| **API 数据源** | **东方财富** → 腾讯财经 → 新浪财经 |
-| **预计耗时** | **3~10 秒**（若前面 Phase 2a 已加载单例则直接使用缓存，0 秒） |
-
-##### Step 3/3：批量更新 K 线缓存
-
-| 项目 | 说明 |
-|------|------|
-| **函数** | `stf.update_all_caches()` |
-| **功能** | 对每只股票调用 `stock_hist_cache_incremental()` 进行增量缓存更新 |
-| **数据内容** | 日 K 线数据：日期、开盘价、收盘价、最高价、最低价、成交量(手)、成交额(元)、振幅、涨跌幅、涨跌额、换手率 |
-| **API 数据源** | **东方财富**（主） → **腾讯财经** → **新浪财经**（按健康度动态排序，自动降级切换） |
-| **API 地址** | 东方财富：`https://push2his.eastmoney.com/api/qt/stock/kline/get`<br>腾讯：`https://web.ifzq.gtimg.cn/appstock/app/fqkline/`<br>新浪：`https://finance.sina.com.cn/realstock/company/` |
-| **并发策略** | 2 线程并发，请求间隔 1~3 秒 |
-| **缓存跳过** | 预检查 `.meta` 文件的 `last_date`，若已 >= 当日则跳过（零 API 调用） |
-| **缓存文件** | `instock/cache/hist/{code}.gzip.pickle` + `{code}.meta` |
-| **默认年数** | 本地 10 年，Docker 3 年（可通过 `HIST_DATA_DEFAULT_YEARS` 环境变量调整） |
-| **防限流策略** | 5 层防护：①2 线程并发限制 ②请求间隔 1~3 秒 ③每 100 只暂停 8~15 秒 ④连续 3 次失败触发限流暂停（120s→240s→480s 指数退避） ⑤累计 3 次限流触发熔断终止 |
-| **预计耗时** | 首次全量：**2~6 小时**（~5000 只 × 单次 1~3 秒）；增量更新：**20~60 分钟**（大部分股票已有缓存直接跳过） |
+> **用途**：`run_kline_cache` 通过查询 `cn_job_status` 中 `run_fetch/__overall__` 的状态来判断是否满足前置条件。
 
 ---
 
@@ -565,9 +562,9 @@ Phase 1 内部分为 3 个步骤：
 | 阶段 | 模块 | 执行方式 | 预计耗时 | API 数据源 |
 |------|------|---------|---------|-----------|
 | Phase 0 | `init_job` | 进程内 | < 1 秒 | 无 |
-| Phase 2a | `basic_data_daily_job` | 进程内 | 5~15 秒 | 东方财富 |
-| Phase 2b | `selection_data_daily_job` | 进程内 | 10~30 秒 | 东方财富选股器 |
-| Phase 3.1 | 龙虎榜 + 基本面选股 | 子进程 | 3~10 秒 | 东方财富/新浪 |
+| Phase 1 | `basic_data_daily_job` | 进程内 | 5~15 秒 | 东方财富 |
+| Phase 2 | `selection_data_daily_job` | 进程内 | 10~30 秒 | 东方财富选股器 |
+| Phase 3.1 | 龙虎榜 | 子进程 | 3~10 秒 | 东方财富/新浪 |
 | *延迟* | | | *30 秒* | |
 | Phase 3.2 | 股票分红配送 | 子进程 | 3~10 秒 | 东方财富 |
 | *延迟* | | | *30 秒* | |
@@ -578,15 +575,12 @@ Phase 1 内部分为 3 个步骤：
 | Phase 3.5 | 早盘竞价抢筹 | 子进程 | 2~5 秒 | 通达信 |
 | *延迟* | | | *30 秒* | |
 | Phase 3.6 | 涨停原因揭密 | 子进程 | 2~5 秒 | 同花顺 |
-| Phase 5.1 | 大宗交易 | 子进程 | 3~10 秒 | 东方财富 |
+| Phase 4.1 | 大宗交易 | 子进程 | 3~10 秒 | 东方财富 |
 | *延迟* | | | *30 秒* | |
-| Phase 5.2 | 尾盘竞价抢筹 | 子进程 | 2~5 秒 | 通达信 |
-| Phase 1.1 | 清理过期缓存 | 子进程 | 1~5 秒 | 无 |
-| Phase 1.2 | 预加载实时行情 | 子进程 | 0~10 秒 | 东方财富 |
-| Phase 1.3 | K线缓存增量更新 | 子进程 | 20~60 分钟 | 东方财富/腾讯/新浪 |
-| **总计** | | | **约 30~90 分钟** | |
+| Phase 4.2 | 尾盘竞价抢筹 | 子进程 | 2~5 秒 | 通达信 |
+| **总计** | | | **约 5~15 分钟** | |
 
-> **说明**：轻量级任务（Phase 0/2/3/5）合计约 5~10 分钟，总耗时主要取决于 Phase 1（K 线缓存更新）。增量更新时大部分股票缓存已为最新会自动跳过，耗时显著缩短。
+> **说明**：K线缓存增量更新已独立为 `run_kline_cache`（详见二十章），不再包含在 `run_fetch` 中。轻量级 API 调用总耗时约 5~15 分钟，显著优于原来的 30~90 分钟。
 
 ---
 
@@ -594,20 +588,21 @@ Phase 1 内部分为 3 个步骤：
 
 | 数据库表 | 数据类型 | 来源阶段 | 更新策略 |
 |---------|---------|---------|---------|
-| `cn_stock_spot` | A 股实时行情 | Phase 2a | 按日期删除后重新插入 |
-| `cn_etf_spot` | ETF 实时行情 | Phase 2a | 按日期删除后重新插入 |
-| `cn_stock_selection` | 综合选股数据 | Phase 2b | 按日期删除后重新插入 |
+| `cn_stock_spot` | A 股实时行情 | Phase 1 | 按日期删除后重新插入 |
+| `cn_etf_spot` | ETF 实时行情 | Phase 1 | 按日期删除后重新插入 |
+| `cn_stock_selection` | 综合选股数据 | Phase 2 | 按日期删除后重新插入 |
 | `cn_stock_lhb` | 龙虎榜 | Phase 3.1 | 按日期删除后重新插入 |
-| `cn_stock_spot_buy` | 基本面选股 | Phase 3.1 | 按日期删除后重新插入 |
 | `cn_stock_bonus` | 分红配送 | Phase 3.2 | 按日期删除后重新插入 |
 | `cn_stock_fund_flow` | 个股资金流向 | Phase 3.3 | 按日期删除后重新插入 |
 | `cn_stock_fund_flow_industry` | 行业资金流向 | Phase 3.4 | 按日期删除后重新插入 |
 | `cn_stock_fund_flow_concept` | 概念资金流向 | Phase 3.4 | 按日期删除后重新插入 |
 | `cn_stock_chip_race_open` | 早盘竞价抢筹 | Phase 3.5 | 按日期删除后重新插入 |
 | `cn_stock_limitup_reason` | 涨停原因 | Phase 3.6 | 按日期删除后重新插入 |
-| `cn_stock_blocktrade` | 大宗交易 | Phase 5.1 | 按日期删除后重新插入 |
-| `cn_stock_chip_race_end` | 尾盘竞价抢筹 | Phase 5.2 | 按日期删除后重新插入 |
-| 本地缓存文件 `cache/hist/*.gzip.pickle` | 历史日 K 线 | Phase 1.3 | 增量追加新交易日数据 |
+| `cn_stock_blocktrade` | 大宗交易 | Phase 4.1 | 按日期删除后重新插入 |
+| `cn_stock_chip_race_end` | 尾盘竞价抢筹 | Phase 4.2 | 按日期删除后重新插入 |
+| `cn_job_status` | 作业状态追踪 | 全阶段 | Upsert（按 job_name+task_name+job_date 更新） |
+
+> **变更说明**：`cn_stock_spot_buy`（基本面选股）已移至 `run_analysis` Step 2；K线缓存更新已移至 `run_kline_cache`。
 
 ---
 
@@ -627,29 +622,32 @@ Phase 1 内部分为 3 个步骤：
 
 | 机制 | 说明 |
 |------|------|
-| **子进程隔离** | Phase 3、Phase 5、Phase 1 均以独立子进程运行，防止 OOM 波及主进程 |
+| **子进程隔离** | Phase 3、Phase 4 均以独立子进程运行，防止 OOM 波及主进程 |
 | **顺序容错** | 每个阶段独立 `try/except`，某阶段失败不影响后续阶段继续执行 |
+| **数据新鲜度检查** | 每个阶段执行前检查目标表行数，数据已完整时跳过（`INSTOCK_FORCE_FETCH=1` 可强制） |
+| **整体完成检查** | 通过 `cn_job_status` 的 `__overall__` 记录判断是否已成功完成，避免多次 cron 重复执行 |
+| **作业状态追踪** | 每个子任务的开始/结束/耗时/状态均记录到 `cn_job_status` 表 |
 | **API 重试** | 每个 API 调用自带重试机制（1 次重试 + 10 秒延迟），降低瞬时网络问题的影响 |
 | **防限流延迟** | Phase 3 子任务之间有 30 秒延迟，避免高频调用触发 API 限流 |
-| **智能换源** | K 线数据获取支持三数据源自动切换（健康度排序 + 连续失败降级 + 指数退避） |
-| **缓存预检** | K 线更新前检查 `.meta` 文件，缓存已为最新则跳过（零 API 调用） |
-| **OOM 安全** | 轻量任务优先执行，即使 K 线更新因内存不足被杀，关键数据已安全入库 |
 
 ---
 
 ### 与其他定时任务的关系
 
 ```
-run_fetch  ──→  数据获取（API调用）  ──→  写入数据库表 + 更新本地K线缓存
+run_fetch  ──→  数据获取（API调用）  ──→  写入数据库表 + 记录 cn_job_status
+                                              │
+run_kline_cache  ──→  检查 run_fetch 完成  ──→  更新本地K线缓存 cache/hist/
                                               │
 run_analysis  ──→  数据分析（零API调用）  ──→  读取K线缓存 → 计算指标/形态/策略 → 写入分析表
                                               │
-run_workdayly  ──→  完整任务  ──→  run_fetch + run_analysis 的组合（自动检测跳过已完成的分析）
+run_workdayly  ──→  完整任务  ──→  run_fetch + run_kline_cache + run_analysis 的组合
 ```
 
-- `run_fetch` + `run_analysis` 可独立运行，实现**获取与分析解耦**
-- `run_workdayly` 是两者的组合，适合单机部署
-- 多机部署时可让一台机器运行 `run_fetch`（API 调用），另一台运行 `run_analysis`（计算密集）
+- `run_fetch` → `run_kline_cache` → `run_analysis` 可独立运行，实现**三者解耦**
+- `run_workdayly` 是三者的组合，适合单机部署
+- `run_kline_cache` 通过 `cn_job_status` 检查 `run_fetch` 是否已成功完成
+- 多机部署时可让一台机器运行 `run_fetch`（API 调用），另一台运行 `run_kline_cache` + `run_analysis`
 
 ---
 
@@ -657,7 +655,7 @@ run_workdayly  ──→  完整任务  ──→  run_fetch + run_analysis 的�
 
 ### 概述
 
-`run_analysis` 是工作日定时执行的**数据分析管道**，位于 `cron/cron.workdayly/run_analysis`，负责执行所有本地计算任务（技术指标、K线形态、策略选股、回测验证）。与 `run_fetch`（数据获取管道）配合使用，实现**获取与分析解耦**。
+`run_analysis` 是工作日定时执行的**数据分析管道**，位于 `cron/cron.workdayly/run_analysis`，负责执行所有本地计算任务（GPT综合选股、基本面选股、技术指标、K线形态、策略选股、回测验证）。与 `run_fetch`（数据获取管道）配合使用，实现**获取与分析解耦**。
 
 - **调用入口**：`instock/job/analysis_daily_job.py`
 - **建议执行时间**：每个交易日 `run_fetch` 完成后（约 19:00~20:00）
@@ -665,6 +663,7 @@ run_workdayly  ──→  完整任务  ──→  run_fetch + run_analysis 的�
 - **非交易日**：自动跳过（脚本内置交易日检测）
 - **零 API 调用**：所有数据来源为本地磁盘缓存 + 数据库，不发起任何外部网络请求
 - **峰值内存**：< 100 MB（流式处理架构）
+- **状态追踪**：通过 `cn_job_status` 表记录各步骤状态及耗时
 
 ---
 
@@ -677,19 +676,21 @@ run_analysis (Shell)
   └── 调用 analysis_daily_job.py
         ├── 跳过检查 → 分析数据已完成则直接退出
         ├── Step 1: gpt_value_data_job — GPT综合选股（纯DB读取+筛选）
-        ├── Step 2: streaming_analysis_job — 流式分析
-        │     ├── 2a: 获取股票列表（从DB读取，零API）
-        │     ├── 2b: 逐只股票流式处理（从缓存读取K线数据）
+        ├── Step 2: _run_stock_spot_buy — 基本面选股（PE/PB/ROE）
+        ├── Step 3: streaming_analysis_job — 流式分析
+        │     ├── 3a: 获取股票列表（从DB读取，零API）
+        │     ├── 3b: 逐只股票流式处理（从缓存读取K线数据）
         │     │     ├── 技术指标计算（32项指标，77个字段）
         │     │     ├── K线形态识别（61种形态）
         │     │     └── 策略选股检测（13种策略）
-        │     ├── 2c: 批量写入数据库（每50只一批）
-        │     └── 2d: 指标二次筛选（买入/卖出信号）
-        ├── Step 3: backtest_data_daily_job — 策略回测
-        │     ├── 3a: 逐表扫描待回测记录（backtest列为NULL）
-        │     ├── 3b: 从缓存按需读取历史K线计算收益率
-        │     └── 3c: 汇总回测结果到 cn_stock_backtest 表
-        └── 释放单例 + GC 回收内存
+        │     ├── 3c: 批量写入数据库（每50只一批）
+        │     └── 3d: 指标二次筛选（买入/卖出信号）
+        ├── Step 4: backtest_data_daily_job — 策略回测
+        │     ├── 4a: 逐表扫描待回测记录（backtest列为NULL）
+        │     ├── 4b: 从缓存按需读取历史K线计算收益率
+        │     └── 4c: 汇总回测结果到 cn_stock_backtest 表
+        ├── 释放单例 + GC 回收内存
+        └── 记录 __overall__ 状态到 cn_job_status
 ```
 
 ---
@@ -742,7 +743,31 @@ run_analysis (Shell)
 
 ---
 
-#### Step 2：流式分析（核心计算模块）
+#### Step 2：基本面选股（PE/PB/ROE 筛选）
+
+| 项目 | 说明 |
+|------|------|
+| **执行模块** | `analysis_daily_job.py` → `_run_stock_spot_buy()` |
+| **执行方式** | 进程内直接调用 |
+| **API 调用** | **无**（从 `cn_stock_spot` 表读取当日行情数据） |
+| **数据来源** | `cn_stock_spot` 表（由 `run_fetch` 的 `basic_data_daily_job` 入库） |
+| **功能** | 从全市场股票中筛选基本面优质股票 |
+| **预计耗时** | **< 1 秒** |
+| **写入表** | `cn_stock_spot_buy` |
+
+**筛选条件（全部满足）**：
+
+| 指标 | 条件 |
+|------|------|
+| PE（TTM） | > 0 且 <= 20 |
+| PB（MRQ） | <= 10 |
+| ROE（加权） | >= 15% |
+
+> **变更说明**：此步骤原位于 `basic_data_other_daily_job.py` 的龙虎榜附带操作中（`run_fetch` Phase 3.1），现移至分析流程，在 GPT 综合选股后执行，确保选股逻辑集中管理。
+
+---
+
+#### Step 3：流式分析（核心计算模块）
 
 | 项目 | 说明 |
 |------|------|
@@ -769,7 +794,7 @@ run_analysis (Shell)
 
 > **效率对比**：原架构 3+13=16 次遍历 × 4900 = **78,400 次 I/O**；流式架构 1 次遍历 × 4900 = **4,900 次 I/O**（减少 93%）
 
-##### 2a. 技术指标计算（32 项指标，77 个数据字段）
+##### 3a. 技术指标计算（32 项指标，77 个数据字段）
 
 基于 TA-Lib 和 pandas 计算，结果与同花顺、通信达一致。
 
@@ -785,7 +810,7 @@ run_analysis (Shell)
 |------|------|
 | **写入表** | `cn_stock_indicators`（77 列） |
 
-##### 2b. K 线形态识别（61 种形态）
+##### 3b. K 线形态识别（61 种形态）
 
 基于 TA-Lib 的形态识别函数（`CDL` 系列），对每只股票的最新 K 线进行 61 种形态匹配。
 
@@ -801,7 +826,7 @@ run_analysis (Shell)
 |------|------|
 | **写入表** | `cn_stock_kline_pattern`（61 列） |
 
-##### 2c. 策略选股检测（13 种策略）
+##### 3c. 策略选股检测（13 种策略）
 
 对每只股票逐一检测是否满足各策略的买入/卖出条件。
 
@@ -823,7 +848,7 @@ run_analysis (Shell)
 
 > **注意**：「高而窄的旗形」策略需要龙虎榜数据（`cn_stock_lhb` 表），该数据由 `run_fetch` 入库，若无数据则此策略自动跳过。
 
-##### 2d. 指标二次筛选（买入/卖出信号）
+##### 3d. 指标二次筛选（买入/卖出信号）
 
 基于已入库的 `cn_stock_indicators` 数据进行二次 SQL 筛选。
 
@@ -838,7 +863,7 @@ run_analysis (Shell)
 
 ---
 
-#### Step 3：策略回测
+#### Step 4：策略回测
 
 | 项目 | 说明 |
 |------|------|
@@ -849,7 +874,7 @@ run_analysis (Shell)
 | **预计耗时** | **1~3 分钟** |
 | **峰值内存** | ~50 MB（流式读取，每批 50 只） |
 
-##### 3a. 回测数据计算
+##### 4a. 回测数据计算
 
 | 项目 | 说明 |
 |------|------|
@@ -873,7 +898,7 @@ run_analysis (Shell)
 | `rate_90` | 选出后 90 个交易日收益率 |
 | `rate_120` | 选出后 120 个交易日收益率 |
 
-##### 3b. 回测汇总
+##### 4b. 回测汇总
 
 | 项目 | 说明 |
 |------|------|
@@ -891,15 +916,16 @@ run_analysis (Shell)
 |------|------|------------|---------|
 | 跳过检查 | `_is_analysis_done()` | 查询 DB 行数 | < 1 秒 |
 | Step 1 | `gpt_value_data_job` | GPT 综合选股 | 1~5 秒 |
-| Step 2a | `streaming_analysis_job` | 获取股票列表 | < 1 秒 |
-| Step 2b | `streaming_analysis_job` | 流式分析（指标+形态+策略） | 2~8 分钟 |
-| Step 2d | `streaming_analysis_job` | 指标二次筛选 | < 1 秒 |
-| Step 3a | `backtest_data_daily_job` | 策略回测计算 | 1~3 分钟 |
-| Step 3b | `backtest_data_daily_job` | 回测汇总统计 | 1~5 秒 |
+| Step 2 | `_run_stock_spot_buy` | 基本面选股（PE/PB/ROE） | < 1 秒 |
+| Step 3a | `streaming_analysis_job` | 获取股票列表 | < 1 秒 |
+| Step 3b | `streaming_analysis_job` | 流式分析（指标+形态+策略） | 2~8 分钟 |
+| Step 3d | `streaming_analysis_job` | 指标二次筛选 | < 1 秒 |
+| Step 4a | `backtest_data_daily_job` | 策略回测计算 | 1~3 分钟 |
+| Step 4b | `backtest_data_daily_job` | 回测汇总统计 | 1~5 秒 |
 | 清理 | 释放单例 + GC | 内存回收 | < 1 秒 |
 | **总计** | | | **约 3~10 分钟** |
 
-> **说明**：总耗时主要取决于 Step 2b（流式分析，~4900 只股票逐只处理）和 Step 3a（回测计算，仅处理 backtest 为 NULL 的记录）。首次运行回测量最大，后续每日仅补算新增选股记录。
+> **说明**：Step 2（基本面选股）从 `run_fetch` 的龙虎榜附带操作移入，耗时可忽略。总耗时主要取决于 Step 3b。
 
 ---
 
@@ -908,24 +934,26 @@ run_analysis (Shell)
 | 数据库表 | 数据类型 | 数据量级 | 来源步骤 |
 |---------|---------|---------|---------|
 | `cn_stock_strategy_gpt_value` | GPT 综合选股结果 | ~50~200 条/日 | Step 1 |
-| `cn_stock_indicators` | 技术指标（77 列） | ~4800 条/日 | Step 2b |
-| `cn_stock_kline_pattern` | K 线形态识别（61 列） | ~4800 条/日 | Step 2b |
-| `cn_stock_strategy_enter` | 放量上涨策略 | ~10~100 条/日 | Step 2b |
-| `cn_stock_strategy_keep_increasing` | 均线多头策略 | ~10~50 条/日 | Step 2b |
-| `cn_stock_strategy_parking_apron` | 停机坪策略 | ~0~20 条/日 | Step 2b |
-| `cn_stock_strategy_backtrace_ma250` | 回踩年线策略 | ~0~30 条/日 | Step 2b |
-| `cn_stock_strategy_breakthrough_platform` | 突破平台策略 | ~5~50 条/日 | Step 2b |
-| `cn_stock_strategy_low_backtrace_increase` | 无大幅回撤策略 | ~50~200 条/日 | Step 2b |
-| `cn_stock_strategy_turtle_trade` | 海龟交易法则 | ~10~50 条/日 | Step 2b |
-| `cn_stock_strategy_high_tight_flag` | 高而窄的旗形 | ~0~10 条/日 | Step 2b |
-| `cn_stock_strategy_climax_limitdown` | 放量跌停策略 | ~0~30 条/日 | Step 2b |
-| `cn_stock_strategy_low_atr` | 低 ATR 成长 | ~10~50 条/日 | Step 2b |
-| `cn_stock_strategy_trend_pullback` | 趋势回调策略 | ~10~50 条/日 | Step 2b |
-| `cn_stock_strategy_oversold_rebound` | 超跌反弹策略 | ~10~50 条/日 | Step 2b |
-| `cn_stock_strategy_breakout_confirm` | 突破确认策略 | ~5~30 条/日 | Step 2b |
-| `cn_stock_indicators_buy` | 买入信号筛选 | ~0~20 条/日 | Step 2d |
-| `cn_stock_indicators_sell` | 卖出信号筛选 | ~0~20 条/日 | Step 2d |
-| `cn_stock_backtest` | 回测汇总统计 | ~16 × 日期数 条 | Step 3b |
+| `cn_stock_spot_buy` | 基本面选股（PE/PB/ROE） | ~50~300 条/日 | Step 2 |
+| `cn_stock_indicators` | 技术指标（77 列） | ~4800 条/日 | Step 3b |
+| `cn_stock_kline_pattern` | K 线形态识别（61 列） | ~4800 条/日 | Step 3b |
+| `cn_stock_strategy_enter` | 放量上涨策略 | ~10~100 条/日 | Step 3b |
+| `cn_stock_strategy_keep_increasing` | 均线多头策略 | ~10~50 条/日 | Step 3b |
+| `cn_stock_strategy_parking_apron` | 停机坪策略 | ~0~20 条/日 | Step 3b |
+| `cn_stock_strategy_backtrace_ma250` | 回踩年线策略 | ~0~30 条/日 | Step 3b |
+| `cn_stock_strategy_breakthrough_platform` | 突破平台策略 | ~5~50 条/日 | Step 3b |
+| `cn_stock_strategy_low_backtrace_increase` | 无大幅回撤策略 | ~50~200 条/日 | Step 3b |
+| `cn_stock_strategy_turtle_trade` | 海龟交易法则 | ~10~50 条/日 | Step 3b |
+| `cn_stock_strategy_high_tight_flag` | 高而窄的旗形 | ~0~10 条/日 | Step 3b |
+| `cn_stock_strategy_climax_limitdown` | 放量跌停策略 | ~0~30 条/日 | Step 3b |
+| `cn_stock_strategy_low_atr` | 低 ATR 成长 | ~10~50 条/日 | Step 3b |
+| `cn_stock_strategy_trend_pullback` | 趋势回调策略 | ~10~50 条/日 | Step 3b |
+| `cn_stock_strategy_oversold_rebound` | 超跌反弹策略 | ~10~50 条/日 | Step 3b |
+| `cn_stock_strategy_breakout_confirm` | 突破确认策略 | ~5~30 条/日 | Step 3b |
+| `cn_stock_indicators_buy` | 买入信号筛选 | ~0~20 条/日 | Step 3d |
+| `cn_stock_indicators_sell` | 卖出信号筛选 | ~0~20 条/日 | Step 3d |
+| `cn_stock_backtest` | 回测汇总统计 | ~16 × 日期数 条 | Step 4b |
+| `cn_job_status` | 作业状态追踪 | 各步骤状态记录 | 全步骤 |
 
 ---
 
@@ -936,11 +964,12 @@ run_analysis (Shell)
 | 数据依赖 | 来源 | 提供方 | 缺失时行为 |
 |---------|------|--------|-----------|
 | `cn_stock_spot` 股票列表 | 数据库 | `run_fetch` → `basic_data_daily_job` | 降级为 `stock_data` 单例（可能发起 API） |
+| `cn_stock_spot` 基本面选股 | 数据库 | `run_fetch` → `basic_data_daily_job` | Step 2 基本面选股跳过 |
 | `cn_stock_selection` 选股数据 | 数据库 | `run_fetch` → `selection_data_daily_job` | GPT 选股跳过，自动回退 7 天 |
 | `cn_stock_lhb` 龙虎榜数据 | 数据库 | `run_fetch` → `basic_data_other_daily_job` | 高而窄旗形策略跳过 |
-| `cache/hist/*.gzip.pickle` K 线缓存 | 磁盘文件 | `run_fetch` → `fetch_data_job` | 该股票跳过分析 |
+| `cache/hist/*.gzip.pickle` K 线缓存 | 磁盘文件 | `run_kline_cache` → `kline_cache_daily_job` | 该股票跳过分析 |
 
-> **重要**：即使 `run_fetch` 未执行或部分失败，`run_analysis` 仍可基于历史缓存数据运行（结果可能不包含当日行情）。
+> **重要**：即使 `run_fetch` 或 `run_kline_cache` 未执行或部分失败，`run_analysis` 仍可基于历史缓存数据运行（结果可能不包含当日行情）。
 
 ---
 
@@ -972,22 +1001,129 @@ run_analysis (Shell)
 
 ---
 
-### 与 `run_fetch` 的协作关系
+### 与 `run_fetch` / `run_kline_cache` 的协作关系
 
 ```
 run_fetch（数据获取）                  run_analysis（数据分析）
 ─────────────────────                ──────────────────────
 Phase 0: DB初始化                     
-Phase 2: 实时行情 → cn_stock_spot  ─→  读取股票列表
-Phase 2: 选股数据 → cn_stock_selection ─→  GPT综合选股
-Phase 3: 龙虎榜   → cn_stock_lhb  ─→  高而窄旗形策略
-Phase 1: K线缓存  → cache/hist/    ─→  流式分析 + 回测
+Phase 1: 实时行情 → cn_stock_spot  ─→  读取股票列表 + 基本面选股(Step 2)
+Phase 2: 选股数据 → cn_stock_selection ─→  GPT综合选股(Step 1)
+Phase 3: 龙虎榜   → cn_stock_lhb  ─→  高而窄旗形策略(Step 3)
+
+run_kline_cache（K线缓存）
+──────────────────────────
+检查 cn_job_status → run_fetch 完成
+→ 更新 cache/hist/              ─→  流式分析(Step 3) + 回测(Step 4)
 ```
 
 - **独立运行**：`run_analysis` 可在 `run_fetch` 完成后任意时间运行
 - **数据隔离**：获取和分析通过数据库表 + 缓存文件解耦，无进程间依赖
 - **多机部署**：`run_fetch` 在高带宽机器运行（API 密集），`run_analysis` 在高 CPU 机器运行（计算密集）
-- **容错降级**：即使 `run_fetch` 部分失败，`run_analysis` 仍可基于历史数据运行
+- **容错降级**：即使 `run_fetch` 或 `run_kline_cache` 部分失败，`run_analysis` 仍可基于历史数据运行
+
+---
+
+## 二十：定时任务 `run_kline_cache` 详细分析
+
+### 概述
+
+`run_kline_cache` 是从 `run_fetch` 独立拆分出的**K线缓存增量更新任务**，位于 `cron/cron.workdayly/run_kline_cache`，负责批量更新全市场 ~5000 只股票的历史K线缓存文件。
+
+- **调用入口**：`instock/job/kline_cache_daily_job.py`
+- **建议执行时间**：`run_fetch` 完成后（约 18:30~19:00）
+- **预计总耗时**：首次运行 **2~6 小时**；增量更新 **20~60 分钟**
+- **非交易日**：自动跳过（脚本内置交易日检测）
+- **前置条件**：`run_fetch` 当日已成功完成（通过 `cn_job_status` 检查）
+- **内存密集型**：单只股票 ~350KB DataFrame，以独立进程运行避免影响其他任务
+
+---
+
+### 执行流程
+
+```
+run_kline_cache (Shell)
+  ├── 加载 .env 环境变量
+  ├── 交易日检测 → 非交易日直接退出
+  └── 调用 kline_cache_daily_job.py
+        ├── Step 0: 检查 run_fetch 是否已完成（cn_job_status 查询）
+        ├── Step 1: 清理过期缓存（退市股票、除权除息数据）
+        ├── Step 2: 预加载实时行情（stock_data 单例）
+        └── Step 3: 批量更新K线缓存（~5000只股票，增量模式）
+```
+
+---
+
+### 前置条件检查
+
+| 项目 | 说明 |
+|------|------|
+| **检查方式** | 查询 `cn_job_status` 表中 `run_fetch/__overall__` 的状态 |
+| **通过条件** | status = 'success' 且 job_date = 当日 |
+| **未通过** | 跳过K线缓存更新，打印警告日志 |
+| **强制执行** | 设置 `INSTOCK_FORCE_KLINE_CACHE=1` 可跳过前置检查 |
+
+> **设计目的**：避免在 `run_fetch` 未完成时基于过期行情数据更新缓存，导致缓存内容不一致。
+
+---
+
+### 各步骤详解
+
+#### Step 1：清理过期缓存
+
+| 项目 | 说明 |
+|------|------|
+| **函数** | `stf.clean_expired_cache()` |
+| **功能** | ①删除退市股票缓存 ②刷新近 35 天内除权除息股票的前复权缓存 ③删除损坏的 `.meta` 文件 |
+| **API 调用** | 无（纯本地文件操作） |
+| **预计耗时** | **1~5 秒** |
+
+#### Step 2：预加载实时行情
+
+| 项目 | 说明 |
+|------|------|
+| **函数** | `stock_data(date).get_data()` |
+| **功能** | 加载 `stock_data` 单例获取全市场股票列表，作为后续 K 线更新的股票清单 |
+| **API 数据源** | **东方财富** → 腾讯财经 → 新浪财经 |
+| **预计耗时** | **3~10 秒** |
+
+#### Step 3：批量更新 K 线缓存
+
+| 项目 | 说明 |
+|------|------|
+| **函数** | `stf.update_all_caches()` |
+| **功能** | 对每只股票调用 `stock_hist_cache_incremental()` 进行增量缓存更新 |
+| **数据内容** | 日 K 线数据：日期、开盘价、收盘价、最高价、最低价、成交量(手)、成交额(元)、振幅、涨跌幅、涨跌额、换手率 |
+| **API 数据源** | **东方财富**（主） → **腾讯财经** → **新浪财经**（按健康度动态排序，自动降级切换） |
+| **并发策略** | 2 线程并发，请求间隔 1~3 秒 |
+| **缓存跳过** | 预检查 `.meta` 文件的 `last_date`，若已 >= 当日则跳过（零 API 调用） |
+| **缓存文件** | `instock/cache/hist/{code}.gzip.pickle` + `{code}.meta` |
+| **默认年数** | 本地 10 年，Docker 3 年（可通过 `HIST_DATA_DEFAULT_YEARS` 环境变量调整） |
+| **防限流策略** | 5 层防护：①2 线程并发限制 ②请求间隔 1~3 秒 ③每 100 只暂停 8~15 秒 ④连续 3 次失败触发限流暂停（120s→240s→480s 指数退避） ⑤累计 3 次限流触发熔断终止 |
+| **预计耗时** | 首次全量：**2~6 小时**；增量更新：**20~60 分钟** |
+
+---
+
+### 与 `run_fetch` 的依赖关系
+
+```
+run_fetch 完成 → cn_job_status 记录 run_fetch/__overall__ = success
+                                    │
+run_kline_cache 启动 → 查询 cn_job_status
+  ├── 已完成 → 继续执行K线缓存更新
+  └── 未完成 → 跳过（或 INSTOCK_FORCE_KLINE_CACHE=1 强制执行）
+```
+
+---
+
+### 拆分原因
+
+此任务原属于 `run_fetch`（`fetch_daily_job.py`）的最后一个阶段，拆分原因：
+
+1. **OOM 隔离**：K线缓存更新内存密集型（~5000 只股票），在 1.6GB 服务器上可能因 OOM 被杀。独立后即使失败也不影响 `run_fetch` 的状态记录。
+2. **调度灵活**：可独立设置 cron 时间和重试策略，不受 `run_fetch` 约束。
+3. **前置条件明确**：通过 `cn_job_status` 表显式检查 `run_fetch` 完成状态，替代原来的隐式串行依赖。
+4. **耗时解耦**：`run_fetch` 从 30~90 分钟缩短到 5~15 分钟，状态记录更及时。
 
 
 # 安装说明

@@ -1,10 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+完整每日任务（获取 + 分析，服务器回退模式）
 
+执行流程：
+Phase 0: 初始化数据库
+Phase 1: 轻量级数据入库（行情 + 选股 + 扩展数据 + 收盘后数据）
+Phase 2: K线缓存批量更新（内存密集型，独立子进程）
+Phase 3: 数据分析（GPT选股 + 基本面选股 + 流式分析）
+Phase 4: 回测
+
+设计原则：
+- 轻量任务优先完成，确保关键数据安全入库
+- K线缓存以独立子进程运行，OOM 不影响已入库数据
+- 每个阶段/子任务记录开始/结束日志及耗时
+- 分析阶段支持"已完成跳过"（本地优先模式）
+- 作业状态通过 cn_job_status 表追踪
+"""
 
 import time
 import datetime
-import concurrent.futures
 import logging
 import gc
 import os.path
@@ -35,14 +50,25 @@ import selection_data_daily_job as sddj
 import gpt_value_data_job as gptj
 import instock.lib.database as mdb
 import instock.lib.trade_time as trd
+from instock.lib.job_tracker import (
+    record_task_start, record_task_end, record_task_skipped,
+    is_data_fresh,
+)
 
 __author__ = 'InStock'
-__date__ = '2026/02/14'
+__date__ = '2026/03/12'
 
 # 分析数据跳过阈值（同 analysis_daily_job.py）
 ANALYSIS_DONE_THRESHOLD = int(os.environ.get('INSTOCK_ANALYSIS_DONE_THRESHOLD', '1000'))
 
 _JOB_DIR = os.path.dirname(os.path.abspath(__file__))
+_JOB_NAME = 'run_workdayly'
+
+# 数据新鲜度阈值
+_FRESHNESS_THRESHOLDS = {
+    'cn_stock_spot': int(os.environ.get('INSTOCK_FRESH_STOCK_SPOT', '3000')),
+    'cn_stock_selection': int(os.environ.get('INSTOCK_FRESH_SELECTION', '100')),
+}
 
 
 def _run_job_subprocess(script_name, label, timeout=1800):
@@ -105,74 +131,150 @@ def _is_analysis_done():
         return False
 
 
+def _check_and_skip(table_name, date_str, task_label):
+    """检查数据新鲜度，决定是否跳过该任务。"""
+    if os.environ.get('INSTOCK_FORCE_FETCH', '').strip() == '1':
+        return False
+    threshold = _FRESHNESS_THRESHOLDS.get(table_name, 1)
+    fresh, count = is_data_fresh(table_name, date_str, threshold)
+    if fresh:
+        logging.info(f"[{task_label}] 数据已完整（{table_name}: {count} 条 >= {threshold}），跳过")
+        return True
+    return False
+
+
+def _run_stock_spot_buy(date):
+    """基本面选股：从 cn_stock_spot 筛选 PE<20、PB<10、ROE>=15% 的股票。"""
+    import pandas as pd
+    import instock.core.tablestructure as tbs
+
+    try:
+        _table_name = tbs.TABLE_CN_STOCK_SPOT['name']
+        if not mdb.checkTableIsExist(_table_name):
+            return
+
+        date_str = date.strftime("%Y-%m-%d") if hasattr(date, 'strftime') else str(date)
+        sql = f'''SELECT * FROM `{_table_name}` WHERE `date` = %s and 
+                `pe9` > 0 and `pe9` <= 20 and `pbnewmrq` <= 10 and `roe_weight` >= 15'''
+        data = pd.read_sql(sql=sql, con=mdb.engine(), params=(date_str,))
+        data = data.drop_duplicates(subset="code", keep="last")
+        if len(data.index) == 0:
+            return
+
+        table_name = tbs.TABLE_CN_STOCK_SPOT_BUY['name']
+        if mdb.checkTableIsExist(table_name):
+            del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+            mdb.executeSql(del_sql, (date_str,))
+            cols_type = None
+        else:
+            cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_SPOT_BUY['columns'])
+
+        mdb.insert_db_from_df(data, table_name, cols_type, False, "`date`,`code`")
+        logging.info(f"基本面选股：筛选出 {len(data)} 只股票")
+    except Exception as e:
+        logging.error(f"基本面选股处理异常", exc_info=True)
+
+
 def main():
     start = time.time()
     _start = datetime.datetime.now()
     logging.info("######## 任务执行时间: %s #######" % _start.strftime("%Y-%m-%d %H:%M:%S.%f"))
 
+    # 获取交易日期
+    try:
+        run_date, run_date_nph = trd.get_trade_date_last()
+        date_str = run_date_nph.strftime("%Y-%m-%d")
+    except Exception as e:
+        logging.error("获取交易日期失败，无法继续", exc_info=True)
+        return
+
+    overall_start = record_task_start(_JOB_NAME, '__overall__', run_date_nph)
+
     # ================================================================
     # Phase 0: 初始化
     # ================================================================
-    bj.main()   # 初始化数据库
+    t0 = record_task_start(_JOB_NAME, 'init_db', run_date_nph)
+    try:
+        bj.main()   # 初始化数据库
+        record_task_end(_JOB_NAME, 'init_db', run_date_nph, t0, success=True)
+    except Exception as e:
+        logging.error(f"execute_daily_job init_job 异常", exc_info=True)
+        record_task_end(_JOB_NAME, 'init_db', run_date_nph, t0, success=False, message=str(e))
 
     # ================================================================
-    # Phase 1: 轻量级数据入库（优先执行，耗时短、内存低）
-    # 设计原则：先完成所有轻量 API 调用和入库操作，确保即使后续重量级
-    # K线缓存更新因 OOM 被杀，这些关键数据（综合选股、GPT选股等）
-    # 已经安全写入数据库，不会因 K线更新失败而全部丢失。
+    # Phase 1: 轻量级数据入库
     # ================================================================
 
     # Phase 1a: 实时行情预加载
-    # 单独预加载 stock_data 单例，供后续 Phase 1b 直接使用
-    # （K线缓存批量更新已移至 Phase 2 子进程执行）
+    t1a = record_task_start(_JOB_NAME, 'spot_preload', run_date_nph)
     try:
-        import instock.lib.run_template as runt
-        import instock.lib.trade_time as trd
-        import instock.core.stockfetch as stf
         from instock.core.singleton_stock import stock_data as sd_cls
-
-        run_date, run_date_nph = trd.get_trade_date_last()
         spot = sd_cls(run_date_nph).get_data()
         if spot is not None:
             logging.info(f"Phase 1a: 实时行情预加载成功，{len(spot)} 只股票")
+            record_task_end(_JOB_NAME, 'spot_preload', run_date_nph, t1a, success=True,
+                            rows_affected=len(spot))
         else:
             logging.error("Phase 1a: 实时行情预加载失败（stock_data 返回 None）")
+            record_task_end(_JOB_NAME, 'spot_preload', run_date_nph, t1a, success=False)
     except Exception as e:
         logging.error(f"execute_daily_job Phase 1a 行情预加载异常", exc_info=True)
+        record_task_end(_JOB_NAME, 'spot_preload', run_date_nph, t1a, success=False, message=str(e))
 
-    # Phase 1b: 基础数据入库（从 stock_data 单例读取，无额外API调用）
+    # Phase 1b: 基础数据入库
+    if _check_and_skip('cn_stock_spot', date_str, '股票行情'):
+        record_task_skipped(_JOB_NAME, 'stock_spot', run_date_nph, '数据已完整')
+    else:
+        t1b = record_task_start(_JOB_NAME, 'stock_spot', run_date_nph)
+        try:
+            hdj.main()
+            record_task_end(_JOB_NAME, 'stock_spot', run_date_nph, t1b, success=True)
+        except Exception as e:
+            logging.error(f"execute_daily_job basic_data_daily异常", exc_info=True)
+            record_task_end(_JOB_NAME, 'stock_spot', run_date_nph, t1b, success=False, message=str(e))
+
+    # Phase 1c: 综合选股数据
+    if _check_and_skip('cn_stock_selection', date_str, '综合选股'):
+        record_task_skipped(_JOB_NAME, 'selection_data', run_date_nph, '数据已完整')
+    else:
+        t1c = record_task_start(_JOB_NAME, 'selection_data', run_date_nph)
+        try:
+            sddj.main()
+            record_task_end(_JOB_NAME, 'selection_data', run_date_nph, t1c, success=True)
+        except Exception as e:
+            logging.error(f"execute_daily_job selection_data异常", exc_info=True)
+            record_task_end(_JOB_NAME, 'selection_data', run_date_nph, t1c, success=False, message=str(e))
+
+    # Phase 1d: 扩展数据（资金流向、龙虎榜等）
+    t1d = record_task_start(_JOB_NAME, 'basic_data_other', run_date_nph)
+    ok = _run_job_subprocess('basic_data_other_daily_job.py', 'execute_daily_job basic_data_other')
+    record_task_end(_JOB_NAME, 'basic_data_other', run_date_nph, t1d, success=ok)
+
+    # Phase 1e: GPT综合选股 + 基本面选股
+    t1e = record_task_start(_JOB_NAME, 'gpt_value', run_date_nph)
     try:
-        hdj.main()   # 股票/ETF实时行情入库
-    except Exception as e:
-        logging.error(f"execute_daily_job basic_data_daily异常", exc_info=True)
-
-    # Phase 1c: 综合选股数据（轻量API：东方财富选股器，~10页，<30秒）
-    try:
-        sddj.main()  # 综合选股数据入库
-    except Exception as e:
-        logging.error(f"execute_daily_job selection_data异常", exc_info=True)
-
-    # Phase 1d: 扩展数据（资金流向、龙虎榜等，轻量API调用）
-    # 以独立子进程运行，防止 OOM 波及当前进程
-    _run_job_subprocess('basic_data_other_daily_job.py', 'execute_daily_job basic_data_other')
-
-    # Phase 1e: GPT综合选股（纯DB读取+筛选，无API调用，依赖 Phase 1c 的选股数据）
-    try:
-        gptj.main()  # GPT综合选股
+        gptj.main()
+        record_task_end(_JOB_NAME, 'gpt_value', run_date_nph, t1e, success=True)
     except Exception as e:
         logging.error(f"execute_daily_job gpt_value异常", exc_info=True)
+        record_task_end(_JOB_NAME, 'gpt_value', run_date_nph, t1e, success=False, message=str(e))
 
-    # Phase 1f: 收盘后数据（大宗交易等，轻量API）
-    # 以独立子进程运行，防止 OOM 波及当前进程
-    _run_job_subprocess('basic_data_after_close_daily_job.py', 'execute_daily_job after_close')
+    t1e2 = record_task_start(_JOB_NAME, 'stock_spot_buy', run_date_nph)
+    try:
+        _run_stock_spot_buy(run_date_nph)
+        record_task_end(_JOB_NAME, 'stock_spot_buy', run_date_nph, t1e2, success=True)
+    except Exception as e:
+        logging.error(f"execute_daily_job stock_spot_buy异常", exc_info=True)
+        record_task_end(_JOB_NAME, 'stock_spot_buy', run_date_nph, t1e2, success=False, message=str(e))
+
+    # Phase 1f: 收盘后数据
+    t1f = record_task_start(_JOB_NAME, 'after_close', run_date_nph)
+    ok = _run_job_subprocess('basic_data_after_close_daily_job.py', 'execute_daily_job after_close')
+    record_task_end(_JOB_NAME, 'after_close', run_date_nph, t1f, success=ok)
 
     # ================================================================
-    # Phase 2: 重量级数据获取 — K线缓存批量更新
-    # 处理 ~5000 只股票的历史K线增量缓存，内存密集型操作。
-    # 在 1.6GB 内存服务器上可能因 OOM 被杀，因此放在轻量级任务之后。
-    # 即使此步骤失败，Phase 1 的关键数据已安全入库。
+    # Phase 2: K线缓存批量更新（独立子进程）
     # ================================================================
-    # 释放 stock_data 单例以腾出内存给 K线缓存更新
     try:
         from instock.core.singleton_stock import stock_data
         stock_data.release()
@@ -181,23 +283,19 @@ def main():
     except Exception:
         logging.debug("释放 stock_data 单例异常", exc_info=True)
 
-    # 以独立子进程运行：该步骤处理 ~5000 只股票的K线缓存，
-    # 在 1.6GB 内存服务器上经常因 OOM 被杀（exit code 137）。
-    # 即使此子进程被杀，Phase 1 的关键数据已安全入库。
-    phase2_ok = _run_job_subprocess('fetch_data_job.py', 'execute_daily_job K线缓存更新', timeout=36000)
+    t2 = record_task_start(_JOB_NAME, 'kline_cache', run_date_nph)
+    phase2_ok = _run_job_subprocess('kline_cache_daily_job.py', 'execute_daily_job K线缓存更新', timeout=36000)
+    record_task_end(_JOB_NAME, 'kline_cache', run_date_nph, t2, success=phase2_ok)
     if not phase2_ok:
         logging.warning(
             "⚠ Phase 2 K线缓存更新失败！Phase 3 将使用可能过期的缓存数据运行。"
             "指标/策略结果基于最后一次成功缓存的K线，结果可能与当日实际行情不符。"
         )
-        # 设置环境变量：让 streaming_analysis_job 能感知 Phase 2 失败
         os.environ['INSTOCK_PHASE2_FAILED'] = '1'
     else:
         os.environ.pop('INSTOCK_PHASE2_FAILED', None)
 
-    # 释放 stock_data 单例：如果预加载失败，单例缓存了 None，
-    # Phase 3 流式分析调用 stock_data(date).get_data() 会得到缓存的 None 从而跳过。
-    # 此处释放单例，让 Phase 3 有机会重新发起 API 请求获取股票列表。
+    # 释放 stock_data 单例（可能缓存了 None）
     try:
         from instock.core.singleton_stock import stock_data
         _sd = getattr(stock_data, '_instance', None)
@@ -209,47 +307,51 @@ def main():
 
     # ================================================================
     # Phase 3: 数据分析（流式处理 — 低内存模式）
-    # 从磁盘缓存逐只读取股票历史数据，同时计算指标+K线形态+策略
-    # 峰值内存 < 100 MB（vs 原架构 ~1670 MB 全量加载）
-    # 无任何外部API调用，数据来源：Phase 2 已更新的本地缓存
     # ================================================================
-    # 检查分析数据是否已由其他节点完成（本地优先模式）
     analysis_already_done = _is_analysis_done()
 
     if analysis_already_done:
         logging.info("Phase 3 跳过：分析数据已由其他节点完成")
+        record_task_skipped(_JOB_NAME, 'streaming_analysis', run_date_nph, '已由其他节点完成')
     else:
+        t3 = record_task_start(_JOB_NAME, 'streaming_analysis', run_date_nph)
         try:
-            saj.main()   # 流式分析：指标计算 + K线形态识别 + 策略选股（单次遍历）
+            saj.main()
+            record_task_end(_JOB_NAME, 'streaming_analysis', run_date_nph, t3, success=True)
         except Exception as e:
             logging.error(f"execute_daily_job streaming_analysis异常", exc_info=True)
+            record_task_end(_JOB_NAME, 'streaming_analysis', run_date_nph, t3, success=False, message=str(e))
 
     # ================================================================
     # Phase 4: 回测与收尾
     # ================================================================
-    # 释放 stock_data 单例（流式架构不再使用 stock_hist_data 单例）
     try:
         from instock.core.singleton_stock import stock_data
         stock_data.release()
         gc.collect()
-        logging.info("已释放 stock_data 单例，回收内存")
     except Exception as e:
         logging.warning(f"释放单例异常（不影响后续执行）：{e}")
 
     if analysis_already_done:
         logging.info("Phase 4 跳过：回测数据已由其他节点完成")
+        record_task_skipped(_JOB_NAME, 'backtest', run_date_nph, '已由其他节点完成')
     else:
+        t4 = record_task_start(_JOB_NAME, 'backtest', run_date_nph)
         try:
-            bdj.main()   # 策略回测（重新加载stock_hist_data，但此时缓存已热，无API调用）
+            bdj.main()
+            record_task_end(_JOB_NAME, 'backtest', run_date_nph, t4, success=True)
         except Exception as e:
             logging.error(f"execute_daily_job backtest异常", exc_info=True)
+            record_task_end(_JOB_NAME, 'backtest', run_date_nph, t4, success=False, message=str(e))
 
     # ================================================================
-    # 数据健康检查：在流水线结束后，检查各表是否有今日数据
-    # 方便排查"页面无数据"问题
+    # 数据健康检查
     # ================================================================
     _data_health_check(start)
 
+    elapsed = time.time() - start
+    record_task_end(_JOB_NAME, '__overall__', run_date_nph, overall_start,
+                    success=True, message=f"总耗时 {elapsed:.1f}s")
     logging.info("######## 完成任务, 使用时间: %s 秒 #######" % (time.time() - start))
 
 

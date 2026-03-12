@@ -6,18 +6,19 @@
 职责：集中执行所有需要外部 API 的数据获取任务。
 与 analysis_daily_job.py 配合使用，实现获取与分析解耦。
 
-执行顺序（按内存占用从低到高排列，确保轻量任务优先完成）：
+执行顺序（串行执行，按内存占用从低到高排列）：
 1. 初始化数据库
-2. 股票/ETF 实时行情入库 + 综合选股数据入库
-3. 资金流向、龙虎榜等扩展数据（Phase 3 — 轻量API调用）
-4. 收盘后数据（大宗交易等）
-5. 历史K线缓存增量更新（Phase 1 — 内存密集型，放在最后）
+2. 股票/ETF 实时行情入库
+3. 综合选股数据入库
+4. 资金流向、龙虎榜等扩展数据
+5. 收盘后数据（大宗交易等）
 
 设计原则：
-- 轻量API调用优先于内存密集型操作
-- 在 1.6GB 内存服务器上，K线缓存更新可能因 OOM 被杀，
-  放在最后确保不影响其他数据入库
-- 所有外部 API 调用集中在此脚本
+- 串行执行所有任务，子进程隔离内存密集型操作
+- 每个子任务执行前检查数据新鲜度，已有完整数据时跳过
+- 每个子任务记录开始/结束日志及耗时
+- 作业整体状态通过 cn_job_status 表追踪（供 kline_cache_daily_job 查询）
+- 历史K线缓存增量更新已独立为 kline_cache_daily_job.py
 - 即使某个阶段失败，后续阶段仍会继续
 - 可独立于分析任务运行
 """
@@ -47,15 +48,37 @@ import init_job as bj
 import subprocess
 import basic_data_daily_job as hdj
 import selection_data_daily_job as sddj
+import instock.lib.trade_time as trd
+from instock.lib.job_tracker import (
+    record_task_start, record_task_end, record_task_skipped,
+    is_job_completed, is_data_fresh,
+)
 
 __author__ = 'InStock'
-__date__ = '2026/02/14'
+__date__ = '2026/03/12'
 
 _JOB_DIR = os.path.dirname(os.path.abspath(__file__))
+_JOB_NAME = 'run_fetch'
+
+# 数据新鲜度阈值：当日数据行数 >= 此值时认为已完整
+# 可通过环境变量覆盖
+_FRESHNESS_THRESHOLDS = {
+    'cn_stock_spot': int(os.environ.get('INSTOCK_FRESH_STOCK_SPOT', '3000')),
+    'cn_etf_spot': int(os.environ.get('INSTOCK_FRESH_ETF_SPOT', '200')),
+    'cn_stock_selection': int(os.environ.get('INSTOCK_FRESH_SELECTION', '100')),
+    'cn_stock_fund_flow': int(os.environ.get('INSTOCK_FRESH_FUND_FLOW', '2000')),
+    'cn_stock_lhb': 1,  # 龙虎榜数据量不固定，有数据即可
+    'cn_stock_bonus': 1,
+    'cn_stock_blocktrade': 1,
+}
 
 
 def _run_job_subprocess(script_name, label, timeout=1800):
-    """以独立子进程运行 job 脚本，防止 OOM 波及当前进程"""
+    """以独立子进程运行 job 脚本，防止 OOM 波及当前进程。
+
+    Returns:
+        bool: True 表示子进程正常退出（exit code 0），False 表示失败。
+    """
     script_path = os.path.join(_JOB_DIR, script_name)
     try:
         logging.info(f"{label}: 启动子进程 {script_name}")
@@ -66,43 +89,107 @@ def _run_job_subprocess(script_name, label, timeout=1800):
         )
         if result.returncode != 0:
             logging.warning(f"{label}: 子进程退出码 {result.returncode}（可能 OOM 被杀）")
+            return False
         else:
             logging.info(f"{label}: 子进程执行成功")
+            return True
     except subprocess.TimeoutExpired:
         logging.error(f"{label}: 子进程执行超时（{timeout}秒）")
+        return False
     except Exception as e:
         logging.error(f"{label}: 子进程启动异常", exc_info=True)
+        return False
+
+
+def _check_and_skip(table_name, date_str, task_label):
+    """检查数据新鲜度，决定是否跳过该任务。
+
+    Returns:
+        bool: True 表示数据已完整，应跳过该任务。
+    """
+    if os.environ.get('INSTOCK_FORCE_FETCH', '').strip() == '1':
+        return False
+
+    threshold = _FRESHNESS_THRESHOLDS.get(table_name, 1)
+    fresh, count = is_data_fresh(table_name, date_str, threshold)
+    if fresh:
+        logging.info(f"[{task_label}] 数据已完整（{table_name}: {count} 条 >= {threshold}），跳过")
+        return True
+    return False
 
 
 def main():
     start = time.time()
     logging.info("====== 数据获取任务开始 [%s] ======" % datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
+    # 获取交易日期
+    try:
+        run_date, run_date_nph = trd.get_trade_date_last()
+        date_str = run_date_nph.strftime("%Y-%m-%d")
+    except Exception as e:
+        logging.error("获取交易日期失败，无法继续", exc_info=True)
+        return
+
+    # 检查整体作业是否已完成（备份 cron 跳过）
+    if is_job_completed(_JOB_NAME, run_date_nph):
+        logging.info(f"数据获取任务已于今日（{date_str}）成功完成，跳过。设置 INSTOCK_FORCE_FETCH=1 可强制执行。")
+        return
+
+    overall_start = record_task_start(_JOB_NAME, '__overall__', run_date_nph)
+    all_success = True
+
     # Phase 0: 初始化数据库
+    t0 = record_task_start(_JOB_NAME, 'init_db', run_date_nph)
     try:
         bj.main()
+        record_task_end(_JOB_NAME, 'init_db', run_date_nph, t0, success=True)
     except Exception as e:
         logging.error(f"数据获取 init_job 异常", exc_info=True)
+        record_task_end(_JOB_NAME, 'init_db', run_date_nph, t0, success=False, message=str(e))
+        all_success = False
 
-    # Phase 2: 实时行情入库（轻量，优先执行以确保基础数据可用）
-    try:
-        hdj.main()
-    except Exception as e:
-        logging.error(f"数据获取 basic_data_daily 异常", exc_info=True)
+    # Phase 1: 股票实时行情入库
+    if _check_and_skip('cn_stock_spot', date_str, '股票行情'):
+        record_task_skipped(_JOB_NAME, 'stock_spot', run_date_nph, '数据已完整')
+    else:
+        t1 = record_task_start(_JOB_NAME, 'stock_spot', run_date_nph)
+        try:
+            hdj.main()
+            record_task_end(_JOB_NAME, 'stock_spot', run_date_nph, t1, success=True)
+        except Exception as e:
+            logging.error(f"数据获取 basic_data_daily 异常", exc_info=True)
+            record_task_end(_JOB_NAME, 'stock_spot', run_date_nph, t1, success=False, message=str(e))
+            all_success = False
 
-    try:
-        sddj.main()
-    except Exception as e:
-        logging.error(f"数据获取 selection_data 异常", exc_info=True)
+    # Phase 2: 综合选股数据入库
+    if _check_and_skip('cn_stock_selection', date_str, '综合选股'):
+        record_task_skipped(_JOB_NAME, 'selection_data', run_date_nph, '数据已完整')
+    else:
+        t2 = record_task_start(_JOB_NAME, 'selection_data', run_date_nph)
+        try:
+            sddj.main()
+            record_task_end(_JOB_NAME, 'selection_data', run_date_nph, t2, success=True)
+        except Exception as e:
+            logging.error(f"数据获取 selection_data 异常", exc_info=True)
+            record_task_end(_JOB_NAME, 'selection_data', run_date_nph, t2, success=False, message=str(e))
+            all_success = False
 
-    # Phase 3: 扩展数据（资金流向、龙虎榜等 — 轻量API调用，优先于重量级K线更新）
+    # Phase 3: 扩展数据（资金流向、龙虎榜等）
     # 以独立子进程运行，防止 OOM 波及当前进程
-    _run_job_subprocess('basic_data_other_daily_job.py', '数据获取 basic_data_other')
+    t3 = record_task_start(_JOB_NAME, 'basic_data_other', run_date_nph)
+    ok = _run_job_subprocess('basic_data_other_daily_job.py', '数据获取 basic_data_other')
+    record_task_end(_JOB_NAME, 'basic_data_other', run_date_nph, t3, success=ok)
+    if not ok:
+        all_success = False
 
-    # Phase 5 (收盘后数据): 大宗交易等 — 独立子进程
-    _run_job_subprocess('basic_data_after_close_daily_job.py', '数据获取 after_close')
+    # Phase 4: 收盘后数据（大宗交易等）
+    t4 = record_task_start(_JOB_NAME, 'after_close', run_date_nph)
+    ok = _run_job_subprocess('basic_data_after_close_daily_job.py', '数据获取 after_close')
+    record_task_end(_JOB_NAME, 'after_close', run_date_nph, t4, success=ok)
+    if not ok:
+        all_success = False
 
-    # 释放可能的缓存，为 Phase 1 腾出内存
+    # 释放缓存
     try:
         from instock.core.singleton_stock import stock_data
         stock_data.release()
@@ -110,14 +197,16 @@ def main():
     except Exception:
         logging.debug("释放单例缓存异常", exc_info=True)
 
-    # Phase 1: 历史K线缓存更新（内存密集型，放在最后执行）
-    # 以独立子进程运行：该步骤处理 ~5000 只股票的K线缓存，
-    # 在 1.6GB 内存服务器上经常因 OOM 被杀（exit code 137）。
-    # 即使此子进程被杀，上面的轻量级数据已经成功入库。
-    _run_job_subprocess('fetch_data_job.py', '数据获取 fetch_data(K线缓存)', timeout=36000)
-
+    # 记录整体状态（供 kline_cache_daily_job 查询）
     elapsed = time.time() - start
-    logging.info("====== 数据获取任务完成，耗时 %.1f 秒 ======" % elapsed)
+    record_task_end(
+        _JOB_NAME, '__overall__', run_date_nph, overall_start,
+        success=all_success,
+        message=f"总耗时 {elapsed:.1f}s，{'全部成功' if all_success else '部分失败'}"
+    )
+
+    logging.info("====== 数据获取任务完成，耗时 %.1f 秒%s ======" % (
+        elapsed, '' if all_success else '（部分任务失败）'))
 
 
 if __name__ == '__main__':

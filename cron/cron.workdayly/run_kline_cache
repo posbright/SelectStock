@@ -1,0 +1,53 @@
+#!/bin/bash
+
+# 历史K线缓存增量更新任务（独立，内存密集型）
+# 必须在 run_fetch 成功完成后执行
+# 处理 ~5000 只股票的历史K线增量更新
+# 在 1.6GB 内存服务器上可能因 OOM 被杀，与 run_fetch 解耦后不影响已入库数据
+#
+# 前置条件检查：
+#   - 自动检查 cn_job_status 表中 run_fetch 当日是否成功
+#   - 设置 INSTOCK_FORCE_KLINE_CACHE=1 可跳过前置条件检查
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+PROJECT_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
+
+export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH
+export PYTHONIOENCODING=utf-8
+export LANG=zh_CN.UTF-8
+export PYTHONPATH=$PROJECT_ROOT
+export LC_CTYPE=zh_CN.UTF-8
+
+# 加载项目 .env 文件中的数据库等配置
+if [ -f "$PROJECT_ROOT/.env" ]; then
+    set -a; source "$PROJECT_ROOT/.env"; set +a
+fi
+
+LOG_DIR=$PROJECT_ROOT/instock/log
+mkdir -p $LOG_DIR
+LOG_FILE=$LOG_DIR/workdayly.log
+
+# 非交易日跳过
+IS_TRADE_DAY=$(python3 -c "
+import sys, os
+sys.path.insert(0, '$PROJECT_ROOT')
+try:
+    import instock.lib.trade_time as trd
+    print('1' if trd.is_trade_date() else '0')
+except Exception:
+    print('1')  # 检测失败时保守执行
+" 2>/dev/null)
+
+if [ "$IS_TRADE_DAY" = "0" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 非交易日，跳过K线缓存更新任务" >> $LOG_FILE
+    exit 0
+fi
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始执行 kline_cache_daily_job（K线缓存增量更新）" >> $LOG_FILE
+python3 $PROJECT_ROOT/instock/job/kline_cache_daily_job.py >> $LOG_FILE 2>&1
+EXIT_CODE=$?
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] K线缓存更新完成 (成功)" >> $LOG_FILE
+else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] K线缓存更新完成 (失败, 退出码: $EXIT_CODE)" >> $LOG_FILE
+fi
