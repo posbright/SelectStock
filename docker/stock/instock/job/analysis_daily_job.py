@@ -51,13 +51,14 @@ import gpt_value_data_job as gptj
 import streaming_analysis_job as saj
 import backtest_data_daily_job as bdj
 from instock.lib.job_tracker import record_task_start, record_task_end, record_task_skipped
+import instock.lib.envconfig as _cfg
 
 __author__ = 'InStock'
 __date__ = '2026/03/12'
 
 # 分析数据跳过阈值：cn_stock_indicators 今日行数 >= 此值时认为分析已完成
 # 正常交易日约 4800+ 条，设 1000 作为安全阈值避免误跳过部分完成的情况
-ANALYSIS_DONE_THRESHOLD = int(os.environ.get('INSTOCK_ANALYSIS_DONE_THRESHOLD', '1000'))
+ANALYSIS_DONE_THRESHOLD = _cfg.get_int('INSTOCK_ANALYSIS_DONE_THRESHOLD', 1000)
 
 _JOB_NAME = 'run_analysis'
 
@@ -74,7 +75,7 @@ def _is_analysis_done(date_str):
     服务器 cron 触发时自动跳过，避免低内存环境重复计算。
     可通过 INSTOCK_FORCE_ANALYSIS=1 环境变量强制执行。
     """
-    if os.environ.get('INSTOCK_FORCE_ANALYSIS', '').strip() == '1':
+    if _cfg.get_bool('INSTOCK_FORCE_ANALYSIS', False):
         logging.info("检测到 INSTOCK_FORCE_ANALYSIS=1，强制执行分析任务")
         return False
 
@@ -102,27 +103,59 @@ def _is_analysis_done(date_str):
 
 def _run_stock_spot_buy(date):
     """
-    基本面选股：从 cn_stock_spot 筛选 PE<20、PB<10、ROE>=15% 的股票。
-    
-    原位于 basic_data_other_daily_job.py（龙虎榜附带操作），
-    现移至分析流程，在 GPT 综合选股后执行。
+    基本面选股：筛选 PE<20、PB<10、ROE>=15% 的股票。
+
+    数据源优先级：
+    1. cn_stock_selection（东方财富选股器 API，PE/ROE 数据更可靠）
+    2. cn_stock_spot（行情 API，降级到腾讯/新浪时 PE/ROE=0）
+
+    筛选逻辑：从数据源筛出符合条件的股票代码，再用代码去 cn_stock_spot 取完整行情数据写入。
     """
     import pandas as pd
     import instock.core.tablestructure as tbs
 
     try:
-        _table_name = tbs.TABLE_CN_STOCK_SPOT['name']
-        if not mdb.checkTableIsExist(_table_name):
+        date_str = date.strftime("%Y-%m-%d") if hasattr(date, 'strftime') else str(date)
+        qualified_codes = None
+
+        # 优先从 cn_stock_selection 筛选（PE/ROE 数据更可靠）
+        sel_table = tbs.TABLE_CN_STOCK_SELECTION['name']
+        if mdb.checkTableIsExist(sel_table):
+            sel_sql = (f'SELECT `code` FROM `{sel_table}` WHERE `date` = %s '
+                       f'AND `pe9` > 0 AND `pe9` <= 20 AND `pbnewmrq` <= 10 AND `roe_weight` >= 15')
+            sel_data = pd.read_sql(sql=sel_sql, con=mdb.engine(), params=(date_str,))
+            if len(sel_data) > 0:
+                qualified_codes = set(sel_data['code'].values)
+                logging.info(f"基本面选股：从 cn_stock_selection 筛出 {len(qualified_codes)} 只符合条件")
+
+        # 降级：从 cn_stock_spot 筛选
+        if qualified_codes is None:
+            spot_table = tbs.TABLE_CN_STOCK_SPOT['name']
+            if mdb.checkTableIsExist(spot_table):
+                spot_sql = (f'SELECT `code` FROM `{spot_table}` WHERE `date` = %s '
+                            f'AND `pe9` > 0 AND `pe9` <= 20 AND `pbnewmrq` <= 10 AND `roe_weight` >= 15')
+                spot_data = pd.read_sql(sql=spot_sql, con=mdb.engine(), params=(date_str,))
+                if len(spot_data) > 0:
+                    qualified_codes = set(spot_data['code'].values)
+                    logging.info(f"基本面选股：降级从 cn_stock_spot 筛出 {len(qualified_codes)} 只符合条件")
+
+        if not qualified_codes:
+            logging.info("基本面选股：无符合条件的股票")
+            return
+
+        # 从 cn_stock_spot 取完整行情数据（保持 cn_stock_spot_buy 表结构一致）
+        spot_table = tbs.TABLE_CN_STOCK_SPOT['name']
+        if not mdb.checkTableIsExist(spot_table):
             logging.warning("基本面选股：cn_stock_spot 表不存在，跳过")
             return
 
-        date_str = date.strftime("%Y-%m-%d") if hasattr(date, 'strftime') else str(date)
-        sql = f'''SELECT * FROM `{_table_name}` WHERE `date` = %s and 
-                `pe9` > 0 and `pe9` <= 20 and `pbnewmrq` <= 10 and `roe_weight` >= 15'''
-        data = pd.read_sql(sql=sql, con=mdb.engine(), params=(date_str,))
+        placeholders = ','.join(['%s'] * len(qualified_codes))
+        data = pd.read_sql(
+            f'SELECT * FROM `{spot_table}` WHERE `date` = %s AND `code` IN ({placeholders})',
+            mdb.engine(), params=(date_str, *qualified_codes))
         data = data.drop_duplicates(subset="code", keep="last")
         if len(data.index) == 0:
-            logging.info("基本面选股：无符合条件的股票")
+            logging.info("基本面选股：cn_stock_spot 中未找到对应股票数据")
             return
 
         table_name = tbs.TABLE_CN_STOCK_SPOT_BUY['name']

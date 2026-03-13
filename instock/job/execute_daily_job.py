@@ -161,19 +161,52 @@ def _check_and_skip(table_name, date_str, task_label):
 
 
 def _run_stock_spot_buy(date):
-    """基本面选股：从 cn_stock_spot 筛选 PE<20、PB<10、ROE>=15% 的股票。"""
+    """基本面选股：筛选 PE<20、PB<10、ROE>=15% 的股票。
+
+    优先从 cn_stock_selection（东方财富选股器）筛选，PE/ROE 更可靠；
+    降级从 cn_stock_spot（行情数据）筛选。
+    筛出的股票代码再从 cn_stock_spot 取完整行情数据写入 cn_stock_spot_buy。
+    """
     import pandas as pd
     import instock.core.tablestructure as tbs
 
     try:
-        _table_name = tbs.TABLE_CN_STOCK_SPOT['name']
-        if not mdb.checkTableIsExist(_table_name):
+        date_str = date.strftime("%Y-%m-%d") if hasattr(date, 'strftime') else str(date)
+        qualified_codes = None
+
+        # 优先从 cn_stock_selection 筛选
+        sel_table = tbs.TABLE_CN_STOCK_SELECTION['name']
+        if mdb.checkTableIsExist(sel_table):
+            sel_sql = (f'SELECT `code` FROM `{sel_table}` WHERE `date` = %s '
+                       f'AND `pe9` > 0 AND `pe9` <= 20 AND `pbnewmrq` <= 10 AND `roe_weight` >= 15')
+            sel_data = pd.read_sql(sql=sel_sql, con=mdb.engine(), params=(date_str,))
+            if len(sel_data) > 0:
+                qualified_codes = set(sel_data['code'].values)
+                logging.info(f"基本面选股：从 cn_stock_selection 筛出 {len(qualified_codes)} 只")
+
+        # 降级从 cn_stock_spot
+        if qualified_codes is None:
+            spot_table = tbs.TABLE_CN_STOCK_SPOT['name']
+            if mdb.checkTableIsExist(spot_table):
+                spot_sql = (f'SELECT `code` FROM `{spot_table}` WHERE `date` = %s '
+                            f'AND `pe9` > 0 AND `pe9` <= 20 AND `pbnewmrq` <= 10 AND `roe_weight` >= 15')
+                spot_data = pd.read_sql(sql=spot_sql, con=mdb.engine(), params=(date_str,))
+                if len(spot_data) > 0:
+                    qualified_codes = set(spot_data['code'].values)
+                    logging.info(f"基本面选股：降级从 cn_stock_spot 筛出 {len(qualified_codes)} 只")
+
+        if not qualified_codes:
             return
 
-        date_str = date.strftime("%Y-%m-%d") if hasattr(date, 'strftime') else str(date)
-        sql = f'''SELECT * FROM `{_table_name}` WHERE `date` = %s and 
-                `pe9` > 0 and `pe9` <= 20 and `pbnewmrq` <= 10 and `roe_weight` >= 15'''
-        data = pd.read_sql(sql=sql, con=mdb.engine(), params=(date_str,))
+        # 从 cn_stock_spot 取完整行情数据
+        spot_table = tbs.TABLE_CN_STOCK_SPOT['name']
+        if not mdb.checkTableIsExist(spot_table):
+            return
+
+        placeholders = ','.join(['%s'] * len(qualified_codes))
+        data = pd.read_sql(
+            f'SELECT * FROM `{spot_table}` WHERE `date` = %s AND `code` IN ({placeholders})',
+            mdb.engine(), params=(date_str, *qualified_codes))
         data = data.drop_duplicates(subset="code", keep="last")
         if len(data.index) == 0:
             return
