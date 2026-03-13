@@ -29,6 +29,9 @@
         <el-button @click="createPaper" :icon="Monitor" :disabled="!strategy.id">
           创建模拟
         </el-button>
+        <el-button text @click="$router.push('/algo/backtests')">
+          回测历史
+        </el-button>
       </div>
     </div>
 
@@ -253,6 +256,7 @@ async function runBacktest() {
   try {
     const res = await runPortfolioBacktest({
       code: strategy.value.code,
+      strategy_id: strategy.value.id || undefined,
       start_date: btDateRange.value[0],
       end_date: btDateRange.value[1],
       initial_cash: btCash.value,

@@ -294,6 +294,18 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '策略编辑', hidden: true }
       },
       {
+        path: 'backtests',
+        name: 'BacktestHistory',
+        component: () => import('@/views/algo/backtest-list.vue'),
+        meta: { title: '回测列表' }
+      },
+      {
+        path: 'backtest-detail/:id',
+        name: 'BacktestDetail',
+        component: () => import('@/views/algo/backtest-detail.vue'),
+        meta: { title: '回测详情', hidden: true }
+      },
+      {
         path: 'paper',
         name: 'PaperTrading',
         component: () => import('@/views/paper-trading/index.vue'),

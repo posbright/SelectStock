@@ -91,6 +91,7 @@ class Application(tornado.web.Application):
             (r"/instock/api/strategy/templates", portfolioBacktestHandler.GetStrategyTemplatesHandler),
             (r"/instock/api/backtest/portfolio/run", portfolioBacktestHandler.RunPortfolioBacktestHandler),
             (r"/instock/api/backtest/portfolio/list", portfolioBacktestHandler.GetPortfolioBacktestListHandler),
+            (r"/instock/api/backtest/portfolio/detail", portfolioBacktestHandler.GetPortfolioBacktestDetailHandler),
             # 策略文件夹管理
             (r"/instock/api/strategy/folder/create", portfolioBacktestHandler.CreateFolderHandler),
             (r"/instock/api/strategy/folder/rename", portfolioBacktestHandler.RenameFolderHandler),

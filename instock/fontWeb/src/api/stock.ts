@@ -259,6 +259,7 @@ export function deleteFolder(id: number) {
 /** 运行组合回测 */
 export function runPortfolioBacktest(data: {
   code: string
+  strategy_id?: number
   start_date: string
   end_date: string
   initial_cash?: number
@@ -271,8 +272,13 @@ export function runPortfolioBacktest(data: {
 }
 
 /** 获取回测历史列表 */
-export function getPortfolioBacktestList() {
-  return request({ url: '/api/backtest/portfolio/list', method: 'get' })
+export function getPortfolioBacktestList(params?: { strategy_id?: number }) {
+  return request({ url: '/api/backtest/portfolio/list', method: 'get', params })
+}
+
+/** 获取回测详情 */
+export function getPortfolioBacktestDetail(id: number) {
+  return request({ url: '/api/backtest/portfolio/detail', method: 'get', params: { id } })
 }
 
 // ============= 模拟交易 API =============

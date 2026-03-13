@@ -406,13 +406,14 @@ class DeleteStrategyCodeHandler(webBase.BaseHandler, ABC):
 
 
 class RunPortfolioBacktestHandler(webBase.BaseHandler, ABC):
-    """运行组合回测"""
+    """运行组合回测（结果持久化到 DB）"""
 
     @gen.coroutine
     def post(self):
         try:
             body = json.loads(self.request.body)
             strategy_code = body.get('code', '')
+            strategy_id = body.get('strategy_id')
             start_date = body.get('start_date', '')
             end_date = body.get('end_date', '')
             initial_cash = body.get('initial_cash', 1000000)
@@ -431,6 +432,42 @@ class RunPortfolioBacktestHandler(webBase.BaseHandler, ABC):
                 initial_cash=initial_cash, benchmark=benchmark,
                 commission=commission, tax=tax, slippage=slippage)
 
+            # 持久化到 DB
+            bt_id = None
+            if result.get('status') == 'completed':
+                try:
+                    _ensure_backtest_table()
+                    m = result.get('metrics', {})
+                    now = datetime.datetime.now()
+                    with mdb.get_connection() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                'INSERT INTO cn_stock_backtest_portfolio '
+                                '(strategy_id, start_date, end_date, initial_cash, status, '
+                                'started_at, completed_at, total_return, annual_return, '
+                                'max_drawdown, sharpe_ratio, alpha, beta, win_rate, trade_count, '
+                                'result_json) '
+                                'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                                (strategy_id, start_date, end_date, initial_cash, 'completed',
+                                 now, now, m.get('total_return'), m.get('annual_return'),
+                                 m.get('max_drawdown'), m.get('sharpe_ratio'),
+                                 m.get('alpha'), m.get('beta'),
+                                 m.get('daily_win_rate'), m.get('trade_count'),
+                                 json.dumps(result, ensure_ascii=False, default=str)))
+                            cur.execute('SELECT LAST_INSERT_ID()')
+                            bt_id = cur.fetchone()[0]
+                    # 更新策略的 backtest_count 和 compile_count
+                    if strategy_id:
+                        try:
+                            mdb.executeSql(
+                                'UPDATE cn_stock_strategy_code SET backtest_count=backtest_count+1, '
+                                'compile_count=compile_count+1 WHERE id=%s', (strategy_id,))
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logging.warning(f"回测结果持久化异常: {e}")
+
+            result['backtest_id'] = bt_id
             self.write(json.dumps({'code': 0, 'data': result}, ensure_ascii=False, default=str))
         except Exception as e:
             logging.error("RunPortfolioBacktest异常", exc_info=True)
@@ -438,37 +475,118 @@ class RunPortfolioBacktestHandler(webBase.BaseHandler, ABC):
 
 
 class GetPortfolioBacktestListHandler(webBase.BaseHandler, ABC):
-    """获取历史回测任务列表"""
+    """获取历史回测列表（支持按策略ID筛选）"""
 
     @gen.coroutine
     def get(self):
         try:
             _ensure_backtest_table()
+            strategy_id = self.get_argument('strategy_id', None)
+
+            where = ''
+            params = []
+            if strategy_id:
+                where = 'WHERE bp.strategy_id = %s'
+                params.append(int(strategy_id))
+
             rows = mdb.executeSqlFetch(
-                'SELECT bp.id, sc.name as strategy_name, bp.start_date, bp.end_date, '
-                'bp.initial_cash, bp.status, bp.total_return, bp.max_drawdown, '
-                'bp.sharpe_ratio, bp.trade_count, bp.completed_at '
-                'FROM cn_stock_backtest_portfolio bp '
-                'LEFT JOIN cn_stock_strategy_code sc ON bp.strategy_id = sc.id '
-                'ORDER BY bp.id DESC LIMIT 50')
+                f'SELECT bp.id, bp.strategy_id, sc.name as strategy_name, '
+                f'bp.start_date, bp.end_date, bp.initial_cash, bp.status, '
+                f'bp.total_return, bp.annual_return, bp.max_drawdown, '
+                f'bp.sharpe_ratio, bp.alpha, bp.beta, bp.win_rate, '
+                f'bp.trade_count, bp.completed_at '
+                f'FROM cn_stock_backtest_portfolio bp '
+                f'LEFT JOIN cn_stock_strategy_code sc ON bp.strategy_id = sc.id '
+                f'{where} ORDER BY bp.id DESC LIMIT 100', tuple(params) if params else None)
             data = []
             if rows:
                 for r in rows:
                     data.append({
                         'id': r[0],
-                        'strategy_name': r[1] or '临时策略',
-                        'start_date': str(r[2]) if r[2] else '',
-                        'end_date': str(r[3]) if r[3] else '',
-                        'initial_cash': float(r[4]) if r[4] else 0,
-                        'status': r[5],
-                        'total_return': float(r[6]) if r[6] else 0,
-                        'max_drawdown': float(r[7]) if r[7] else 0,
-                        'sharpe_ratio': float(r[8]) if r[8] else 0,
-                        'trade_count': r[9] or 0,
-                        'completed_at': r[10].strftime('%Y-%m-%d %H:%M') if r[10] else '',
+                        'strategy_id': r[1],
+                        'strategy_name': r[2] or '临时策略',
+                        'start_date': str(r[3]) if r[3] else '',
+                        'end_date': str(r[4]) if r[4] else '',
+                        'initial_cash': float(r[5]) if r[5] else 0,
+                        'status': r[6] or 'unknown',
+                        'total_return': float(r[7]) if r[7] else 0,
+                        'annual_return': float(r[8]) if r[8] else 0,
+                        'max_drawdown': float(r[9]) if r[9] else 0,
+                        'sharpe_ratio': float(r[10]) if r[10] else 0,
+                        'alpha': float(r[11]) if r[11] else 0,
+                        'beta': float(r[12]) if r[12] else 0,
+                        'win_rate': float(r[13]) if r[13] else 0,
+                        'trade_count': r[14] or 0,
+                        'completed_at': r[15].strftime('%Y-%m-%d %H:%M:%S') if r[15] else '',
                     })
             self.write(json.dumps({'code': 0, 'data': data}, ensure_ascii=False))
         except Exception as e:
+            self.write(json.dumps({'code': -1, 'msg': str(e)}))
+
+
+class GetPortfolioBacktestDetailHandler(webBase.BaseHandler, ABC):
+    """获取回测详情（含完整的净值/交易/持仓数据）"""
+
+    @gen.coroutine
+    def get(self):
+        try:
+            bt_id = self.get_argument('id', None)
+            if not bt_id:
+                self.write(json.dumps({'code': -1, 'msg': '缺少 id'}))
+                return
+
+            _ensure_backtest_table()
+            rows = mdb.executeSqlFetch(
+                'SELECT bp.id, bp.strategy_id, sc.name, bp.start_date, bp.end_date, '
+                'bp.initial_cash, bp.status, bp.total_return, bp.annual_return, '
+                'bp.max_drawdown, bp.sharpe_ratio, bp.alpha, bp.beta, bp.win_rate, '
+                'bp.trade_count, bp.completed_at, bp.result_json '
+                'FROM cn_stock_backtest_portfolio bp '
+                'LEFT JOIN cn_stock_strategy_code sc ON bp.strategy_id = sc.id '
+                'WHERE bp.id = %s', (bt_id,))
+
+            if not rows:
+                self.write(json.dumps({'code': -1, 'msg': '回测记录不存在'}))
+                return
+
+            r = rows[0]
+            info = {
+                'id': r[0], 'strategy_id': r[1],
+                'strategy_name': r[2] or '临时策略',
+                'start_date': str(r[3]) if r[3] else '',
+                'end_date': str(r[4]) if r[4] else '',
+                'initial_cash': float(r[5]) if r[5] else 0,
+                'status': r[6],
+                'metrics': {
+                    'total_return': float(r[7]) if r[7] else 0,
+                    'annual_return': float(r[8]) if r[8] else 0,
+                    'max_drawdown': float(r[9]) if r[9] else 0,
+                    'sharpe_ratio': float(r[10]) if r[10] else 0,
+                    'alpha': float(r[11]) if r[11] else 0,
+                    'beta': float(r[12]) if r[12] else 0,
+                    'daily_win_rate': float(r[13]) if r[13] else 0,
+                    'trade_count': r[14] or 0,
+                },
+                'completed_at': r[15].strftime('%Y-%m-%d %H:%M:%S') if r[15] else '',
+            }
+
+            # 尝试从 result_json 恢复完整数据（净值/交易/持仓）
+            result_json = r[16]
+            full_data = {}
+            if result_json:
+                try:
+                    full_data = json.loads(result_json)
+                except Exception:
+                    pass
+
+            info['nav'] = full_data.get('nav', [])
+            info['trades'] = full_data.get('trades', [])
+            info['positions'] = full_data.get('positions', [])
+            info['logs'] = full_data.get('logs', [])
+
+            self.write(json.dumps({'code': 0, 'data': info}, ensure_ascii=False, default=str))
+        except Exception as e:
+            logging.error("GetPortfolioBacktestDetail异常", exc_info=True)
             self.write(json.dumps({'code': -1, 'msg': str(e)}))
 
 
@@ -633,28 +751,34 @@ class RenameStrategyHandler(webBase.BaseHandler, ABC):
 
 def _ensure_backtest_table():
     """确保回测任务表存在"""
-    if mdb.checkTableIsExist('cn_stock_backtest_portfolio'):
-        return
-    mdb.executeSql('''
-        CREATE TABLE IF NOT EXISTS `cn_stock_backtest_portfolio` (
-            `id` INT AUTO_INCREMENT PRIMARY KEY,
-            `strategy_id` INT,
-            `start_date` DATE,
-            `end_date` DATE,
-            `initial_cash` DECIMAL(15,2),
-            `status` ENUM('pending','running','completed','failed') DEFAULT 'pending',
-            `started_at` DATETIME,
-            `completed_at` DATETIME,
-            `error_message` TEXT,
-            `total_return` DECIMAL(10,4),
-            `annual_return` DECIMAL(10,4),
-            `max_drawdown` DECIMAL(10,4),
-            `sharpe_ratio` DECIMAL(10,4),
-            `alpha` DECIMAL(10,4),
-            `beta` DECIMAL(10,4),
-            `win_rate` DECIMAL(10,4),
-            `trade_count` INT,
-            INDEX `idx_strategy` (`strategy_id`),
-            INDEX `idx_status` (`status`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-    ''')
+    if not mdb.checkTableIsExist('cn_stock_backtest_portfolio'):
+        mdb.executeSql('''
+            CREATE TABLE IF NOT EXISTS `cn_stock_backtest_portfolio` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `strategy_id` INT,
+                `start_date` DATE,
+                `end_date` DATE,
+                `initial_cash` DECIMAL(15,2),
+                `status` ENUM('pending','running','completed','failed') DEFAULT 'pending',
+                `started_at` DATETIME,
+                `completed_at` DATETIME,
+                `error_message` TEXT,
+                `total_return` DECIMAL(10,4),
+                `annual_return` DECIMAL(10,4),
+                `max_drawdown` DECIMAL(10,4),
+                `sharpe_ratio` DECIMAL(10,4),
+                `alpha` DECIMAL(10,4),
+                `beta` DECIMAL(10,4),
+                `win_rate` DECIMAL(10,4),
+                `trade_count` INT,
+                `result_json` LONGTEXT COMMENT '完整回测结果JSON',
+                INDEX `idx_strategy` (`strategy_id`),
+                INDEX `idx_status` (`status`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ''')
+    else:
+        try:
+            mdb.executeSql('ALTER TABLE cn_stock_backtest_portfolio '
+                           'ADD COLUMN `result_json` LONGTEXT AFTER `trade_count`')
+        except Exception:
+            pass
