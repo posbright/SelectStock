@@ -188,16 +188,18 @@ class SaveStrategyCodeHandler(webBase.BaseHandler, ABC):
                      commission, tax, slippage, 'active', strategy_id))
                 result_id = strategy_id
             else:
-                # 新增
-                mdb.executeSql(
-                    'INSERT INTO cn_stock_strategy_code '
-                    '(name, code, description, initial_cash, benchmark, '
-                    'commission_rate, stamp_tax_rate, slippage, status) '
-                    'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)',
-                    (name, code, description, initial_cash, benchmark,
-                     commission, tax, slippage, 'active'))
-                row = mdb.executeSqlFetch('SELECT LAST_INSERT_ID()')
-                result_id = row[0][0] if row else None
+                # 新增 — 在同一连接中执行 INSERT 和获取 ID
+                with mdb.get_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            'INSERT INTO cn_stock_strategy_code '
+                            '(name, code, description, initial_cash, benchmark, '
+                            'commission_rate, stamp_tax_rate, slippage, status) '
+                            'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                            (name, code, description, initial_cash, benchmark,
+                             commission, tax, slippage, 'active'))
+                        cur.execute('SELECT LAST_INSERT_ID()')
+                        result_id = cur.fetchone()[0]
 
             self.write(json.dumps({'code': 0, 'data': {'id': result_id}}, ensure_ascii=False))
         except Exception as e:

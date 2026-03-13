@@ -36,15 +36,16 @@ class CreatePaperTradingHandler(webBase.BaseHandler, ABC):
             from instock.paper_trading.paper_engine import _ensure_paper_table
             _ensure_paper_table()
 
-            mdb.executeSql(
-                'INSERT INTO cn_stock_paper_trading '
-                '(strategy_id, name, initial_cash, current_cash, current_value, status) '
-                'VALUES (%s, %s, %s, %s, %s, %s)',
-                (strategy_id, name or f'模拟盘-{strategy_id}', initial_cash,
-                 initial_cash, initial_cash, 'running'))
-
-            row = mdb.executeSqlFetch('SELECT LAST_INSERT_ID()')
-            paper_id = row[0][0] if row else None
+            with mdb.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        'INSERT INTO cn_stock_paper_trading '
+                        '(strategy_id, name, initial_cash, current_cash, current_value, status) '
+                        'VALUES (%s, %s, %s, %s, %s, %s)',
+                        (strategy_id, name or f'模拟盘-{strategy_id}', initial_cash,
+                         initial_cash, initial_cash, 'running'))
+                    cur.execute('SELECT LAST_INSERT_ID()')
+                    paper_id = cur.fetchone()[0]
 
             self.write(json.dumps({'code': 0, 'data': {'id': paper_id}}, ensure_ascii=False))
         except Exception as e:

@@ -13,13 +13,13 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      // 代理后端 API
+      // 代理后端 API（开发时可改为 http://localhost:9988）
       '/api': {
-        target: 'http://115.29.213.22:9988',
+        target: 'http://localhost:9988',
         changeOrigin: true
       },
       '/instock': {
-        target: 'http://115.29.213.22:9988',
+        target: 'http://localhost:9988',
         changeOrigin: true
       }
     }
