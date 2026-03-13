@@ -122,3 +122,55 @@ run_sub() {
 
     return $rc
 }
+
+# ─── 服务管理（OOM 防护） ───
+# 在低内存服务器上，内存密集型任务前停止非关键服务，完成后恢复
+
+# 需要停止的服务列表（可通过 .env 的 INSTOCK_STOP_SERVICES 覆盖）
+# 默认: nginx + supervisor 管理的 InStock web 服务
+_STOP_SERVICES="${INSTOCK_STOP_SERVICES:-nginx}"
+
+# 停止服务，释放内存给密集型任务
+# 用法: stop_services_for_memory "任务名称"
+stop_services_for_memory() {
+    local reason="${1:-内存密集型任务}"
+    log_info "◆ 停止服务以释放内存（原因: ${reason}）"
+
+    # 停止 supervisor 管理的 web 服务（如果有 supervisorctl）
+    if command -v supervisorctl &>/dev/null; then
+        supervisorctl stop run_web 2>/dev/null && \
+            log_info "  ✓ supervisord: run_web 已停止" || \
+            log_warn "  ⚠ supervisord: run_web 停止失败（可能未运行）"
+    fi
+
+    # 停止系统服务
+    for svc in $_STOP_SERVICES; do
+        if systemctl is-active --quiet "$svc" 2>/dev/null; then
+            systemctl stop "$svc" 2>/dev/null && \
+                log_info "  ✓ ${svc} 已停止" || \
+                log_warn "  ⚠ ${svc} 停止失败"
+        else
+            log_info "  - ${svc} 未运行，跳过"
+        fi
+    done
+}
+
+# 恢复服务
+# 用法: start_services_after_memory
+start_services_after_memory() {
+    log_info "◆ 恢复服务"
+
+    # 恢复系统服务
+    for svc in $_STOP_SERVICES; do
+        systemctl start "$svc" 2>/dev/null && \
+            log_info "  ✓ ${svc} 已启动" || \
+            log_warn "  ⚠ ${svc} 启动失败"
+    done
+
+    # 恢复 supervisor 管理的 web 服务
+    if command -v supervisorctl &>/dev/null; then
+        supervisorctl start run_web 2>/dev/null && \
+            log_info "  ✓ supervisord: run_web 已启动" || \
+            log_warn "  ⚠ supervisord: run_web 启动失败"
+    fi
+}

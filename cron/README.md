@@ -45,6 +45,8 @@ cron/
 | `check_trade_day` | 非交易日自动 `exit 0`（节假日、周末不执行） |
 | `run_job "标签" "脚本路径" [超时]` | 运行 Python 脚本，记录耗时和退出码 |
 | `run_sub "标签" "脚本路径"` | 运行 Shell 子脚本（用于 `run_workdayly` 编排） |
+| `stop_services_for_memory "原因"` | 停止 nginx + InStock Web 服务，释放内存 |
+| `start_services_after_memory` | 恢复之前停止的服务 |
 
 ### 脚本模板
 
@@ -284,6 +286,52 @@ python3 instock/job/indicators_data_daily_job.py 2026-02-03,2026-02-05
 | `INSTOCK_KLINE_CACHE_WORKERS` | 2 | K线缓存更新并发数 |
 | `INSTOCK_BACKTEST_OUTER_WORKERS` | 1 | 回测外层并发（按表） |
 | `INSTOCK_BACKTEST_INNER_WORKERS` | 2 | 回测内层并发（按股票） |
+| `INSTOCK_STOP_SERVICES` | nginx | 内存密集任务前停止的系统服务（空格分隔） |
+| `INSTOCK_NO_SERVICE_STOP` | 0 | 设为 `1` 禁用自动停止/恢复服务 |
+| `INSTOCK_SETTLEMENT_HOUR` | 18 | API 数据结算时间（小时） |
 
 可通过 `.env` 文件或系统环境变量设置，`_common.sh` 的 `init_env` 会自动加载 `.env` 文件。
+
+---
+
+## OOM 防护（低内存服务器）
+
+1.6GB 服务器同时运行 MySQL + nginx + InStock Web + Python 分析任务时容易 OOM。
+`run_workdayly` 在 Phase 2/3（K线缓存 + 数据分析）前自动停止 nginx 和 InStock Web 服务，
+完成后自动恢复。
+
+### 工作流程
+
+```
+Phase 1: 数据获取（低内存，服务照常运行）
+    ↓
+◆ 停止 nginx + InStock Web（释放 ~200MB）
+    ↓
+Phase 2: K线缓存更新（内存密集）
+Phase 3: 数据分析（内存密集）
+    ↓
+◆ 恢复 nginx + InStock Web
+```
+
+### 配置
+
+```bash
+# .env - 自定义需要停止的服务
+INSTOCK_STOP_SERVICES=nginx          # 默认只停 nginx
+
+# 如果不需要 OOM 防护（内存充足的机器）
+INSTOCK_NO_SERVICE_STOP=1
+```
+
+### 手动运行内存密集任务时
+
+如果单独运行 `run_kline_cache` 或 `run_analysis`（不通过 `run_workdayly`），
+需要手动停止/恢复服务，或在脚本中调用：
+
+```bash
+source cron/_common.sh && init_env
+stop_services_for_memory "手动K线缓存更新"
+bash cron/cron.workdayly/run_kline_cache
+start_services_after_memory
+```
 Python 端由 `instock/lib/envconfig.py` 统一加载 `.env`。完整变量列表见项目根目录 `.env.example`。

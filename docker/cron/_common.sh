@@ -1,10 +1,10 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════
-# Cron 脚本公共库（Docker 版）
-# 与 cron/_common.sh 保持同步，仅部署路径不同
+# Cron 脚本公共库 — 所有定时脚本在 source 前必须设置 PROJECT_ROOT
 # ═══════════════════════════════════════════════════════════
 
 # ─── 环境初始化 ───
+# 设置 PATH、编码、PYTHONPATH，加载 .env 文件，创建日志目录
 init_env() {
     export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH
     export PYTHONIOENCODING=utf-8
@@ -12,10 +12,12 @@ init_env() {
     export LC_CTYPE=zh_CN.UTF-8
     export PYTHONPATH=$PROJECT_ROOT
 
+    # 加载 .env（兼容方法 A 系统环境变量 + 方法 B .env 文件）
     if [ -f "$PROJECT_ROOT/.env" ]; then
         set -a; source "$PROJECT_ROOT/.env"; set +a
     fi
 
+    # 日志目录
     LOG_DIR=$PROJECT_ROOT/instock/log
     mkdir -p "$LOG_DIR"
 }
@@ -27,6 +29,7 @@ log_info()  { echo "[$(_ts)] [INFO]  $*" >> "$LOG_FILE"; }
 log_warn()  { echo "[$(_ts)] [WARN]  $*" >> "$LOG_FILE"; }
 log_error() { echo "[$(_ts)] [ERROR] $*" >> "$LOG_FILE"; }
 
+# 格式化秒数为可读字符串（如 1h05m30s / 3m22s / 45s）
 elapsed_fmt() {
     local s=$1
     if [ "$s" -ge 3600 ] 2>/dev/null; then
@@ -39,6 +42,8 @@ elapsed_fmt() {
 }
 
 # ─── 交易日检测 ───
+# 用法: check_trade_day "任务名称"
+# 非交易日时自动 exit 0，调用方无需处理返回值
 check_trade_day() {
     local task_name="${1:-任务}"
     local is_trade
@@ -58,6 +63,8 @@ except Exception:
 }
 
 # ─── 运行 Python 作业 ───
+# 用法: run_job "标签" "脚本相对路径" [超时秒数]
+# 返回: Python 进程退出码（124 = 超时）
 run_job() {
     local label="$1"
     local script="$2"
@@ -89,7 +96,9 @@ run_job() {
     return $rc
 }
 
-# ─── 运行 Shell 子脚本 ───
+# ─── 运行 Shell 子脚本（用于 run_workdayly 编排） ───
+# 用法: run_sub "标签" "脚本绝对路径"
+# 返回: 子脚本退出码
 run_sub() {
     local label="$1"
     local script="$2"
@@ -112,4 +121,56 @@ run_sub() {
     fi
 
     return $rc
+}
+
+# ─── 服务管理（OOM 防护） ───
+# 在低内存服务器上，内存密集型任务前停止非关键服务，完成后恢复
+
+# 需要停止的服务列表（可通过 .env 的 INSTOCK_STOP_SERVICES 覆盖）
+# 默认: nginx + supervisor 管理的 InStock web 服务
+_STOP_SERVICES="${INSTOCK_STOP_SERVICES:-nginx}"
+
+# 停止服务，释放内存给密集型任务
+# 用法: stop_services_for_memory "任务名称"
+stop_services_for_memory() {
+    local reason="${1:-内存密集型任务}"
+    log_info "◆ 停止服务以释放内存（原因: ${reason}）"
+
+    # 停止 supervisor 管理的 web 服务（如果有 supervisorctl）
+    if command -v supervisorctl &>/dev/null; then
+        supervisorctl stop run_web 2>/dev/null && \
+            log_info "  ✓ supervisord: run_web 已停止" || \
+            log_warn "  ⚠ supervisord: run_web 停止失败（可能未运行）"
+    fi
+
+    # 停止系统服务
+    for svc in $_STOP_SERVICES; do
+        if systemctl is-active --quiet "$svc" 2>/dev/null; then
+            systemctl stop "$svc" 2>/dev/null && \
+                log_info "  ✓ ${svc} 已停止" || \
+                log_warn "  ⚠ ${svc} 停止失败"
+        else
+            log_info "  - ${svc} 未运行，跳过"
+        fi
+    done
+}
+
+# 恢复服务
+# 用法: start_services_after_memory
+start_services_after_memory() {
+    log_info "◆ 恢复服务"
+
+    # 恢复系统服务
+    for svc in $_STOP_SERVICES; do
+        systemctl start "$svc" 2>/dev/null && \
+            log_info "  ✓ ${svc} 已启动" || \
+            log_warn "  ⚠ ${svc} 启动失败"
+    done
+
+    # 恢复 supervisor 管理的 web 服务
+    if command -v supervisorctl &>/dev/null; then
+        supervisorctl start run_web 2>/dev/null && \
+            log_info "  ✓ supervisord: run_web 已启动" || \
+            log_warn "  ⚠ supervisord: run_web 启动失败"
+    fi
 }
