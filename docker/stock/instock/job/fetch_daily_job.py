@@ -177,21 +177,6 @@ def main():
             record_task_end(_JOB_NAME, 'stock_spot', run_date_nph, t1, success=False, message=str(e))
             all_success = False
 
-    # Phase 1.5: 检查并补充基本面数据（当东方财富降级到腾讯/新浪时，PE/ROE 为 0）
-    t1_5 = record_task_start(_JOB_NAME, 'baostock_patch', run_date_nph)
-    try:
-        from instock.core.crawling.baostock_fundamentals import patch_spot_fundamentals
-        patched = patch_spot_fundamentals(date_str)
-        if patched > 0:
-            record_task_end(_JOB_NAME, 'baostock_patch', run_date_nph, t1_5, success=True,
-                            rows_affected=patched, message=f'补充 {patched} 只股票的 PE/ROE')
-        else:
-            record_task_end(_JOB_NAME, 'baostock_patch', run_date_nph, t1_5, success=True,
-                            message='PE/ROE 数据正常，无需补充')
-    except Exception as e:
-        logging.warning(f"Baostock 基本面数据补充异常（不影响后续任务）: {e}")
-        record_task_end(_JOB_NAME, 'baostock_patch', run_date_nph, t1_5, success=False, message=str(e))
-
     # Phase 2: 综合选股数据入库
     if _check_and_skip('cn_stock_selection', date_str, '综合选股'):
         record_task_skipped(_JOB_NAME, 'selection_data', run_date_nph, '数据已完整')
