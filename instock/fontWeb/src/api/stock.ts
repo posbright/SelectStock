@@ -242,3 +242,30 @@ export function runPortfolioBacktest(data: {
 export function getPortfolioBacktestList() {
   return request({ url: '/api/backtest/portfolio/list', method: 'get' })
 }
+
+// ============= 模拟交易 API =============
+
+/** 创建模拟盘 */
+export function createPaperTrading(data: { strategy_id: number; name?: string; initial_cash?: number }) {
+  return request({ url: '/api/paper/create', method: 'post', data })
+}
+
+/** 模拟盘操作（暂停/恢复/停止） */
+export function paperTradingAction(data: { id: number; action: 'pause' | 'resume' | 'stop' }) {
+  return request({ url: '/api/paper/action', method: 'post', data })
+}
+
+/** 获取模拟盘列表 */
+export function getPaperTradingList() {
+  return request({ url: '/api/paper/list', method: 'get' })
+}
+
+/** 获取模拟盘详情 */
+export function getPaperTradingDetail(id: number) {
+  return request({ url: '/api/paper/detail', method: 'get', params: { id } })
+}
+
+/** 手动触发模拟盘执行 */
+export function runPaperTrading(id: number) {
+  return request({ url: '/api/paper/run', method: 'post', data: { id } })
+}

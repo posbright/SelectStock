@@ -307,6 +307,19 @@ const routes: RouteRecordRaw[] = [
       }
     ]
   },
+  {
+    path: '/paper-trading',
+    component: Layout,
+    meta: { title: '模拟交易', icon: 'Monitor' },
+    children: [
+      {
+        path: '',
+        name: 'PaperTrading',
+        component: () => import('@/views/paper-trading/index.vue'),
+        meta: { title: '模拟盘管理' }
+      }
+    ]
+  },
   // 兼容旧版 /stock/ 前缀路径：自动去掉前缀并重定向到正确路由
   // 例如 /stock/selection → /selection, /stock/basic/spot → /basic/spot
   {
