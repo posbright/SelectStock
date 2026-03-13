@@ -385,6 +385,9 @@ class PortfolioBacktestEngine:
                     pre_close = row.get('pre_close', exec_price)
                     if pre_close and pre_close > 0:
                         change_pct = (exec_price - pre_close) / pre_close
+                        # 涨跌停阈值：科创板(688)/创业板(300)=20%，其他=10%
+                        limit_pct = 0.195 if code.startswith(('688', '300')) else 0.095
+
                         # 涨停检测（买入）
                         order_amount = order_info.get('amount')
                         order_value_v = order_info.get('value')
@@ -393,12 +396,12 @@ class PortfolioBacktestEngine:
                         is_sell = (order_amount is not None and order_amount < 0) or \
                                   (order_value_v is not None and order_value_v < 0)
 
-                        if is_buy and change_pct >= 0.095:
+                        if is_buy and change_pct >= limit_pct:
                             self._log_messages.append(
                                 f"[{date}] [WARN] {code} 涨停({change_pct*100:.1f}%)，买入取消")
                             continue
                         # 跌停检测（卖出）
-                        if is_sell and change_pct <= -0.095:
+                        if is_sell and change_pct <= -limit_pct:
                             self._log_messages.append(
                                 f"[{date}] [WARN] {code} 跌停({change_pct*100:.1f}%)，卖出取消")
                             continue

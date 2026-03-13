@@ -46,8 +46,9 @@ class Position:
 
     def _on_sell(self, amount, price):
         """卖出成交更新"""
-        self.amount -= amount
-        self.closeable_amount -= amount
+        sell_amount = min(amount, self.closeable_amount)
+        self.amount -= sell_amount
+        self.closeable_amount = max(0, self.closeable_amount - sell_amount)
         if self.amount <= 0:
             self.amount = 0
             self.closeable_amount = 0

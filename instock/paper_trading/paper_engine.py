@@ -157,15 +157,40 @@ def run_paper_trading_daily(paper_id):
         pending_orders = []
 
         def _order_proxy(code, amount=None, value=None):
+            # 动态加载未预加载的股票数据
+            if code not in context._engine._stock_data:
+                df = load_stock_data(code, pre_start, date_str)
+                if df is not None:
+                    context._engine._stock_data[code] = df
+                    data_proxy._set_history(code, df)
+                    today_row = df[df['date'] == pd.Timestamp(date_str)]
+                    if len(today_row) > 0:
+                        row_data = today_row.iloc[0]
+                        today_prices[code] = row_data['close']
+                        data_proxy._set_current(code, {
+                            'open': row_data.get('open', row_data['close']),
+                            'high': row_data.get('high', row_data['close']),
+                            'low': row_data.get('low', row_data['close']),
+                            'close': row_data['close'],
+                            'volume': row_data.get('volume', 0),
+                            'pre_close': row_data.get('pre_close', row_data['close']),
+                        })
             pending_orders.append({'code': code, 'amount': amount, 'value': value})
+
+        def _get_current_amount(code):
+            pos = context.portfolio.positions.get(code)
+            return pos.amount if pos else 0
+
+        def _get_current_value(code):
+            pos = context.portfolio.positions.get(code)
+            return pos.value if pos and pos.amount > 0 else 0
 
         api_ns['order'] = lambda code, amount: _order_proxy(code, amount=int(amount))
         api_ns['order_target'] = lambda code, target: _order_proxy(
-            code, amount=int(target) - (context.portfolio.positions.get(code, type('P', (), {'amount': 0})()).amount if False else
-                                        (context.portfolio.positions[code].amount if code in context.portfolio.positions else 0)))
+            code, amount=int(target) - _get_current_amount(code))
         api_ns['order_value'] = lambda code, value: _order_proxy(code, value=float(value))
         api_ns['order_target_value'] = lambda code, target_value: _order_proxy(
-            code, value=float(target_value) - (context.portfolio.positions[code].value if code in context.portfolio.positions and context.portfolio.positions[code].amount > 0 else 0))
+            code, value=float(target_value) - _get_current_value(code))
 
         # before_trading_start
         if strategy_funcs.get('before_trading_start'):
@@ -347,6 +372,25 @@ def _create_api(context, data_proxy, g):
             return subset[field].reset_index(drop=True)
         return pd.Series(dtype=float)
 
+    def get_price(code, start_date=None, end_date=None, fields=None):
+        df = context._engine._stock_data.get(code) if hasattr(context, '_engine') and context._engine else None
+        if df is None:
+            return pd.DataFrame()
+        result = df.copy()
+        if start_date:
+            result = result[result['date'] >= pd.Timestamp(start_date)]
+        if end_date:
+            result = result[result['date'] <= pd.Timestamp(end_date)]
+        if fields:
+            cols = ['date'] + [f for f in fields if f in result.columns]
+            result = result[cols]
+        return result.reset_index(drop=True)
+
+    def set_order_cost(commission=0.0003, tax=0.001, slippage=0.002):
+        context.commission_rate = commission
+        context.stamp_tax_rate = tax
+        context.slippage_rate = slippage
+
     class _Log:
         def info(self, msg): logging.info(f"[模拟盘策略] {msg}")
         def warn(self, msg): logging.warning(f"[模拟盘策略] {msg}")
@@ -355,11 +399,12 @@ def _create_api(context, data_proxy, g):
 
     return {
         'history': history,
+        'get_price': get_price,
         'log': _Log(),
         'g': g,
         'record': lambda **kw: None,
         'set_benchmark': lambda code: setattr(context, 'benchmark', code),
-        'set_order_cost': lambda **kw: None,
+        'set_order_cost': set_order_cost,
     }
 
 

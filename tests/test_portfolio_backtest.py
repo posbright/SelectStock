@@ -67,8 +67,12 @@ class TestStrategyContext(unittest.TestCase):
         self.assertAlmostEqual(pos.profit, 2000.0, places=2)
         self.assertAlmostEqual(pos.profit_rate, 0.2, places=2)
 
+        # T+1: 需要先调用 _on_new_day 才能卖出
+        pos._on_new_day()
+        self.assertEqual(pos.closeable_amount, 1000)
         pos._on_sell(500, 12.0)
         self.assertEqual(pos.amount, 500)
+        self.assertEqual(pos.closeable_amount, 500)
 
     def test_t_plus_1(self):
         """T+1: 今日买入不能今日卖出"""

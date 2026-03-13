@@ -21,6 +21,10 @@ _FORBIDDEN_PATTERNS = [
     r'\bimport\s+sys\b',
     r'\bimport\s+subprocess\b',
     r'\bimport\s+shutil\b',
+    r'\bfrom\s+os\b',
+    r'\bfrom\s+sys\b',
+    r'\bfrom\s+subprocess\b',
+    r'\bfrom\s+shutil\b',
     r'\b__import__\b',
     r'\beval\s*\(',
     r'\bexec\s*\(',
@@ -31,6 +35,15 @@ _FORBIDDEN_PATTERNS = [
     r'\bdelattr\s*\(',
     r'\bglobals\s*\(',
     r'\blocals\s*\(',
+    r'__class__',
+    r'__bases__',
+    r'__subclasses__',
+    r'__mro__',
+    r'__dict__',
+    r'__globals__',
+    r'__code__',
+    r'__builtins__',
+    r'__import__',
 ]
 
 # 允许的导入模块
@@ -60,8 +73,8 @@ def validate_code(code_str):
         if match:
             return False, f"策略代码包含禁止的操作: {match.group()}"
 
-    # 检查导入语句
-    import_pattern = r'import\s+(\w+)'
+    # 检查导入语句（同时覆盖 import X 和 from X import Y）
+    import_pattern = r'(?:^|\n)\s*(?:import|from)\s+(\w+)'
     for match in re.finditer(import_pattern, code_str):
         module = match.group(1)
         if module not in _ALLOWED_IMPORTS:
@@ -131,7 +144,7 @@ def _create_safe_namespace():
     import math
     ns = {
         '__builtins__': {
-            # 安全的内置函数
+            # 安全的内置函数（移除 type 防止类层次遍历攻击）
             'abs': abs, 'all': all, 'any': any, 'bool': bool,
             'dict': dict, 'enumerate': enumerate, 'filter': filter,
             'float': float, 'frozenset': frozenset, 'int': int,
@@ -139,7 +152,7 @@ def _create_safe_namespace():
             'map': map, 'max': max, 'min': min, 'print': print,
             'range': range, 'reversed': reversed, 'round': round,
             'set': set, 'slice': slice, 'sorted': sorted, 'str': str,
-            'sum': sum, 'tuple': tuple, 'type': type, 'zip': zip,
+            'sum': sum, 'tuple': tuple, 'zip': zip,
             'True': True, 'False': False, 'None': None,
             'Exception': Exception, 'ValueError': ValueError,
             'TypeError': TypeError, 'KeyError': KeyError,
