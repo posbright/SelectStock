@@ -38,6 +38,7 @@ import instock.web.strategyParamsHandler as strategyParamsHandler
 import instock.web.backtestHandler as backtestHandler
 import instock.web.backtestDashboardHandler as backtestDashboardHandler
 import instock.web.klineHandler as klineHandler
+import instock.web.portfolioBacktestHandler as portfolioBacktestHandler
 import instock.web.base as webBase
 
 __author__ = 'InStock'
@@ -81,6 +82,14 @@ class Application(tornado.web.Application):
             (r"/instock/api/backtest/dashboard/distribution", backtestDashboardHandler.ReturnDistributionHandler),
             (r"/instock/api/backtest/dashboard/timeline", backtestDashboardHandler.PerformanceTimelineHandler),
             (r"/instock/api/backtest/dashboard/trade_pairs", backtestDashboardHandler.TradePairHandler),
+            # 组合回测 & 策略管理
+            (r"/instock/api/strategy/code", portfolioBacktestHandler.SaveStrategyCodeHandler),
+            (r"/instock/api/strategy/code/list", portfolioBacktestHandler.GetStrategyCodeListHandler),
+            (r"/instock/api/strategy/code/detail", portfolioBacktestHandler.GetStrategyCodeDetailHandler),
+            (r"/instock/api/strategy/code/delete", portfolioBacktestHandler.DeleteStrategyCodeHandler),
+            (r"/instock/api/strategy/templates", portfolioBacktestHandler.GetStrategyTemplatesHandler),
+            (r"/instock/api/backtest/portfolio/run", portfolioBacktestHandler.RunPortfolioBacktestHandler),
+            (r"/instock/api/backtest/portfolio/list", portfolioBacktestHandler.GetPortfolioBacktestListHandler),
             # ── Vue SPA 路由 ──
             # 静态资源（assets/）
             (r"/assets/(.*)", tornado.web.StaticFileHandler, {"path": os.path.join(static_path, "assets")}),

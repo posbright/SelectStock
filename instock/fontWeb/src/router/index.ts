@@ -288,6 +288,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '回测看板' }
       },
       {
+        path: 'portfolio',
+        name: 'BacktestPortfolio',
+        component: () => import('@/views/backtest/portfolio.vue'),
+        meta: { title: '组合回测' }
+      },
+      {
         path: 'custom',
         name: 'BacktestCustom',
         component: () => import('@/views/backtest/index.vue'),

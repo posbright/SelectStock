@@ -186,3 +186,59 @@ export interface KlineParams {
 export function getKlineData(params: KlineParams) {
   return request({ url: '/api/kline', method: 'get', params })
 }
+
+// ============= 组合回测 & 策略管理 API =============
+
+/** 获取内置策略模板 */
+export function getStrategyTemplates() {
+  return request({ url: '/api/strategy/templates', method: 'get' })
+}
+
+/** 获取策略列表 */
+export function getStrategyCodeList() {
+  return request({ url: '/api/strategy/code/list', method: 'get' })
+}
+
+/** 获取策略详情 */
+export function getStrategyCodeDetail(id: number) {
+  return request({ url: '/api/strategy/code/detail', method: 'get', params: { id } })
+}
+
+/** 保存策略代码 */
+export function saveStrategyCode(data: {
+  id?: number
+  name: string
+  code: string
+  description?: string
+  initial_cash?: number
+  benchmark?: string
+  commission_rate?: number
+  stamp_tax_rate?: number
+  slippage?: number
+}) {
+  return request({ url: '/api/strategy/code', method: 'post', data })
+}
+
+/** 删除策略 */
+export function deleteStrategyCode(id: number) {
+  return request({ url: '/api/strategy/code/delete', method: 'post', data: { id } })
+}
+
+/** 运行组合回测 */
+export function runPortfolioBacktest(data: {
+  code: string
+  start_date: string
+  end_date: string
+  initial_cash?: number
+  benchmark?: string
+  commission_rate?: number
+  stamp_tax_rate?: number
+  slippage?: number
+}) {
+  return request({ url: '/api/backtest/portfolio/run', method: 'post', data })
+}
+
+/** 获取回测历史列表 */
+export function getPortfolioBacktestList() {
+  return request({ url: '/api/backtest/portfolio/list', method: 'get' })
+}
