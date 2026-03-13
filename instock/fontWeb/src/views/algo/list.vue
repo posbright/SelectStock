@@ -237,25 +237,19 @@ async function loadData() {
 }
 
 async function onCreateStrategy(category: string) {
-  const labels: Record<string, string> = {
-    stock: '股票策略', multi_factor: '多因子策略',
-    portfolio: '组合策略', blank: '空白模版'
-  }
-  const { value: name } = await ElMessageBox.prompt(
-    '请输入策略名称', `新建${labels[category] || '策略'}`, {
-      confirmButtonText: '创建', inputValue: `一个简单的策略`,
-      inputPattern: /\S+/, inputErrorMessage: '名称不能为空',
-    }).catch(() => ({ value: '' }))
-  if (!name) return
+  // 聚宽风格：自动生成递增名称，直接创建并留在列表页
+  const existingCount = strategies.value.length
+  const defaultName = `一个简单的策略-${existingCount + 1}`
 
   try {
     const res = await saveStrategyCode({
-      name, code: CATEGORY_TEMPLATES[category] || CATEGORY_TEMPLATES.blank,
+      name: defaultName,
+      code: CATEGORY_TEMPLATES[category] || CATEGORY_TEMPLATES.blank,
       category,
     })
     if (res.data?.code === 0) {
       ElMessage.success('策略已创建')
-      router.push(`/algo/edit/${res.data.data.id}`)
+      await loadData()  // 刷新列表，新策略显示在表格中
     }
   } catch (e) {
     ElMessage.error('创建失败')
