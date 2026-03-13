@@ -21,79 +21,178 @@ __date__ = '2026/03/13'
 # ── 内置策略模板 ──
 STRATEGY_TEMPLATES = [
     {
-        'id': 'ma_breakout',
-        'name': '均线突破策略',
-        'description': '价格突破5日均线1%时买入，跌破时卖出',
-        'code': '''def initialize(context):
-    context.security = '000001'
+        'id': 'small_cap',
+        'name': '小市值策略',
+        'category': 'stock',
+        'description': '每月初选出市值最小的5只股票等权买入，月末调仓',
+        'code': '''# 小市值策略
+# 思路：长期来看小市值股票超额收益显著
+# 每月初调仓：卖出持仓，买入市值最小的N只
+
+def initialize(context):
+    # 候选股票池
+    context.stocks = ['000001', '000002', '600000', '600036', '601318',
+                      '600519', '000858', '002594', '300750', '601888',
+                      '000568', '002304', '603259', '601012', '300059']
+    context.hold_num = 5  # 持仓数量
+    context.day_count = 0
 
 def handle_data(context, data):
-    code = context.security
-    price = data[code].close
-    if price <= 0:
+    context.day_count += 1
+    # 每20个交易日调仓一次（约一个月）
+    if context.day_count % 20 != 1:
         return
-    ma5 = history(code, 5, 'close')
-    if len(ma5) < 5:
-        return
-    ma_val = ma5.mean()
 
-    if price > ma_val * 1.01 and code not in context.portfolio.positions:
-        order_value(code, context.portfolio.available_cash * 0.9)
-        log.info(f"买入 {code} @ {price:.2f}")
-    elif price < ma_val * 0.99 and code in context.portfolio.positions:
-        order_target(code, 0)
-        log.info(f"卖出 {code} @ {price:.2f}")
+    # 获取各股票最新价格，按价格排序（模拟市值排序）
+    prices = {}
+    for code in context.stocks:
+        if code in data and data[code].close > 0:
+            prices[code] = data[code].close
+
+    if len(prices) < context.hold_num:
+        return
+
+    # 选出价格最低的N只（模拟小市值）
+    selected = sorted(prices, key=prices.get)[:context.hold_num]
+
+    # 卖出不在选中列表中的股票
+    for code in list(context.portfolio.positions.keys()):
+        if code not in selected:
+            order_target(code, 0)
+            log.info("卖出 " + code)
+
+    # 等权买入选中的股票
+    target_value = context.portfolio.total_value / context.hold_num
+    for code in selected:
+        order_target_value(code, target_value)
+
+    log.info("调仓完成，持仓: " + str(selected))
 ''',
     },
     {
         'id': 'dual_ma',
         'name': '双均线策略',
+        'category': 'stock',
         'description': '5日均线上穿20日均线（金叉）买入，下穿（死叉）卖出',
-        'code': '''def initialize(context):
-    context.security = '600519'
+        'code': '''# 双均线策略
+# 经典技术分析策略：利用短期和长期均线的交叉信号
+# 金叉（短期上穿长期）买入，死叉（短期下穿长期）卖出
+
+def initialize(context):
+    context.security = '000001'  # 平安银行
 
 def handle_data(context, data):
-    code = context.security
-    ma5 = history(code, 5, 'close')
-    ma20 = history(code, 20, 'close')
-    if len(ma5) < 5 or len(ma20) < 20:
+    security = context.security
+    # 获取收盘价
+    close_data = history(security, 21, 'close')
+    if len(close_data) < 21:
         return
 
-    if ma5.mean() > ma20.mean():
-        if code not in context.portfolio.positions:
-            order_value(code, context.portfolio.available_cash * 0.9)
-            log.info(f"金叉买入 {code}")
-    else:
-        if code in context.portfolio.positions:
+    # 计算5日和20日均线
+    MA5 = close_data[-5:].mean()
+    MA20 = close_data.mean()
+
+    # 取得当前价格和现金
+    current_price = data[security].close
+    cash = context.portfolio.available_cash
+
+    # 金叉：5日均线上穿20日均线，买入
+    if MA5 > MA20 and security not in context.portfolio.positions:
+        order_value(security, cash * 0.95)
+        log.info("金叉买入 " + security + " 价格: " + str(round(current_price, 2)))
+
+    # 死叉：5日均线下穿20日均线，卖出
+    elif MA5 < MA20 and security in context.portfolio.positions:
+        order_target(security, 0)
+        log.info("死叉卖出 " + security + " 价格: " + str(round(current_price, 2)))
+''',
+    },
+    {
+        'id': 'bank_rotation',
+        'name': '银行股轮动策略',
+        'category': 'stock',
+        'description': '在银行股中选择近期涨幅最大的持有，定期轮动',
+        'code': '''# 银行股轮动策略
+# 在银行板块中选择动量最强的股票持有
+# 每两周轮动一次，选涨幅最大的2只
+
+def initialize(context):
+    # 主要银行股
+    context.banks = [
+        '601398',  # 工商银行
+        '601939',  # 建设银行
+        '601288',  # 农业银行
+        '601988',  # 中国银行
+        '600036',  # 招商银行
+        '601166',  # 兴业银行
+        '000001',  # 平安银行
+        '601328',  # 交通银行
+    ]
+    context.hold_num = 2    # 持有数量
+    context.day_count = 0
+
+def handle_data(context, data):
+    context.day_count += 1
+    # 每10个交易日轮动一次
+    if context.day_count % 10 != 1:
+        return
+
+    # 计算各银行股近10日涨幅
+    momentum = {}
+    for code in context.banks:
+        h = history(code, 10, 'close')
+        if len(h) >= 10 and h.iloc[0] > 0:
+            ret = h.iloc[-1] / h.iloc[0] - 1
+            momentum[code] = ret
+
+    if len(momentum) < context.hold_num:
+        return
+
+    # 选涨幅最大的N只
+    selected = sorted(momentum, key=momentum.get, reverse=True)[:context.hold_num]
+
+    # 卖出不在选中列表的持仓
+    for code in list(context.portfolio.positions.keys()):
+        if code not in selected:
             order_target(code, 0)
-            log.info(f"死叉卖出 {code}")
+            log.info("轮出 " + code)
+
+    # 等权买入
+    target_value = context.portfolio.total_value / context.hold_num
+    for code in selected:
+        order_target_value(code, target_value)
+
+    log.info("轮动完成: " + str(selected))
 ''',
     },
     {
         'id': 'equal_weight',
         'name': '多股票等权配置',
-        'description': '将资金等分配置到多只股票，每日再平衡',
-        'code': '''def initialize(context):
+        'category': 'portfolio',
+        'description': '将资金等分配置到多只股票，定期再平衡',
+        'code': '''# 多股票等权配置策略
+def initialize(context):
     context.stocks = ['600519', '000858', '601318', '600036', '300750']
     context.rebalance_days = 0
 
 def handle_data(context, data):
     context.rebalance_days += 1
-    if context.rebalance_days % 20 != 1:  # 每20个交易日调仓一次
+    if context.rebalance_days % 20 != 1:
         return
-
     target = context.portfolio.total_value / len(context.stocks)
     for code in context.stocks:
         if code in data:
             order_target_value(code, target)
-    log.info(f"调仓: 目标每只 {target:.0f} 元")
+    log.info("调仓: 目标每只 " + str(round(target)) + " 元")
 ''',
     },
     {
         'id': 'momentum',
         'name': '动量策略',
+        'category': 'multi_factor',
         'description': '买入近20日涨幅最大的股票，持有20日后换仓',
-        'code': '''def initialize(context):
+        'code': '''# 动量策略
+def initialize(context):
     context.stocks = ['600519', '000858', '601318', '600036', '300750',
                       '000001', '600000', '601888', '002594', '300059']
     context.hold_days = 0
@@ -102,30 +201,21 @@ def handle_data(context, data):
     context.hold_days += 1
     if context.hold_days % 20 != 1:
         return
-
-    # 计算各股票20日涨幅
     momentum = {}
     for code in context.stocks:
         h = history(code, 20, 'close')
         if len(h) >= 20 and h.iloc[0] > 0:
             momentum[code] = (h.iloc[-1] / h.iloc[0] - 1)
-
     if not momentum:
         return
-
-    # 选涨幅最大的3只
     top3 = sorted(momentum, key=momentum.get, reverse=True)[:3]
-
-    # 卖出不在top3中的持仓
     for code in list(context.portfolio.positions.keys()):
         if code not in top3:
             order_target(code, 0)
-
-    # 等权买入top3
     target = context.portfolio.total_value / 3
     for code in top3:
         order_target_value(code, target)
-    log.info(f"动量选股: {top3}")
+    log.info("动量选股: " + str(top3))
 ''',
     },
 ]

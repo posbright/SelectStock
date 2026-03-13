@@ -98,7 +98,12 @@
 
     <!-- 空状态 -->
     <el-empty v-if="!loading && tableData.length === 0"
-              description="还没有策略，点击「新建策略」开始量化之旅" />
+              description="还没有策略，点击「新建策略」或导入示例策略">
+      <div style="display: flex; gap: 12px;">
+        <el-button type="primary" @click="onCreateStrategy('stock')">新建股票策略</el-button>
+        <el-button @click="seedTemplateStrategies">导入示例策略</el-button>
+      </div>
+    </el-empty>
   </div>
 </template>
 
@@ -110,7 +115,7 @@ import { Folder, FolderAdd, Document, Delete } from '@element-plus/icons-vue'
 import {
   getStrategyCodeList, saveStrategyCode,
   createFolder, renameStrategy, renameFolder, moveStrategy,
-  batchDeleteStrategy,
+  batchDeleteStrategy, getStrategyTemplates,
 } from '@/api/stock'
 
 const router = useRouter()
@@ -126,10 +131,7 @@ const CATEGORY_MAP: Record<string, string> = {
 const CATEGORY_TEMPLATES: Record<string, string> = {
   stock: `# 股票策略
 def initialize(context):
-    # 设置要操作的股票
     context.security = '000001'
-    # 设定沪深300作为基准
-    # set_benchmark('000300')
 
 def handle_data(context, data):
     security = context.security
@@ -140,8 +142,10 @@ def handle_data(context, data):
     ma_val = ma5.mean()
     if price > ma_val * 1.01 and security not in context.portfolio.positions:
         order_value(security, context.portfolio.available_cash * 0.9)
+        log.info("买入 " + security)
     elif price < ma_val * 0.99 and security in context.portfolio.positions:
         order_target(security, 0)
+        log.info("卖出 " + security)
 `,
   multi_factor: `# 多因子策略
 def initialize(context):
@@ -152,7 +156,6 @@ def handle_data(context, data):
     context.rebalance_days += 1
     if context.rebalance_days % 20 != 1:
         return
-    # 等权配置
     target = context.portfolio.total_value / len(context.stocks)
     for code in context.stocks:
         order_target_value(code, target)
@@ -162,7 +165,6 @@ def initialize(context):
     context.stocks = ['000001', '600519', '601318']
 
 def handle_data(context, data):
-    # 动量排序
     momentum = {}
     for code in context.stocks:
         h = history(code, 20, 'close')
@@ -170,7 +172,6 @@ def handle_data(context, data):
             momentum[code] = h.iloc[-1] / h.iloc[0] - 1
     if not momentum:
         return
-    # 买入涨幅最大的
     best = max(momentum, key=momentum.get)
     for code in list(context.portfolio.positions.keys()):
         if code != best:
@@ -255,7 +256,30 @@ async function onCreateStrategy(category: string) {
     ElMessage.error('创建失败')
   }
 }
-
+async function seedTemplateStrategies() {
+  // 从后端获取内置模板，批量创建到策略列表中
+  try {
+    const res = await getStrategyTemplates()
+    if (res.data?.code !== 0 || !res.data.data?.length) {
+      ElMessage.warning('无可用模板')
+      return
+    }
+    let created = 0
+    for (const t of res.data.data) {
+      const r = await saveStrategyCode({
+        name: t.name,
+        code: t.code,
+        description: t.description || '',
+        category: t.category || 'stock',
+      })
+      if (r.data?.code === 0) created++
+    }
+    ElMessage.success(`已导入 ${created} 个示例策略`)
+    await loadData()
+  } catch (e) {
+    ElMessage.error('导入失败')
+  }
+}
 async function onCreateFolder() {
   const { value: name } = await ElMessageBox.prompt(
     '请输入文件夹名称', '新建文件夹', {
