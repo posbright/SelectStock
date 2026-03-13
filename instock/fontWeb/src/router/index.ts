@@ -276,6 +276,32 @@ const routes: RouteRecordRaw[] = [
     ]
   },
   {
+    path: '/algo',
+    component: Layout,
+    redirect: '/algo/list',
+    meta: { title: '策略回测', icon: 'DataLine' },
+    children: [
+      {
+        path: 'list',
+        name: 'AlgoList',
+        component: () => import('@/views/algo/list.vue'),
+        meta: { title: '策略列表' }
+      },
+      {
+        path: 'edit/:id',
+        name: 'AlgoEdit',
+        component: () => import('@/views/algo/edit.vue'),
+        meta: { title: '策略编辑', hidden: true }
+      },
+      {
+        path: 'paper',
+        name: 'PaperTrading',
+        component: () => import('@/views/paper-trading/index.vue'),
+        meta: { title: '模拟交易' }
+      }
+    ]
+  },
+  {
     path: '/backtest',
     component: Layout,
     redirect: '/backtest/custom',
@@ -288,12 +314,6 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '回测看板' }
       },
       {
-        path: 'portfolio',
-        name: 'BacktestPortfolio',
-        component: () => import('@/views/backtest/portfolio.vue'),
-        meta: { title: '组合回测' }
-      },
-      {
         path: 'custom',
         name: 'BacktestCustom',
         component: () => import('@/views/backtest/index.vue'),
@@ -304,19 +324,6 @@ const routes: RouteRecordRaw[] = [
         name: 'BacktestList',
         component: () => import('@/views/stock/StockData.vue'),
         meta: { title: '回测汇总', tableName: 'cn_stock_backtest', isRealtime: false, noDateFilter: true }
-      }
-    ]
-  },
-  {
-    path: '/paper-trading',
-    component: Layout,
-    meta: { title: '模拟交易', icon: 'Monitor' },
-    children: [
-      {
-        path: '',
-        name: 'PaperTrading',
-        component: () => import('@/views/paper-trading/index.vue'),
-        meta: { title: '模拟盘管理' }
       }
     ]
   },
