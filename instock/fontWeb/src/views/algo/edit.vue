@@ -199,10 +199,9 @@ const lastPositions = computed(() => {
 onMounted(async () => {
   if (strategyId.value) {
     try {
-      const res = await getStrategyCodeDetail(strategyId.value)
-      if (res.data?.code === 0) {
-        strategy.value = res.data.data
-      }
+      const res = await getStrategyCodeDetail(strategyId.value) as any
+      const d = res?.code === 0 ? res.data : res?.data?.data
+      if (d) strategy.value = d
     } catch (e) {
       ElMessage.error('加载策略失败')
     }
@@ -219,13 +218,16 @@ async function saveCode() {
       code: strategy.value.code,
       description: strategy.value.description,
       initial_cash: btCash.value,
-    })
-    if (res.data?.code === 0) {
-      if (!strategy.value.id) strategy.value.id = res.data.data.id
+    }) as any
+    const rCode = res?.code ?? res?.data?.code
+    if (rCode === 0) {
+      if (!strategy.value.id && (res?.data?.id || res?.data?.data?.id)) {
+        strategy.value.id = res?.data?.id || res?.data?.data?.id
+      }
       dirty.value = false
       ElMessage.success('已保存')
     } else {
-      ElMessage.error(res.data?.msg || '保存失败')
+      ElMessage.error(res?.msg || res?.data?.msg || '保存失败')
     }
   } finally {
     saving.value = false
@@ -254,9 +256,10 @@ async function runBacktest() {
       start_date: btDateRange.value[0],
       end_date: btDateRange.value[1],
       initial_cash: btCash.value,
-    })
-    if (res.data?.code === 0) {
-      btResult.value = res.data.data
+    }) as any
+    const rCode = res?.code ?? res?.data?.code
+    if (rCode === 0) {
+      btResult.value = res?.data?.status ? res.data : res
       showResults.value = true
       if (btResult.value?.status === 'completed') {
         ElMessage.success(`回测完成 (${btResult.value.elapsed}s)`)
@@ -281,10 +284,11 @@ async function createPaper() {
   try {
     const res = await createPaperTrading({
       strategy_id: strategy.value.id,
-      name: `模拟-${strategy.value.name}`,
+      name: '模拟-' + strategy.value.name,
       initial_cash: btCash.value,
-    })
-    if (res.data?.code === 0) {
+    }) as any
+    const rCode = res?.code ?? res?.data?.code
+    if (rCode === 0) {
       ElMessage.success('模拟盘已创建')
       router.push('/algo/paper')
     }
@@ -327,8 +331,9 @@ function renderChart() {
 
 watch(() => route.params.id, async (newId) => {
   if (newId) {
-    const res = await getStrategyCodeDetail(Number(newId))
-    if (res.data?.code === 0) {
+    const res = await getStrategyCodeDetail(Number(newId)) as any
+    const d = res?.code === 0 ? res.data : res?.data?.data
+    if (d) {
       strategy.value = res.data.data
       showResults.value = false
       btResult.value = null

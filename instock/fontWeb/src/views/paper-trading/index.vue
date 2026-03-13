@@ -182,7 +182,8 @@ async function loadList() {
   loading.value = true
   try {
     const res = await getPaperTradingList()
-    if (res.data?.code === 0) paperList.value = res.data.data
+    if ((res as any)?.code === 0) paperList.value = (res as any).data
+    else if (res.data?.code === 0) paperList.value = res.data.data
   } finally {
     loading.value = false
   }
@@ -191,7 +192,8 @@ async function loadList() {
 async function loadStrategies() {
   try {
     const res = await getStrategyCodeList()
-    if (res.data?.code === 0) strategies.value = res.data.data
+    if ((res as any)?.code === 0) strategies.value = (res as any).data
+    else if (res.data?.code === 0) strategies.value = res.data.data
   } catch (e) { /* ignore */ }
 }
 
@@ -200,7 +202,8 @@ async function viewDetail(id: number) {
   detailLoading.value = true
   try {
     const res = await getPaperTradingDetail(id)
-    if (res.data?.code === 0) detailData.value = res.data.data
+    if ((res as any)?.code === 0) detailData.value = (res as any).data
+    else if (res.data?.code === 0) detailData.value = res.data.data
   } finally {
     detailLoading.value = false
   }

@@ -227,10 +227,15 @@ function onRowClick(row: any) {
 async function loadData() {
   loading.value = true
   try {
-    const res = await getStrategyCodeList()
-    if (res.data?.code === 0) {
-      strategies.value = res.data.data.strategies || res.data.data || []
-      folders.value = res.data.data.folders || []
+    const res = await getStrategyCodeList() as any
+    // 响应拦截器已 unwrap: res = {code:0, data:{strategies:[], folders:[]}}
+    const d = res?.data || res
+    if (d?.strategies) {
+      strategies.value = d.strategies
+      folders.value = d.folders || []
+    } else if (Array.isArray(d)) {
+      strategies.value = d
+      folders.value = []
     }
   } finally {
     loading.value = false
@@ -238,7 +243,6 @@ async function loadData() {
 }
 
 async function onCreateStrategy(category: string) {
-  // 聚宽风格：自动生成递增名称，直接创建并留在列表页
   const existingCount = strategies.value.length
   const defaultName = `一个简单的策略-${existingCount + 1}`
 
@@ -247,10 +251,13 @@ async function onCreateStrategy(category: string) {
       name: defaultName,
       code: CATEGORY_TEMPLATES[category] || CATEGORY_TEMPLATES.blank,
       category,
-    })
-    if (res.data?.code === 0) {
+    }) as any
+    const rCode = res?.code ?? res?.data?.code
+    if (rCode === 0) {
       ElMessage.success('策略已创建')
-      await loadData()  // 刷新列表，新策略显示在表格中
+      await loadData()
+    } else {
+      ElMessage.error(res?.msg || '创建失败')
     }
   } catch (e) {
     ElMessage.error('创建失败')
@@ -259,24 +266,33 @@ async function onCreateStrategy(category: string) {
 async function seedTemplateStrategies() {
   // 从后端获取内置模板，批量创建到策略列表中
   try {
-    const res = await getStrategyTemplates()
-    if (res.data?.code !== 0 || !res.data.data?.length) {
-      ElMessage.warning('无可用模板')
-      return
+    const res = await getStrategyTemplates() as any
+    const templates = res?.data || res
+    if (!Array.isArray(templates) || templates.length === 0) {
+      // 兼容两种返回格式: {code:0, data:[...]} 或直接 [...]
+      if (res?.code === 0 && Array.isArray(res.data)) {
+        // 已在上面处理
+      } else {
+        ElMessage.warning('无可用模板')
+        return
+      }
     }
+    const list = Array.isArray(templates) ? templates : (res?.data || [])
     let created = 0
-    for (const t of res.data.data) {
+    for (const t of list) {
       const r = await saveStrategyCode({
         name: t.name,
         code: t.code,
         description: t.description || '',
         category: t.category || 'stock',
-      })
-      if (r.data?.code === 0) created++
+      }) as any
+      const rCode = r?.code ?? r?.data?.code
+      if (rCode === 0) created++
     }
-    ElMessage.success(`已导入 ${created} 个示例策略`)
+    ElMessage.success('已导入 ' + created + ' 个示例策略')
     await loadData()
   } catch (e) {
+    console.error('导入模板异常:', e)
     ElMessage.error('导入失败')
   }
 }
