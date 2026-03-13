@@ -237,18 +237,25 @@ def update_db_from_df(data, table_name, where):
 
 # 检查表是否存在
 def checkTableIsExist(tableName):
-    try:
-        with get_connection() as conn:
-            with conn.cursor() as db:
-                db.execute("""
-                    SELECT COUNT(*)
-                    FROM information_schema.tables
-                    WHERE table_schema = %s AND table_name = %s
-                    """, (db_database, tableName))
-                if db.fetchone()[0] >= 1:
-                    return True
-    except Exception as e:
-        logging.error(f"database.checkTableIsExist处理异常", exc_info=True)
+    max_retries = _DB_CONN_RETRIES
+    for attempt in range(1, max_retries + 1):
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as db:
+                    db.execute("""
+                        SELECT COUNT(*)
+                        FROM information_schema.tables
+                        WHERE table_schema = %s AND table_name = %s
+                        """, (db_database, tableName))
+                    if db.fetchone()[0] >= 1:
+                        return True
+                    return False
+        except Exception as e:
+            if attempt < max_retries and _is_retryable_error(e):
+                logging.warning(f"database.checkTableIsExist瞬态错误（第{attempt}/{max_retries}次重试）：{type(e).__name__}")
+                time.sleep(1 * attempt)
+            else:
+                logging.error(f"database.checkTableIsExist处理异常", exc_info=True)
     return False
 
 # 增删改数据
@@ -271,27 +278,39 @@ def executeSql(sql, params=()):
 
 # 查询数据
 def executeSqlFetch(sql, params=()):
-    with get_connection() as conn:
-        with conn.cursor() as db:
-            try:
-                db.execute(sql, params)
-                return db.fetchall()
-            except Exception as e:
+    max_retries = _DB_CONN_RETRIES
+    for attempt in range(1, max_retries + 1):
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as db:
+                    db.execute(sql, params)
+                    return db.fetchall()
+        except Exception as e:
+            if attempt < max_retries and _is_retryable_error(e):
+                logging.warning(f"database.executeSqlFetch瞬态错误（第{attempt}/{max_retries}次重试）：{type(e).__name__}")
+                time.sleep(1 * attempt)
+            else:
                 logging.error(f"database.executeSqlFetch处理异常：{sql}", exc_info=True)
     return None
 
 
 # 计算数量
 def executeSqlCount(sql, params=()):
-    with get_connection() as conn:
-        with conn.cursor() as db:
-            try:
-                db.execute(sql, params)
-                result = db.fetchall()
-                if len(result) == 1:
-                    return int(result[0][0])
-                else:
-                    return 0
-            except Exception as e:
-                logging.error(f"database.select_count计算数量处理异常", exc_info=True)
+    max_retries = _DB_CONN_RETRIES
+    for attempt in range(1, max_retries + 1):
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as db:
+                    db.execute(sql, params)
+                    result = db.fetchall()
+                    if len(result) == 1:
+                        return int(result[0][0])
+                    else:
+                        return 0
+        except Exception as e:
+            if attempt < max_retries and _is_retryable_error(e):
+                logging.warning(f"database.executeSqlCount瞬态错误（第{attempt}/{max_retries}次重试）：{type(e).__name__}")
+                time.sleep(1 * attempt)
+            else:
+                logging.error(f"database.executeSqlCount处理异常", exc_info=True)
     return 0
