@@ -2,7 +2,7 @@
 
 > **分支**: `backTest_dev`  
 > **日期**: 2026-03-13  
-> **状态**: 设计阶段（v2）
+> **状态**: Phase 1 实施中（v2.1）
 
 ---
 
@@ -317,42 +317,94 @@ Cerebro.addstrategy() + adddata() + run()
 
 ## 七、策略 API 参考
 
-### 初始化
+### 策略生命周期
 
 ```python
 def initialize(context):
+    """策略初始化，整个回测只执行一次"""
     context.security = '000001'
-    context.benchmark = '000300'
+    context.benchmark = '000300'  # 基准指数
+    # 设置交易成本
+    set_order_cost(commission=0.0003, tax=0.001, slippage=0.002)
+
+def before_trading_start(context):
+    """每个交易日开盘前执行（可选）"""
+    pass
 
 def handle_data(context, data):
+    """每个交易日执行一次（核心策略逻辑）"""
+    pass
+
+def after_trading_end(context):
+    """每个交易日收盘后执行（可选）"""
     pass
 ```
 
-### 下单
+### 下单函数
 
 | 函数 | 说明 |
 |------|------|
-| `order(code, amount)` | 按股数买入/卖出 |
-| `order_target(code, amount)` | 目标持仓 |
-| `order_value(code, value)` | 按金额 |
-| `order_target_value(code, value)` | 目标金额 |
+| `order(code, amount)` | 按股数买入（正）/卖出（负），A股按100股整数 |
+| `order_target(code, amount)` | 调整到目标持仓股数 |
+| `order_value(code, value)` | 买入指定金额的股票 |
+| `order_target_value(code, value)` | 调整到目标持仓金额 |
 
-### 数据
+**A股规则**：
+- T+1 交易：今日买入的股票明日才能卖出
+- 涨跌停限制：涨停无法买入，跌停无法卖出
+- 最小交易单位：100 股（1 手）
+
+### 数据获取
 
 | 表达式 | 说明 |
 |--------|------|
-| `data[code].close` | 上一日收盘价 |
-| `data[code].open/high/low/volume` | OHLCV |
-| `history(code, N, field)` | 最近 N 日数据 |
+| `data[code].close` | 上一交易日收盘价 |
+| `data[code].open / high / low / volume` | OHLCV 数据 |
+| `history(code, N, field)` | 最近 N 个交易日的 field 数据（返回 Series） |
+| `get_price(code, start, end, fields)` | 指定区间的历史数据（返回 DataFrame） |
 
-### 账户
+### 账户信息
 
 | 属性 | 说明 |
 |------|------|
 | `context.portfolio.available_cash` | 可用现金 |
-| `context.portfolio.total_value` | 总资产 |
-| `context.portfolio.positions[code].amount` | 持仓 |
-| `context.current_dt` | 当前日期 |
+| `context.portfolio.total_value` | 总资产（现金 + 持仓市值） |
+| `context.portfolio.market_value` | 持仓市值 |
+| `context.portfolio.positions` | 持仓字典 `{code: Position}` |
+| `context.portfolio.positions[code].amount` | 总持仓股数 |
+| `context.portfolio.positions[code].closeable_amount` | 可卖出股数（T+1） |
+| `context.portfolio.positions[code].avg_cost` | 持仓成本价 |
+| `context.portfolio.positions[code].price` | 当前市价 |
+| `context.portfolio.positions[code].value` | 持仓市值 |
+| `context.current_dt` | 当前交易日期 |
+| `context.previous_dt` | 上一交易日期 |
+
+### 设置函数
+
+| 函数 | 说明 |
+|------|------|
+| `set_benchmark(code)` | 设定基准指数（默认沪深300） |
+| `set_order_cost(commission, tax, slippage)` | 设定交易成本 |
+
+### 工具函数
+
+| 函数 | 说明 |
+|------|------|
+| `log.info(msg)` | 日志记录 |
+| `record(**kwargs)` | 记录自定义指标（会在收益曲线下方展示） |
+
+### 回测结果指标
+
+| 指标 | 说明 |
+|------|------|
+| 累计收益率 | 策略总回报 |
+| 年化收益率 | 年化后的回报率 |
+| 基准收益率 | 基准指数同期回报 |
+| 最大回撤 | 峰谷最大跌幅 |
+| 夏普比率 | 风险调整收益（无风险利率取1年定期存款） |
+| 胜率 | 盈利交易占比 |
+| 总交易笔数 | 买入+卖出次数 |
+| 日均换手率 | 每日交易金额/总资产 |
 
 ---
 
