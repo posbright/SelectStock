@@ -1,429 +1,401 @@
-# 聚宽量化回测 & 模拟交易 — 开发文档
+# 回测引擎 & 模拟交易 — 开发文档
 
-> **分支**: `backTest_dev`
-> **日期**: 2026-03-13
-> **状态**: 设计阶段
+> **分支**: `backTest_dev`  
+> **日期**: 2026-03-13  
+> **状态**: 设计阶段（v2）
 
 ---
 
 ## 一、项目目标
 
-基于 InStock 现有数据基础设施，复刻聚宽量化平台的两大核心功能：
+基于 InStock 现有数据和 Backtrader 适配器，构建两个新功能模块：
 
-1. **回测引擎**（Portfolio Backtest Engine）— 支持组合级别的策略回测
-2. **模拟交易系统**（Paper Trading System）— 支持策略的实时模拟运行
+1. **组合回测系统** — 支持用户编写 Python 策略，进行组合级别的回测
+2. **模拟交易系统** — 支持策略的每日自动模拟执行
 
-前后端各为独立模块，不修改原有代码逻辑。
-
----
-
-## 二、聚宽核心功能分析
-
-### 2.1 策略编程框架
-
-聚宽策略的核心是**事件驱动的生命周期函数**：
-
-```python
-def initialize(context):          # 初始化（仅执行一次）
-    set_benchmark('000300.XSHG')  # 设定基准
-    set_order_cost(OrderCost(...)) # 设定交易成本
-    run_daily(market_open, time='every_bar')
-
-def before_trading_start(context):  # 每日开盘前
-    pass
-
-def market_open(context):           # 盘中（每bar执行）
-    if 买入条件:
-        order(security, amount)     # 下单
-    if 卖出条件:
-        order_target(security, 0)   # 目标持仓
-
-def after_trading_end(context):     # 收盘后
-    pass
-```
-
-### 2.2 核心对象
-
-| 对象 | 作用 | InStock 对应 |
-|------|------|-------------|
-| `context.portfolio` | 账户信息（总资产/可用现金/持仓） | 无（需新建） |
-| `context.portfolio.positions` | 持仓字典（code→Position） | 无（需新建） |
-| `g` | 全局变量容器 | 无（需新建） |
-| `data` | 当前 Bar 的数据快照 | 需适配 |
-| `Order` | 订单信息 | trade/ 有基础 |
-| `Position` | 持仓信息（数量/成本价/市值） | 无（需新建） |
-
-### 2.3 交易函数
-
-| 聚宽 API | 作用 | 实现难度 |
-|----------|------|---------|
-| `order(code, amount)` | 按股数下单 | 中 |
-| `order_target(code, amount)` | 目标持仓 | 中 |
-| `order_value(code, value)` | 按金额下单 | 中 |
-| `order_target_value(code, value)` | 目标金额 | 中 |
-| `cancel_order(order_id)` | 撤单 | 低 |
-| `get_open_orders()` | 查询未完成订单 | 低 |
-
-### 2.4 数据获取函数
-
-| 聚宽 API | 作用 | InStock 数据源 |
-|----------|------|---------------|
-| `attribute_history(code, N, '1d', fields)` | 单股历史 | `cache/hist/` K线缓存 |
-| `history(N, '1d', field, stocks)` | 多股历史 | 同上 |
-| `get_price(code, start, end, fields)` | 区间数据 | 同上 |
-| `get_current_data()` | 当前快照 | `cn_stock_spot` |
-| `get_index_stocks(index)` | 指数成分 | 需新增 |
-| `get_industry_stocks(industry)` | 行业成分 | `cn_stock_spot.industry` |
-
-### 2.5 回测结果报告
-
-| 指标 | 说明 | 实现方式 |
-|------|------|---------|
-| 累计收益 | 策略 vs 基准收益曲线 | 每日 NAV 计算 |
-| 年化收益 | 年化总回报 | NAV 序列计算 |
-| 最大回撤 | 最大峰谷跌幅 | NAV 序列计算 |
-| 夏普比率 | 风险调整收益 | 日收益率序列 |
-| Alpha/Beta | 相对基准的超额/系统风险 | 日收益率回归 |
-| 日胜率 | 正收益天数占比 | 日收益率统计 |
-| 持仓分析 | 持仓变化时间线 | 交易记录聚合 |
-| 交易明细 | 每笔买卖记录 | 订单日志 |
-
-### 2.6 模拟交易功能
-
-| 功能 | 说明 |
-|------|------|
-| 策略实时运行 | 每日收盘后按策略逻辑执行 |
-| 状态持久化 | 持仓/订单/全局变量保存到 DB |
-| 修改策略 | 热更新策略代码 |
-| 暂停/恢复 | 暂停策略运行 |
-| 多策略并行 | 同时运行多个模拟盘 |
+**核心原则**：最大化复用现有代码，与原项目自然融合。
 
 ---
 
-## 三、InStock 现有资源盘点
+## 二、整合策略
 
-### 3.1 可直接复用
+### 2.1 复用现有组件
 
-| 资源 | 说明 |
-|------|------|
-| K 线缓存 `cache/hist/*.gzip.pickle` | 全市场 ~5000 只股票的日 K 线历史（10年） |
-| `cn_stock_spot` 表 | 当日实时行情（OHLCV + 40 字段） |
-| `cn_stock_selection` 表 | 综合选股数据（200+ 字段，含估值/财务） |
-| `cn_stock_trade_date` 表 | 交易日历 |
-| 13 种策略 | 已有 `check()` 函数，可转为信号 |
-| TA-Lib 指标 | 32 项技术指标，已封装 |
-| Backtrader 适配器 | `bt_engine.py`（391 行，未集成到生产） |
-| 交易费用计算 | `rate_stats.py`（佣金/印花税/滑点） |
+| 现有组件 | 复用方式 |
+|---------|---------|
+| `bt_engine.py`（BacktestEngine） | **核心引擎**，扩展为支持自定义策略 |
+| `rate_stats.py` | 交易成本计算 |
+| `cache/hist/*.gzip.pickle` | 回测数据源，直接读取 |
+| `cn_stock_trade_date` | 交易日历 |
+| `cn_stock_spot` / `cn_stock_selection` | 当日行情 / 基本面数据 |
+| `stockfetch.py` | 获取指数数据（新增沪深300 K线获取） |
+| `backtestHandler.py` | 现有回测 API，扩展新端点 |
+| `backtestDashboardHandler.py` | 现有看板，扩展组合回测看板 |
+| `web_service.py` | 路由注册，新增端点 |
+| ECharts（前端） | 收益曲线、持仓图表 |
 
-### 3.2 需要新建
-
-| 组件 | 说明 |
-|------|------|
-| **回测引擎** | 组合级别的事件驱动引擎 |
-| **Portfolio/Position 对象** | 资金/持仓追踪 |
-| **撮合引擎** | 模拟订单成交（涨跌停/成交量限制） |
-| **策略运行时** | 安全执行用户 Python 策略代码 |
-| **基准对比** | 沪深300等指数数据 |
-| **风险指标计算** | Sharpe/MaxDrawdown/Alpha/Beta |
-| **数据适配层** | 统一接口供策略调用历史数据 |
-| **策略管理** | CRUD + 版本管理 |
-| **模拟盘引擎** | 定时执行 + 状态持久化 |
-| **前端页面** | 策略编辑器 + 回测报告 + 模拟盘面板 |
-
----
-
-## 四、技术架构设计
-
-### 4.1 模块划分
+### 2.2 模块划分
 
 ```
 instock/
-├── backtest/                    ← 新增：回测引擎模块
-│   ├── engine.py               # 回测引擎主逻辑
-│   ├── context.py              # Context/Portfolio/Position 对象
-│   ├── matching.py             # 撮合引擎（涨跌停/成交量限制）
-│   ├── data_proxy.py           # 数据代理层（统一接口）
-│   ├── risk_metrics.py         # 风险指标计算
-│   ├── strategy_runner.py      # 策略运行时（安全沙箱）
-│   ├── api.py                  # 策略可调用的 API 函数
-│   └── recorder.py             # 交易/持仓/净值记录
+├── core/backtest/                   ← 扩展现有目录
+│   ├── bt_engine.py                 # [已有] Backtrader 适配器 → 扩展
+│   ├── rate_stats.py                # [已有] 交易成本
+│   ├── portfolio_engine.py          # [新增] 组合回测引擎（基于 Backtrader）
+│   ├── strategy_context.py          # [新增] Context/Portfolio/Position 对象
+│   ├── data_feed.py                 # [新增] 数据源适配（cache → Backtrader）
+│   ├── risk_metrics.py              # [新增] 风险指标（Sharpe/Alpha/MaxDD）
+│   └── strategy_sandbox.py          # [新增] 策略安全执行沙箱
 │
-├── paper_trading/               ← 新增：模拟交易模块
-│   ├── paper_engine.py         # 模拟交易引擎
-│   ├── scheduler.py            # 定时调度（每日触发）
-│   ├── state_manager.py        # 状态持久化（持仓/资金/g 对象）
-│   └── strategy_manager.py     # 策略 CRUD + 版本管理
+├── core/stockfetch.py               # [扩展] 新增 fetch_index_hist() 获取指数K线
+│
+├── paper_trading/                    ← 新增：模拟交易模块
+│   ├── __init__.py
+│   ├── paper_engine.py              # 模拟交易执行引擎
+│   ├── state_manager.py             # 状态持久化
+│   └── scheduler.py                 # 每日定时触发
 │
 ├── web/
-│   ├── backtestEngineHandler.py  ← 新增：回测引擎 API
-│   └── paperTradingHandler.py    ← 新增：模拟交易 API
+│   ├── backtestHandler.py           # [扩展] 新增组合回测 API 端点
+│   ├── backtestDashboardHandler.py  # [扩展] 新增组合回测看板
+│   └── paperTradingHandler.py       # [新增] 模拟交易 API
 │
 └── fontWeb/src/
     ├── views/
-    │   ├── quant-backtest/        ← 新增：回测前端模块
-    │   │   ├── index.vue          # 策略编辑器 + 参数配置
-    │   │   ├── result.vue         # 回测结果展示
-    │   │   └── components/        # 图表组件
-    │   └── paper-trading/         ← 新增：模拟交易前端模块
-    │       ├── index.vue          # 模拟盘管理面板
-    │       ├── detail.vue         # 单策略详情
-    │       └── components/        # 图表/持仓组件
+    │   ├── backtest/                 # [已有] 现有回测模块
+    │   │   ├── portfolio.vue         # [新增] 组合回测页面
+    │   │   └── components/
+    │   │       ├── StrategyEditor.vue  # [新增] 策略编辑器
+    │   │       ├── NavChart.vue        # [新增] 净值曲线
+    │   │       └── TradeTable.vue      # [新增] 交易明细表
+    │   └── paper-trading/             # [新增] 模拟交易模块
+    │       ├── index.vue              # 模拟盘列表
+    │       └── detail.vue             # 单策略详情
     └── api/
-        └── quant.ts               # 回测 + 模拟交易 API
+        └── stock.ts                   # [扩展] 新增回测/模拟交易 API
 ```
 
-### 4.2 数据库新增表
+---
+
+## 三、数据库设计
+
+新增表使用 `cn_stock_` 前缀（与原项目一致）：
 
 ```sql
--- 策略定义表
-CREATE TABLE cn_quant_strategy (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
-    code TEXT NOT NULL,                    -- Python 策略代码
-    description TEXT,
-    initial_cash DECIMAL(15,2) DEFAULT 1000000,
-    benchmark VARCHAR(20) DEFAULT '000300',
-    frequency ENUM('1d','1m') DEFAULT '1d',
-    commission_rate DECIMAL(8,6) DEFAULT 0.000300,
-    stamp_tax_rate DECIMAL(8,6) DEFAULT 0.001000,
-    slippage DECIMAL(8,6) DEFAULT 0.000500,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    status ENUM('draft','active','archived') DEFAULT 'draft'
-);
+-- 用户策略定义表
+CREATE TABLE IF NOT EXISTS `cn_stock_strategy_code` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `name` VARCHAR(100) NOT NULL COMMENT '策略名称',
+    `code` TEXT NOT NULL COMMENT 'Python策略代码',
+    `description` TEXT COMMENT '策略描述',
+    `initial_cash` DECIMAL(15,2) DEFAULT 1000000.00 COMMENT '初始资金',
+    `benchmark` VARCHAR(20) DEFAULT '000300' COMMENT '基准指数代码',
+    `commission_rate` DECIMAL(8,6) DEFAULT 0.000300 COMMENT '佣金率',
+    `stamp_tax_rate` DECIMAL(8,6) DEFAULT 0.001000 COMMENT '印花税',
+    `slippage` DECIMAL(8,6) DEFAULT 0.000500 COMMENT '滑点率',
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    `status` ENUM('draft','active','archived') DEFAULT 'draft'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户自定义策略代码';
 
--- 回测任务表
-CREATE TABLE cn_quant_backtest (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    strategy_id INT NOT NULL,
-    start_date DATE NOT NULL,
-    end_date DATE NOT NULL,
-    initial_cash DECIMAL(15,2),
-    status ENUM('pending','running','completed','failed') DEFAULT 'pending',
-    started_at DATETIME,
-    completed_at DATETIME,
-    error_message TEXT,
-    -- 汇总指标（完成后写入）
-    total_return DECIMAL(10,6),
-    annual_return DECIMAL(10,6),
-    max_drawdown DECIMAL(10,6),
-    sharpe_ratio DECIMAL(10,6),
-    alpha DECIMAL(10,6),
-    beta DECIMAL(10,6),
-    win_rate DECIMAL(10,6),
-    trade_count INT,
-    FOREIGN KEY (strategy_id) REFERENCES cn_quant_strategy(id)
-);
+-- 组合回测任务表
+CREATE TABLE IF NOT EXISTS `cn_stock_backtest_portfolio` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `strategy_id` INT NOT NULL COMMENT '策略ID',
+    `start_date` DATE NOT NULL,
+    `end_date` DATE NOT NULL,
+    `initial_cash` DECIMAL(15,2),
+    `status` ENUM('pending','running','completed','failed') DEFAULT 'pending',
+    `started_at` DATETIME,
+    `completed_at` DATETIME,
+    `error_message` TEXT,
+    `total_return` DECIMAL(10,4) COMMENT '累计收益率%',
+    `annual_return` DECIMAL(10,4) COMMENT '年化收益率%',
+    `max_drawdown` DECIMAL(10,4) COMMENT '最大回撤%',
+    `sharpe_ratio` DECIMAL(10,4),
+    `alpha` DECIMAL(10,4),
+    `beta` DECIMAL(10,4),
+    `win_rate` DECIMAL(10,4) COMMENT '胜率%',
+    `trade_count` INT COMMENT '交易笔数',
+    INDEX `idx_strategy` (`strategy_id`),
+    INDEX `idx_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='组合回测任务及结果';
 
--- 每日净值表（回测结果）
-CREATE TABLE cn_quant_daily_nav (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    backtest_id INT NOT NULL,
-    date DATE NOT NULL,
-    nav DECIMAL(15,6) NOT NULL,            -- 单位净值
-    benchmark_nav DECIMAL(15,6),           -- 基准净值
-    cash DECIMAL(15,2),                    -- 当日现金
-    market_value DECIMAL(15,2),            -- 持仓市值
-    total_value DECIMAL(15,2),             -- 总资产
-    daily_return DECIMAL(10,6),            -- 日收益率
-    benchmark_return DECIMAL(10,6),        -- 基准日收益率
-    UNIQUE KEY (backtest_id, date),
-    FOREIGN KEY (backtest_id) REFERENCES cn_quant_backtest(id)
-);
+-- 每日净值记录
+CREATE TABLE IF NOT EXISTS `cn_stock_backtest_nav` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `backtest_id` INT NOT NULL,
+    `date` DATE NOT NULL,
+    `nav` DECIMAL(15,6) NOT NULL COMMENT '单位净值',
+    `benchmark_nav` DECIMAL(15,6) COMMENT '基准净值',
+    `cash` DECIMAL(15,2),
+    `market_value` DECIMAL(15,2),
+    `total_value` DECIMAL(15,2),
+    `daily_return` DECIMAL(10,6),
+    `benchmark_return` DECIMAL(10,6),
+    UNIQUE KEY `uk_bt_date` (`backtest_id`, `date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='回测每日净值';
 
--- 交易记录表
-CREATE TABLE cn_quant_trade (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    backtest_id INT,                       -- 回测 ID（回测时非空）
-    paper_id INT,                          -- 模拟盘 ID（模拟时非空）
-    date DATE NOT NULL,
-    code VARCHAR(6) NOT NULL,
-    name VARCHAR(20),
-    direction ENUM('buy','sell') NOT NULL,
-    price DECIMAL(10,3) NOT NULL,
-    amount INT NOT NULL,                   -- 成交股数
-    value DECIMAL(15,2),                   -- 成交金额
-    commission DECIMAL(10,2),              -- 佣金
-    tax DECIMAL(10,2),                     -- 印花税
-    slippage_cost DECIMAL(10,2),           -- 滑点成本
-    INDEX (backtest_id, date),
-    INDEX (paper_id, date)
-);
+-- 交易记录（回测+模拟交易共用）
+CREATE TABLE IF NOT EXISTS `cn_stock_backtest_trade` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `backtest_id` INT DEFAULT NULL,
+    `paper_id` INT DEFAULT NULL,
+    `date` DATE NOT NULL,
+    `code` VARCHAR(6) NOT NULL,
+    `name` VARCHAR(20),
+    `direction` ENUM('buy','sell') NOT NULL,
+    `price` DECIMAL(10,3) NOT NULL,
+    `amount` INT NOT NULL COMMENT '成交股数',
+    `value` DECIMAL(15,2) COMMENT '成交金额',
+    `commission` DECIMAL(10,2),
+    `tax` DECIMAL(10,2),
+    INDEX `idx_bt_date` (`backtest_id`, `date`),
+    INDEX `idx_paper_date` (`paper_id`, `date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='回测/模拟交易记录';
 
--- 持仓快照表
-CREATE TABLE cn_quant_position_snapshot (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    backtest_id INT,
-    paper_id INT,
-    date DATE NOT NULL,
-    code VARCHAR(6) NOT NULL,
-    name VARCHAR(20),
-    amount INT NOT NULL,                   -- 持仓股数
-    avg_cost DECIMAL(10,3),               -- 持仓均价
-    close_price DECIMAL(10,3),            -- 当日收盘价
-    market_value DECIMAL(15,2),           -- 市值
-    profit DECIMAL(15,2),                 -- 浮动盈亏
-    profit_rate DECIMAL(10,6),            -- 浮动盈亏率
-    weight DECIMAL(10,6),                 -- 持仓权重
-    INDEX (backtest_id, date),
-    INDEX (paper_id, date)
-);
+-- 持仓快照
+CREATE TABLE IF NOT EXISTS `cn_stock_backtest_position` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `backtest_id` INT DEFAULT NULL,
+    `paper_id` INT DEFAULT NULL,
+    `date` DATE NOT NULL,
+    `code` VARCHAR(6) NOT NULL,
+    `name` VARCHAR(20),
+    `amount` INT NOT NULL,
+    `avg_cost` DECIMAL(10,3),
+    `close_price` DECIMAL(10,3),
+    `market_value` DECIMAL(15,2),
+    `profit` DECIMAL(15,2),
+    `profit_rate` DECIMAL(10,6),
+    `weight` DECIMAL(10,6) COMMENT '持仓权重',
+    INDEX `idx_bt_date` (`backtest_id`, `date`),
+    INDEX `idx_paper_date` (`paper_id`, `date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='持仓快照';
 
--- 模拟交易实例表
-CREATE TABLE cn_quant_paper_trading (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    strategy_id INT NOT NULL,
-    initial_cash DECIMAL(15,2) DEFAULT 1000000,
-    status ENUM('running','paused','stopped') DEFAULT 'running',
-    started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    last_run_date DATE,
-    -- 当前状态序列化（g 对象 + 持仓等）
-    state_json LONGTEXT,
-    FOREIGN KEY (strategy_id) REFERENCES cn_quant_strategy(id)
-);
+-- 模拟交易实例
+CREATE TABLE IF NOT EXISTS `cn_stock_paper_trading` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `strategy_id` INT NOT NULL,
+    `name` VARCHAR(100) COMMENT '模拟盘名称',
+    `initial_cash` DECIMAL(15,2) DEFAULT 1000000.00,
+    `current_cash` DECIMAL(15,2),
+    `current_value` DECIMAL(15,2),
+    `status` ENUM('running','paused','stopped') DEFAULT 'running',
+    `started_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+    `last_run_date` DATE,
+    `state_json` LONGTEXT COMMENT '序列化的 g 对象和上下文',
+    INDEX `idx_strategy` (`strategy_id`),
+    INDEX `idx_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='模拟交易实例';
 ```
 
-### 4.3 API 端点设计
+---
 
-#### 回测 API
+## 四、API 端点设计
+
+在现有路由结构上扩展（`/instock/api/` 前缀）：
+
+### 4.1 策略管理
 
 | Method | Path | 说明 |
 |--------|------|------|
-| POST | `/api/quant/strategy` | 创建/保存策略 |
-| GET | `/api/quant/strategy` | 获取策略列表 |
-| GET | `/api/quant/strategy/:id` | 获取策略详情 |
-| PUT | `/api/quant/strategy/:id` | 更新策略代码 |
-| DELETE | `/api/quant/strategy/:id` | 删除策略 |
-| POST | `/api/quant/backtest/run` | 启动回测 |
-| GET | `/api/quant/backtest/:id` | 获取回测结果 |
-| GET | `/api/quant/backtest/:id/nav` | 获取净值曲线 |
-| GET | `/api/quant/backtest/:id/trades` | 获取交易记录 |
-| GET | `/api/quant/backtest/:id/positions` | 获取持仓快照 |
-| GET | `/api/quant/backtest/list` | 获取回测任务列表 |
+| POST | `/instock/api/strategy/code` | 保存策略代码 |
+| GET | `/instock/api/strategy/code/list` | 策略列表 |
+| GET | `/instock/api/strategy/code/:id` | 策略详情 |
+| DELETE | `/instock/api/strategy/code/:id` | 删除策略 |
+| GET | `/instock/api/strategy/templates` | 内置策略模板 |
 
-#### 模拟交易 API
+### 4.2 组合回测
 
 | Method | Path | 说明 |
 |--------|------|------|
-| POST | `/api/quant/paper/create` | 创建模拟盘 |
-| POST | `/api/quant/paper/:id/pause` | 暂停 |
-| POST | `/api/quant/paper/:id/resume` | 恢复 |
-| POST | `/api/quant/paper/:id/stop` | 停止 |
-| GET | `/api/quant/paper/:id` | 获取状态 |
-| GET | `/api/quant/paper/:id/trades` | 交易记录 |
-| GET | `/api/quant/paper/:id/positions` | 当前持仓 |
-| GET | `/api/quant/paper/list` | 模拟盘列表 |
+| POST | `/instock/api/backtest/portfolio/run` | 启动组合回测 |
+| GET | `/instock/api/backtest/portfolio/:id` | 回测结果 |
+| GET | `/instock/api/backtest/portfolio/:id/nav` | 净值曲线 |
+| GET | `/instock/api/backtest/portfolio/:id/trades` | 交易明细 |
+| GET | `/instock/api/backtest/portfolio/:id/positions` | 持仓变化 |
+| GET | `/instock/api/backtest/portfolio/list` | 任务列表 |
+
+### 4.3 模拟交易
+
+| Method | Path | 说明 |
+|--------|------|------|
+| POST | `/instock/api/paper/create` | 创建模拟盘 |
+| POST | `/instock/api/paper/:id/pause` | 暂停 |
+| POST | `/instock/api/paper/:id/resume` | 恢复 |
+| POST | `/instock/api/paper/:id/stop` | 停止 |
+| GET | `/instock/api/paper/:id` | 状态 |
+| GET | `/instock/api/paper/list` | 列表 |
 
 ---
 
-## 五、实现计划（分阶段）
+## 五、核心架构：基于 Backtrader 扩展
 
-### Phase 1: 回测引擎核心（2-3 周）
+### 5.1 现有 bt_engine.py 能力
 
-**目标**: 能运行简单的买卖策略并输出收益曲线
-
-1. `context.py` — Portfolio / Position / Context 对象
-2. `data_proxy.py` — 数据代理层（读取 K 线缓存）
-3. `matching.py` — 基础撮合引擎（市价单 + 涨跌停检测）
-4. `api.py` — `order()` / `order_target()` / `order_value()` / `history()` 等
-5. `engine.py` — 回测主循环（逐日遍历 + 事件触发）
-6. `risk_metrics.py` — Sharpe / MaxDrawdown / Alpha / Beta
-7. 单元测试覆盖
-
-### Phase 2: 回测 Web 集成（1-2 周）
-
-1. `backtestEngineHandler.py` — 回测 API Handler
-2. `quant.ts` — 前端 API 函数
-3. `quant-backtest/index.vue` — 策略编辑器（Monaco Editor）
-4. `quant-backtest/result.vue` — 回测结果（ECharts 曲线）
-5. 路由注册 + 导航菜单
-
-### Phase 3: 模拟交易（1-2 周）
-
-1. `paper_engine.py` — 模拟交易引擎
-2. `scheduler.py` — 定时触发（复用 cron 框架）
-3. `state_manager.py` — 状态序列化/恢复
-4. `paperTradingHandler.py` — 模拟交易 API
-5. `paper-trading/*.vue` — 前端管理面板
-
-### Phase 4: 增强功能（持续迭代）
-
-1. 策略模板库（内置经典策略）
-2. 因子分析 / 归因分析
-3. 多策略组合优化
-4. 自定义指标
-5. 分钟级回测支持
-
----
-
-## 六、可行性分析
-
-### 6.1 数据可行性 ✅
-
-| 需求 | 现状 | 评估 |
-|------|------|------|
-| 日 K 线历史 | `cache/hist/` 10年数据 | ✅ 完全满足 |
-| 实时行情 | `cn_stock_spot` 每日更新 | ✅ 满足 |
-| 交易日历 | `cn_stock_trade_date` | ✅ 满足 |
-| 基本面数据 | `cn_stock_selection` 200+ 字段 | ✅ 满足 |
-| 指数基准 | 需新增沪深300等指数日 K 线 | ⚠️ 需从数据源获取 |
-| 涨跌停价格 | K 线数据含开高低收 | ✅ 可计算 |
-
-### 6.2 技术可行性 ✅
-
-| 需求 | 方案 | 评估 |
-|------|------|------|
-| 策略执行 | Python `exec()` + 受限命名空间 | ✅ 可行 |
-| 回测性能 | 逐日遍历 5年 ≈ 1250 个交易日 | ✅ 秒级 |
-| 数据加载 | 从 cache 读取 pickle | ✅ 已有 |
-| 撮合引擎 | 模拟成交逻辑 | ✅ 较简单 |
-| 前端编辑器 | Monaco Editor（VS Code 同款） | ✅ 成熟方案 |
-| 图表展示 | 复用 ECharts | ✅ 已有 |
-
-### 6.3 风险点
-
-| 风险 | 影响 | 缓解 |
-|------|------|------|
-| 策略代码安全 | 用户代码可能执行危险操作 | 受限命名空间 + 超时机制 |
-| 回测性能 | 大量股票 × 长时间可能慢 | 按需加载 + 缓存 |
-| 指数数据缺失 | 无法计算 Alpha/Beta | 从 AkShare 获取沪深300 |
-| 前端复杂度 | 策略编辑器 + 图表较复杂 | 分阶段实现 |
-
----
-
-## 七、与现有系统的隔离策略
-
-| 原则 | 说明 |
+| 能力 | 状态 |
 |------|------|
-| 新增不修改 | 所有新功能在新目录/新文件中实现 |
-| 数据只读 | 回测引擎只读 K 线缓存和 DB，不修改原有表 |
-| 新增表 | 所有新表以 `cn_quant_` 前缀区分 |
-| API 路径隔离 | 新 API 统一使用 `/api/quant/` 前缀 |
-| 前端路由隔离 | 新页面在 `/quant-backtest/` 和 `/paper-trading/` 下 |
-| 测试覆盖 | 每个模块配套单元测试 |
-| 分支隔离 | 在 `backTest_dev` 分支开发，验证后再合并 |
+| Cerebro 初始化 + 资金/佣金设定 | ✅ 已有 |
+| PandasData 适配 | ✅ 已有 |
+| SignalStrategy（信号→买卖） | ✅ 已有 |
+| SharpeRatio / DrawDown / Returns / TradeAnalyzer | ✅ 已有 |
+| StrategyBacktester 批量回测 | ✅ 已有 |
+| calculate_simple_returns（收益计算） | ✅ 已有 |
+
+### 5.2 需要扩展
+
+| 需求 | 实现方式 |
+|------|---------|
+| 自定义策略代码 → bt.Strategy | `portfolio_engine.py` 编译适配 |
+| 多股票同时加载 | `data_feed.py` 批量加载 cache |
+| 基准指数数据 | `stockfetch.py` 新增 `fetch_index_hist()` |
+| 聚宽风格 API | `strategy_context.py` 适配层 |
+| 净值/持仓每日记录 | Backtrader Observer + Analyzer |
+| 结果写入 DB | `portfolio_engine.py` 完成后持久化 |
+
+### 5.3 策略编译流程
+
+```
+用户 Python 策略代码（聚宽风格）
+        │
+        ▼
+strategy_sandbox.py 安全检查 + exec()
+        │
+        ▼
+提取 initialize() / handle_data() 函数
+        │
+        ▼
+portfolio_engine.py 包装为 bt.Strategy 子类
+  - __init__() → 调用用户 initialize()
+  - next()     → 调用用户 handle_data()
+  - 注入 context / data / order 等 API
+        │
+        ▼
+Cerebro.addstrategy() + adddata() + run()
+        │
+        ▼
+提取 Analyzer 结果 → 写入 DB
+```
 
 ---
 
-## 八、聚宽 vs InStock 功能对比（MVP 范围）
+## 六、实现计划
 
-| 聚宽功能 | MVP 是否包含 | 说明 |
-|----------|------------|------|
-| `initialize` + `handle_data` | ✅ | 核心策略框架 |
-| `order/order_target/order_value` | ✅ | 基础下单 |
-| `set_benchmark` | ✅ | 基准设定 |
-| `set_order_cost` | ✅ | 交易成本 |
-| `history/attribute_history` | ✅ | 历史数据 |
-| `get_current_data` | ✅ | 当前数据 |
-| 收益曲线 + 基准对比 | ✅ | 核心报告 |
-| 风险指标（Sharpe等） | ✅ | 核心报告 |
-| 交易明细 | ✅ | 核心报告 |
-| 持仓分析 | ✅ | 核心报告 |
-| 模拟交易 | ✅ | 日频版 |
-| 分钟级回测 | ❌ Phase 4 | 数据量大 |
-| Tick 级回测 | ❌ | 无 Tick 数据 |
-| 期货交易 | ❌ | 仅 A 股 |
-| 融资融券 | ❌ | 仅现金账户 |
-| 投资组合优化器 | ❌ Phase 4 | 高级功能 |
-| 因子分析 | ❌ Phase 4 | 高级功能 |
-| Brinson 归因 | ❌ Phase 4 | 高级功能 |
+### Phase 1: 回测引擎核心（后端）
+
+| 序号 | 文件 | 内容 |
+|------|------|------|
+| 1 | `strategy_context.py` | Context / Portfolio / Position / GlobalVars |
+| 2 | `data_feed.py` | cache → PandasData，含基准指数 |
+| 3 | `portfolio_engine.py` | 编译策略 + 运行 Cerebro + 输出结果 |
+| 4 | `strategy_sandbox.py` | 安全执行用户代码 |
+| 5 | `risk_metrics.py` | 从 Analyzer 提取 Sharpe/Alpha/MaxDD |
+| 6 | `stockfetch.py` 扩展 | `fetch_index_hist()` |
+| 7 | 单元测试 | 均线策略回测验证 |
+
+### Phase 2: Web 集成
+
+| 序号 | 文件 | 内容 |
+|------|------|------|
+| 1 | `backtestHandler.py` 扩展 | 策略 CRUD + 组合回测 API |
+| 2 | `web_service.py` 扩展 | 注册新路由 |
+| 3 | `portfolio.vue` | 策略编辑器 + 参数 + 结果展示 |
+| 4 | `NavChart.vue` | 净值曲线 ECharts |
+| 5 | `stock.ts` 扩展 | 新增 API |
+
+### Phase 3: 模拟交易
+
+| 序号 | 文件 | 内容 |
+|------|------|------|
+| 1 | `paper_engine.py` | 每日执行策略 + 虚拟成交 |
+| 2 | `state_manager.py` | 序列化/恢复 |
+| 3 | `paperTradingHandler.py` | API |
+| 4 | `paper-trading/*.vue` | 前端面板 |
+
+---
+
+## 七、策略 API 参考
+
+### 初始化
+
+```python
+def initialize(context):
+    context.security = '000001'
+    context.benchmark = '000300'
+
+def handle_data(context, data):
+    pass
+```
+
+### 下单
+
+| 函数 | 说明 |
+|------|------|
+| `order(code, amount)` | 按股数买入/卖出 |
+| `order_target(code, amount)` | 目标持仓 |
+| `order_value(code, value)` | 按金额 |
+| `order_target_value(code, value)` | 目标金额 |
+
+### 数据
+
+| 表达式 | 说明 |
+|--------|------|
+| `data[code].close` | 上一日收盘价 |
+| `data[code].open/high/low/volume` | OHLCV |
+| `history(code, N, field)` | 最近 N 日数据 |
+
+### 账户
+
+| 属性 | 说明 |
+|------|------|
+| `context.portfolio.available_cash` | 可用现金 |
+| `context.portfolio.total_value` | 总资产 |
+| `context.portfolio.positions[code].amount` | 持仓 |
+| `context.current_dt` | 当前日期 |
+
+---
+
+## 八、内置策略模板
+
+### 均线突破
+
+```python
+def initialize(context):
+    context.security = '000001'
+
+def handle_data(context, data):
+    price = data[context.security].close
+    ma5 = history(context.security, 5, 'close').mean()
+    if price > ma5 * 1.01 and context.portfolio.available_cash > 0:
+        order_value(context.security, context.portfolio.available_cash * 0.9)
+    elif price < ma5 * 0.99:
+        order_target(context.security, 0)
+```
+
+### 多股票等权
+
+```python
+def initialize(context):
+    context.stocks = ['600519', '000858', '601318', '600036', '300750']
+
+def handle_data(context, data):
+    target = context.portfolio.total_value / len(context.stocks)
+    for code in context.stocks:
+        order_target_value(code, target)
+```
+
+### 双均线
+
+```python
+def initialize(context):
+    context.security = '600519'
+
+def handle_data(context, data):
+    ma5 = history(context.security, 5, 'close').mean()
+    ma20 = history(context.security, 20, 'close').mean()
+    if ma5 > ma20 and context.security not in context.portfolio.positions:
+        order_value(context.security, context.portfolio.available_cash * 0.9)
+    elif ma5 < ma20:
+        order_target(context.security, 0)
+```
