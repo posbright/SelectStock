@@ -156,6 +156,8 @@ class SaveStrategyCodeHandler(webBase.BaseHandler, ABC):
             code = body.get('code', '').strip()
             description = body.get('description', '')
             strategy_id = body.get('id')
+            category = body.get('category', 'stock')
+            folder_id = body.get('folder_id', 0)
             initial_cash = body.get('initial_cash', 1000000)
             benchmark = body.get('benchmark', '000300')
             commission = body.get('commission_rate', 0.0003)
@@ -182,22 +184,22 @@ class SaveStrategyCodeHandler(webBase.BaseHandler, ABC):
                 # 更新
                 mdb.executeSql(
                     'UPDATE cn_stock_strategy_code SET name=%s, code=%s, description=%s, '
-                    'initial_cash=%s, benchmark=%s, commission_rate=%s, stamp_tax_rate=%s, '
-                    'slippage=%s, status=%s WHERE id=%s',
-                    (name, code, description, initial_cash, benchmark,
+                    'category=%s, initial_cash=%s, benchmark=%s, commission_rate=%s, '
+                    'stamp_tax_rate=%s, slippage=%s, status=%s WHERE id=%s',
+                    (name, code, description, category, initial_cash, benchmark,
                      commission, tax, slippage, 'active', strategy_id))
                 result_id = strategy_id
             else:
-                # 新增 — 在同一连接中执行 INSERT 和获取 ID
+                # 新增
                 with mdb.get_connection() as conn:
                     with conn.cursor() as cur:
                         cur.execute(
                             'INSERT INTO cn_stock_strategy_code '
-                            '(name, code, description, initial_cash, benchmark, '
-                            'commission_rate, stamp_tax_rate, slippage, status) '
-                            'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)',
-                            (name, code, description, initial_cash, benchmark,
-                             commission, tax, slippage, 'active'))
+                            '(name, code, description, category, folder_id, initial_cash, '
+                            'benchmark, commission_rate, stamp_tax_rate, slippage, status) '
+                            'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                            (name, code, description, category, folder_id, initial_cash,
+                             benchmark, commission, tax, slippage, 'active'))
                         cur.execute('SELECT LAST_INSERT_ID()')
                         result_id = cur.fetchone()[0]
 
@@ -208,28 +210,55 @@ class SaveStrategyCodeHandler(webBase.BaseHandler, ABC):
 
 
 class GetStrategyCodeListHandler(webBase.BaseHandler, ABC):
-    """获取策略列表"""
+    """获取策略列表（含文件夹）"""
 
     @gen.coroutine
     def get(self):
         try:
             _ensure_strategy_table()
+            folder_id = self.get_argument('folder_id', None)
+
+            # 获取文件夹列表
+            folders = []
+            folder_rows = mdb.executeSqlFetch(
+                'SELECT id, name, created_at FROM cn_stock_strategy_folder ORDER BY name')
+            if folder_rows:
+                for r in folder_rows:
+                    folders.append({
+                        'id': r[0], 'name': r[1], 'type': 'folder',
+                        'created_at': r[2].strftime('%Y-%m-%d %H:%M') if r[2] else '',
+                    })
+
+            # 获取策略列表
+            where = 'WHERE status != %s'
+            params = ['archived']
+            if folder_id is not None:
+                where += ' AND folder_id = %s'
+                params.append(int(folder_id))
+
             rows = mdb.executeSqlFetch(
-                'SELECT id, name, description, initial_cash, benchmark, status, '
-                'created_at, updated_at FROM cn_stock_strategy_code '
-                'WHERE status != %s ORDER BY updated_at DESC', ('archived',))
+                f'SELECT id, name, description, category, folder_id, initial_cash, benchmark, '
+                f'compile_count, backtest_count, status, created_at, updated_at '
+                f'FROM cn_stock_strategy_code {where} ORDER BY updated_at DESC', tuple(params))
             data = []
             if rows:
                 for r in rows:
                     data.append({
-                        'id': r[0], 'name': r[1], 'description': r[2],
-                        'initial_cash': float(r[3]) if r[3] else 1000000,
-                        'benchmark': r[4] or '000300',
-                        'status': r[5],
-                        'created_at': r[6].strftime('%Y-%m-%d %H:%M') if r[6] else '',
-                        'updated_at': r[7].strftime('%Y-%m-%d %H:%M') if r[7] else '',
+                        'id': r[0], 'name': r[1], 'description': r[2] or '',
+                        'category': r[3] or 'stock',
+                        'folder_id': r[4] or 0,
+                        'initial_cash': float(r[5]) if r[5] else 1000000,
+                        'benchmark': r[6] or '000300',
+                        'compile_count': r[7] or 0,
+                        'backtest_count': r[8] or 0,
+                        'status': r[9],
+                        'created_at': r[10].strftime('%Y-%m-%d %H:%M:%S') if r[10] else '',
+                        'updated_at': r[11].strftime('%Y-%m-%d %H:%M:%S') if r[11] else '',
+                        'type': 'strategy',
                     })
-            self.write(json.dumps({'code': 0, 'data': data}, ensure_ascii=False))
+            self.write(json.dumps({
+                'code': 0, 'data': {'strategies': data, 'folders': folders}
+            }, ensure_ascii=False))
         except Exception as e:
             self.write(json.dumps({'code': -1, 'msg': str(e)}))
 
@@ -356,25 +385,171 @@ class GetPortfolioBacktestListHandler(webBase.BaseHandler, ABC):
 # ── 辅助函数 ──
 
 def _ensure_strategy_table():
-    """确保策略表存在"""
-    if mdb.checkTableIsExist('cn_stock_strategy_code'):
-        return
-    mdb.executeSql('''
-        CREATE TABLE IF NOT EXISTS `cn_stock_strategy_code` (
-            `id` INT AUTO_INCREMENT PRIMARY KEY,
-            `name` VARCHAR(100) NOT NULL,
-            `code` TEXT NOT NULL,
-            `description` TEXT,
-            `initial_cash` DECIMAL(15,2) DEFAULT 1000000.00,
-            `benchmark` VARCHAR(20) DEFAULT '000300',
-            `commission_rate` DECIMAL(8,6) DEFAULT 0.000300,
-            `stamp_tax_rate` DECIMAL(8,6) DEFAULT 0.001000,
-            `slippage` DECIMAL(8,6) DEFAULT 0.000500,
-            `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
-            `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            `status` ENUM('draft','active','archived') DEFAULT 'draft'
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-    ''')
+    """确保策略表存在（含 folder/category 扩展字段）"""
+    if not mdb.checkTableIsExist('cn_stock_strategy_code'):
+        mdb.executeSql('''
+            CREATE TABLE IF NOT EXISTS `cn_stock_strategy_code` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `name` VARCHAR(100) NOT NULL,
+                `code` TEXT NOT NULL,
+                `description` TEXT,
+                `category` VARCHAR(30) DEFAULT 'stock' COMMENT '分类: stock/multi_factor/portfolio/blank',
+                `folder_id` INT DEFAULT 0 COMMENT '文件夹ID,0=根目录',
+                `initial_cash` DECIMAL(15,2) DEFAULT 1000000.00,
+                `benchmark` VARCHAR(20) DEFAULT '000300',
+                `commission_rate` DECIMAL(8,6) DEFAULT 0.000300,
+                `stamp_tax_rate` DECIMAL(8,6) DEFAULT 0.001000,
+                `slippage` DECIMAL(8,6) DEFAULT 0.000500,
+                `compile_count` INT DEFAULT 0 COMMENT '历史编译运行次数',
+                `backtest_count` INT DEFAULT 0 COMMENT '历史回测次数',
+                `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                `status` ENUM('draft','active','archived') DEFAULT 'draft'
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ''')
+    else:
+        # 增量添加新字段（兼容已有表）
+        try:
+            mdb.executeSql('ALTER TABLE cn_stock_strategy_code ADD COLUMN IF NOT EXISTS '
+                           '`category` VARCHAR(30) DEFAULT "stock" AFTER `description`')
+        except Exception:
+            pass
+        try:
+            mdb.executeSql('ALTER TABLE cn_stock_strategy_code ADD COLUMN IF NOT EXISTS '
+                           '`folder_id` INT DEFAULT 0 AFTER `category`')
+        except Exception:
+            pass
+        try:
+            mdb.executeSql('ALTER TABLE cn_stock_strategy_code ADD COLUMN IF NOT EXISTS '
+                           '`compile_count` INT DEFAULT 0 AFTER `slippage`')
+        except Exception:
+            pass
+        try:
+            mdb.executeSql('ALTER TABLE cn_stock_strategy_code ADD COLUMN IF NOT EXISTS '
+                           '`backtest_count` INT DEFAULT 0 AFTER `compile_count`')
+        except Exception:
+            pass
+
+    # 确保文件夹表存在
+    if not mdb.checkTableIsExist('cn_stock_strategy_folder'):
+        mdb.executeSql('''
+            CREATE TABLE IF NOT EXISTS `cn_stock_strategy_folder` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `name` VARCHAR(100) NOT NULL,
+                `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ''')
+
+
+class CreateFolderHandler(webBase.BaseHandler, ABC):
+    """创建文件夹"""
+    @gen.coroutine
+    def post(self):
+        try:
+            body = json.loads(self.request.body)
+            name = body.get('name', '').strip()
+            if not name:
+                self.write(json.dumps({'code': -1, 'msg': '文件夹名称不能为空'}))
+                return
+            _ensure_strategy_table()
+            with mdb.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute('INSERT INTO cn_stock_strategy_folder (name) VALUES (%s)', (name,))
+                    cur.execute('SELECT LAST_INSERT_ID()')
+                    folder_id = cur.fetchone()[0]
+            self.write(json.dumps({'code': 0, 'data': {'id': folder_id}}))
+        except Exception as e:
+            self.write(json.dumps({'code': -1, 'msg': str(e)}))
+
+
+class RenameFolderHandler(webBase.BaseHandler, ABC):
+    """重命名文件夹"""
+    @gen.coroutine
+    def post(self):
+        try:
+            body = json.loads(self.request.body)
+            folder_id = body.get('id')
+            name = body.get('name', '').strip()
+            if not folder_id or not name:
+                self.write(json.dumps({'code': -1, 'msg': '参数错误'}))
+                return
+            mdb.executeSql('UPDATE cn_stock_strategy_folder SET name=%s WHERE id=%s', (name, folder_id))
+            self.write(json.dumps({'code': 0}))
+        except Exception as e:
+            self.write(json.dumps({'code': -1, 'msg': str(e)}))
+
+
+class DeleteFolderHandler(webBase.BaseHandler, ABC):
+    """删除文件夹（策略移到根目录）"""
+    @gen.coroutine
+    def post(self):
+        try:
+            body = json.loads(self.request.body)
+            folder_id = body.get('id')
+            if not folder_id:
+                self.write(json.dumps({'code': -1, 'msg': '参数错误'}))
+                return
+            mdb.executeSql('UPDATE cn_stock_strategy_code SET folder_id=0 WHERE folder_id=%s', (folder_id,))
+            mdb.executeSql('DELETE FROM cn_stock_strategy_folder WHERE id=%s', (folder_id,))
+            self.write(json.dumps({'code': 0}))
+        except Exception as e:
+            self.write(json.dumps({'code': -1, 'msg': str(e)}))
+
+
+class MoveStrategyHandler(webBase.BaseHandler, ABC):
+    """将策略移动到指定文件夹"""
+    @gen.coroutine
+    def post(self):
+        try:
+            body = json.loads(self.request.body)
+            strategy_ids = body.get('ids', [])
+            folder_id = body.get('folder_id', 0)
+            if not strategy_ids:
+                self.write(json.dumps({'code': -1, 'msg': '未选择策略'}))
+                return
+            placeholders = ','.join(['%s'] * len(strategy_ids))
+            mdb.executeSql(
+                f'UPDATE cn_stock_strategy_code SET folder_id=%s WHERE id IN ({placeholders})',
+                (folder_id, *strategy_ids))
+            self.write(json.dumps({'code': 0}))
+        except Exception as e:
+            self.write(json.dumps({'code': -1, 'msg': str(e)}))
+
+
+class BatchDeleteStrategyHandler(webBase.BaseHandler, ABC):
+    """批量删除策略"""
+    @gen.coroutine
+    def post(self):
+        try:
+            body = json.loads(self.request.body)
+            ids = body.get('ids', [])
+            if not ids:
+                self.write(json.dumps({'code': -1, 'msg': '未选择策略'}))
+                return
+            placeholders = ','.join(['%s'] * len(ids))
+            mdb.executeSql(
+                f'UPDATE cn_stock_strategy_code SET status=%s WHERE id IN ({placeholders})',
+                ('archived', *ids))
+            self.write(json.dumps({'code': 0}))
+        except Exception as e:
+            self.write(json.dumps({'code': -1, 'msg': str(e)}))
+
+
+class RenameStrategyHandler(webBase.BaseHandler, ABC):
+    """重命名策略"""
+    @gen.coroutine
+    def post(self):
+        try:
+            body = json.loads(self.request.body)
+            strategy_id = body.get('id')
+            name = body.get('name', '').strip()
+            if not strategy_id or not name:
+                self.write(json.dumps({'code': -1, 'msg': '参数错误'}))
+                return
+            mdb.executeSql('UPDATE cn_stock_strategy_code SET name=%s WHERE id=%s', (name, strategy_id))
+            self.write(json.dumps({'code': 0}))
+        except Exception as e:
+            self.write(json.dumps({'code': -1, 'msg': str(e)}))
 
 
 def _ensure_backtest_table():

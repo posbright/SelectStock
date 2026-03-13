@@ -91,6 +91,14 @@ class Application(tornado.web.Application):
             (r"/instock/api/strategy/templates", portfolioBacktestHandler.GetStrategyTemplatesHandler),
             (r"/instock/api/backtest/portfolio/run", portfolioBacktestHandler.RunPortfolioBacktestHandler),
             (r"/instock/api/backtest/portfolio/list", portfolioBacktestHandler.GetPortfolioBacktestListHandler),
+            # 策略文件夹管理
+            (r"/instock/api/strategy/folder/create", portfolioBacktestHandler.CreateFolderHandler),
+            (r"/instock/api/strategy/folder/rename", portfolioBacktestHandler.RenameFolderHandler),
+            (r"/instock/api/strategy/folder/delete", portfolioBacktestHandler.DeleteFolderHandler),
+            # 策略批量操作
+            (r"/instock/api/strategy/move", portfolioBacktestHandler.MoveStrategyHandler),
+            (r"/instock/api/strategy/batch_delete", portfolioBacktestHandler.BatchDeleteStrategyHandler),
+            (r"/instock/api/strategy/rename", portfolioBacktestHandler.RenameStrategyHandler),
             # 模拟交易
             (r"/instock/api/paper/create", paperTradingHandler.CreatePaperTradingHandler),
             (r"/instock/api/paper/action", paperTradingHandler.PaperTradingActionHandler),

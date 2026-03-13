@@ -194,9 +194,9 @@ export function getStrategyTemplates() {
   return request({ url: '/api/strategy/templates', method: 'get' })
 }
 
-/** 获取策略列表 */
-export function getStrategyCodeList() {
-  return request({ url: '/api/strategy/code/list', method: 'get' })
+/** 获取策略列表（含文件夹） */
+export function getStrategyCodeList(params?: { folder_id?: number }) {
+  return request({ url: '/api/strategy/code/list', method: 'get', params })
 }
 
 /** 获取策略详情 */
@@ -210,6 +210,8 @@ export function saveStrategyCode(data: {
   name: string
   code: string
   description?: string
+  category?: string
+  folder_id?: number
   initial_cash?: number
   benchmark?: string
   commission_rate?: number
@@ -222,6 +224,36 @@ export function saveStrategyCode(data: {
 /** 删除策略 */
 export function deleteStrategyCode(id: number) {
   return request({ url: '/api/strategy/code/delete', method: 'post', data: { id } })
+}
+
+/** 重命名策略 */
+export function renameStrategy(id: number, name: string) {
+  return request({ url: '/api/strategy/rename', method: 'post', data: { id, name } })
+}
+
+/** 移动策略到文件夹 */
+export function moveStrategy(ids: number[], folder_id: number) {
+  return request({ url: '/api/strategy/move', method: 'post', data: { ids, folder_id } })
+}
+
+/** 批量删除策略 */
+export function batchDeleteStrategy(ids: number[]) {
+  return request({ url: '/api/strategy/batch_delete', method: 'post', data: { ids } })
+}
+
+/** 创建文件夹 */
+export function createFolder(name: string) {
+  return request({ url: '/api/strategy/folder/create', method: 'post', data: { name } })
+}
+
+/** 重命名文件夹 */
+export function renameFolder(id: number, name: string) {
+  return request({ url: '/api/strategy/folder/rename', method: 'post', data: { id, name } })
+}
+
+/** 删除文件夹 */
+export function deleteFolder(id: number) {
+  return request({ url: '/api/strategy/folder/delete', method: 'post', data: { id } })
 }
 
 /** 运行组合回测 */
