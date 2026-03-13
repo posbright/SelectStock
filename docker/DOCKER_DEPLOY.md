@@ -211,3 +211,34 @@ git pull
 docker-compose down
 docker-compose up -d
 ```
+
+## 低内存服务器优化（1-2GB）
+
+MySQL 默认配置可能占用 800MB+ 内存，在 1-2GB 服务器上容易触发 OOM-killer 杀进程。
+
+### Docker 部署
+
+`docker-compose.yml` 已自动挂载 `config/mysql-low-memory.cnf`，无需额外配置。
+
+### 非 Docker 部署（直接安装 MySQL）
+
+将优化配置复制到 MySQL 配置目录并重启：
+
+```bash
+sudo cp docker/config/mysql-low-memory.cnf /etc/mysql/conf.d/low-memory.cnf
+sudo systemctl restart mysqld
+
+# 验证生效
+mysql -u root -p -e "SHOW VARIABLES LIKE 'innodb_buffer_pool_size';"
+# 应显示 268435456 (256MB)
+```
+
+### 检查 OOM 记录
+
+```bash
+# 查看是否有 MySQL 被 OOM-killer 杀掉的记录
+dmesg | grep -i "oom\|out of memory" | tail -20
+
+# 确保 MySQL 配置为自动重启
+sudo systemctl enable mysqld
+```
