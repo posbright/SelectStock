@@ -408,27 +408,16 @@ def _ensure_strategy_table():
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         ''')
     else:
-        # 增量添加新字段（兼容已有表）
-        try:
-            mdb.executeSql('ALTER TABLE cn_stock_strategy_code ADD COLUMN IF NOT EXISTS '
-                           '`category` VARCHAR(30) DEFAULT "stock" AFTER `description`')
-        except Exception:
-            pass
-        try:
-            mdb.executeSql('ALTER TABLE cn_stock_strategy_code ADD COLUMN IF NOT EXISTS '
-                           '`folder_id` INT DEFAULT 0 AFTER `category`')
-        except Exception:
-            pass
-        try:
-            mdb.executeSql('ALTER TABLE cn_stock_strategy_code ADD COLUMN IF NOT EXISTS '
-                           '`compile_count` INT DEFAULT 0 AFTER `slippage`')
-        except Exception:
-            pass
-        try:
-            mdb.executeSql('ALTER TABLE cn_stock_strategy_code ADD COLUMN IF NOT EXISTS '
-                           '`backtest_count` INT DEFAULT 0 AFTER `compile_count`')
-        except Exception:
-            pass
+        # 增量添加新字段（兼容已有表，MySQL 8.0 不支持 IF NOT EXISTS）
+        def _add_col(col_def):
+            try:
+                mdb.executeSql(f'ALTER TABLE cn_stock_strategy_code ADD COLUMN {col_def}')
+            except Exception:
+                pass  # 列已存在时忽略 (1060 Duplicate column)
+        _add_col('`category` VARCHAR(30) DEFAULT "stock" AFTER `description`')
+        _add_col('`folder_id` INT DEFAULT 0 AFTER `category`')
+        _add_col('`compile_count` INT DEFAULT 0 AFTER `slippage`')
+        _add_col('`backtest_count` INT DEFAULT 0 AFTER `compile_count`')
 
     # 确保文件夹表存在
     if not mdb.checkTableIsExist('cn_stock_strategy_folder'):
