@@ -18,12 +18,12 @@
         <el-icon><FolderAdd /></el-icon> 新建文件夹
       </el-button>
 
-      <el-button :disabled="selectedIds.length === 0" @click="onRenameSelected">
+      <el-button :disabled="selectedRows.length === 0" @click="onRenameSelected">
         重命名
       </el-button>
 
-      <el-dropdown :disabled="selectedIds.length === 0" @command="onMoveToFolder" trigger="click">
-        <el-button :disabled="selectedIds.length === 0">移动到</el-button>
+      <el-dropdown :disabled="selectedStrategyIds.length === 0" @command="onMoveToFolder" trigger="click">
+        <el-button :disabled="selectedStrategyIds.length === 0">移动到</el-button>
         <template #dropdown>
           <el-dropdown-menu>
             <el-dropdown-item :command="0">根目录</el-dropdown-item>
@@ -34,10 +34,10 @@
         </template>
       </el-dropdown>
 
-      <el-popconfirm title="确定删除选中的策略？" @confirm="onBatchDelete"
-                     :disabled="selectedIds.length === 0">
+      <el-popconfirm title="确定删除选中的项目？" @confirm="onBatchDelete"
+                     :disabled="selectedRows.length === 0">
         <template #reference>
-          <el-button :disabled="selectedIds.length === 0" type="danger" plain>
+          <el-button :disabled="selectedRows.length === 0" type="danger" plain>
             <el-icon><Delete /></el-icon> 删除
           </el-button>
         </template>
@@ -115,7 +115,7 @@ import { Folder, FolderAdd, Document, Delete } from '@element-plus/icons-vue'
 import {
   getStrategyCodeList, saveStrategyCode,
   createFolder, renameStrategy, renameFolder, moveStrategy,
-  batchDeleteStrategy, getStrategyTemplates,
+  batchDeleteStrategy, getStrategyTemplates, deleteFolder,
 } from '@/api/stock'
 
 const router = useRouter()
@@ -187,8 +187,11 @@ def handle_data(context, data):
 `,
 }
 
-const selectedIds = computed(() =>
+const selectedStrategyIds = computed(() =>
   selectedRows.value.filter(r => r.type === 'strategy').map(r => r.id)
+)
+const selectedFolderIds = computed(() =>
+  selectedRows.value.filter(r => r.type === 'folder').map(r => r.id)
 )
 
 const tableData = computed(() => {
@@ -208,8 +211,8 @@ function categoryLabel(cat: string) {
   return CATEGORY_MAP[cat] || 'Code'
 }
 
-function isSelectable(row: any) {
-  return row.type === 'strategy'
+function isSelectable(_row: any) {
+  return true  // 文件夹和策略都可选
 }
 
 function onSelectionChange(rows: any[]) {
@@ -339,9 +342,9 @@ async function onRenameSelected() {
 }
 
 async function onMoveToFolder(folderId: number) {
-  if (selectedIds.value.length === 0) return
+  if (selectedStrategyIds.value.length === 0) return
   try {
-    await moveStrategy(selectedIds.value, folderId)
+    await moveStrategy(selectedStrategyIds.value, folderId)
     ElMessage.success('已移动')
     loadData()
   } catch (e) {
@@ -350,10 +353,17 @@ async function onMoveToFolder(folderId: number) {
 }
 
 async function onBatchDelete() {
-  if (selectedIds.value.length === 0) return
   try {
-    await batchDeleteStrategy(selectedIds.value)
-    ElMessage.success('已删除')
+    // 删除选中的策略
+    if (selectedStrategyIds.value.length > 0) {
+      await batchDeleteStrategy(selectedStrategyIds.value)
+    }
+    // 删除选中的文件夹
+    for (const fid of selectedFolderIds.value) {
+      await deleteFolder(fid)
+    }
+    const total = selectedStrategyIds.value.length + selectedFolderIds.value.length
+    ElMessage.success('已删除 ' + total + ' 项')
     loadData()
   } catch (e) {
     ElMessage.error('删除失败')
