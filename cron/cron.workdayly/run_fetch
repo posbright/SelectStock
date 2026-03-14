@@ -10,4 +10,20 @@ init_env
 LOG_FILE=$LOG_DIR/workdayly.log
 
 check_trade_day "数据获取"
+
+# ── OOM 防护：停止非关键服务，释放内存 ──
+SERVICES_STOPPED=0
+if [ "${INSTOCK_NO_SERVICE_STOP:-0}" != "1" ]; then
+    stop_services_for_memory "数据获取任务"
+    SERVICES_STOPPED=1
+fi
+
 run_job "数据获取 (fetch_daily_job)" "instock/job/fetch_daily_job.py"
+RC=$?
+
+# ── 恢复服务 ──
+if [ $SERVICES_STOPPED -eq 1 ]; then
+    start_services_after_memory
+fi
+
+exit $RC
