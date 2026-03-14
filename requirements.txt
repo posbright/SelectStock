@@ -1,4 +1,4 @@
-# InStock Python 依赖
+﻿# InStock Python 依赖
 # 使用 >= 约束提高兼容性，避免过于严格的版本锁定
 
 # 核心数据处理
