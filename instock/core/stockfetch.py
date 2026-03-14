@@ -1282,21 +1282,63 @@ def update_all_caches(stocks, date_start, date_end, workers=2):
     - update_all_caches: 仅触发增量缓存更新，处理完每只股票即释放内存
     
     5层限流防护策略：
-    第1层 - 控制并发：默认 2 线程（最大 4），有效 QPS ≈ 1.0
-    第2层 - 请求间隔：每次 API 请求后等待 1.0-3.0 秒（缓存命中零延迟）
-    第3层 - 批次冷却：每 100 只股票暂停 8-15 秒，让连接池充分冷却
-    第4层 - 限流检测：连续 3 次失败即触发暂停，渐进退避（120s→240s→480s）
-    第5层 - 熔断保护：累计 3 次限流后终止任务，恢复后自动降速 50%
+    第1层 - 控制并发：默认 2 线程（最大 8），可通过环境变量 INSTOCK_KLINE_CACHE_WORKERS 配置
+    第2层 - 请求间隔：每次 API 请求后等待（可通过环境变量配置）
+    第3层 - 批次冷却：每 N 只股票暂停（可通过环境变量配置）
+    第4层 - 限流检测：连续 N 次失败即触发暂停，渐进退避
+    第5层 - 熔断保护：累计 N 次限流后终止任务，恢复后自动降速
+    
+    本地 vs 服务器环境配置：
+    - 本地环境（INSTOCK_LOCAL_MODE=1）：高并发、少延迟、大内存
+    - 服务器环境（默认）：低并发、多延迟、小内存防OOM
     
     参数：
         stocks: 股票列表 [(date, code), ...]
         date_start: 起始日期 YYYYMMDD
         date_end: 结束日期 YYYYMMDD
-        workers: 并发线程数（默认2，不建议超过4）
+        workers: 并发线程数（默认2，本地可设置更高）
     返回：
         (success_count, fail_count)
     """
     import threading
+    
+    # ── 本地/服务器环境自适应配置 ──
+    # 本地模式：高并发、少延迟、大内存（不用担心OOM）
+    # 服务器模式：低并发、多延迟、小内存防OOM
+    IS_LOCAL_MODE = _cfg.get_bool('INSTOCK_LOCAL_MODE', False)
+    
+    if IS_LOCAL_MODE:
+        # 本地模式：更激进的配置
+        DEFAULT_WORKERS = 6              # 本地默认6线程
+        MAX_WORKERS = 12                 # 本地最大12线程
+        REQUEST_DELAY = (0.3, 0.8)       # 本地请求间隔更短
+        BATCH_PAUSE_INTERVAL = 200       # 本地每200只暂停一次
+        BATCH_PAUSE_SECONDS = (3, 6)     # 本地暂停时间更短
+        CONSECUTIVE_FAIL_THRESHOLD = 5   # 本地容忍更多失败
+        BASE_THROTTLE_PAUSE = 60         # 本地限流暂停更短
+        MAX_THROTTLE_COUNT = 5           # 本地容忍更多限流
+        CHUNK_SIZE = 200                 # 本地更大的批次
+        logging.info("K线缓存更新：本地模式（高并发、少延迟）")
+    else:
+        # 服务器模式：保守配置（防OOM、防限流）
+        DEFAULT_WORKERS = 2              # 服务器默认2线程
+        MAX_WORKERS = 4                  # 服务器最大4线程
+        REQUEST_DELAY = (1.0, 3.0)       # 服务器请求间隔更长
+        BATCH_PAUSE_INTERVAL = 100       # 服务器每100只暂停一次
+        BATCH_PAUSE_SECONDS = (8, 15)    # 服务器暂停时间更长
+        CONSECUTIVE_FAIL_THRESHOLD = 3   # 服务器容忍较少失败
+        BASE_THROTTLE_PAUSE = 120        # 服务器限流暂停更长
+        MAX_THROTTLE_COUNT = 3           # 服务器容忍较少限流
+        CHUNK_SIZE = 100                 # 服务器标准批次
+    
+    # 允许通过环境变量覆盖默认值
+    workers = _cfg.get_int('INSTOCK_KLINE_CACHE_WORKERS', workers if workers > 2 else DEFAULT_WORKERS)
+    REQUEST_DELAY_MIN = _cfg.get_float('INSTOCK_KLINE_REQUEST_DELAY_MIN', REQUEST_DELAY[0])
+    REQUEST_DELAY_MAX = _cfg.get_float('INSTOCK_KLINE_REQUEST_DELAY_MAX', REQUEST_DELAY[1])
+    BATCH_PAUSE_INTERVAL = _cfg.get_int('INSTOCK_KLINE_BATCH_INTERVAL', BATCH_PAUSE_INTERVAL)
+    BATCH_PAUSE_MIN = _cfg.get_float('INSTOCK_KLINE_BATCH_PAUSE_MIN', BATCH_PAUSE_SECONDS[0])
+    BATCH_PAUSE_MAX = _cfg.get_float('INSTOCK_KLINE_BATCH_PAUSE_MAX', BATCH_PAUSE_SECONDS[1])
+    CHUNK_SIZE = _cfg.get_int('INSTOCK_KLINE_CHUNK_SIZE', CHUNK_SIZE)
     
     success = 0
     fail = 0
@@ -1308,15 +1350,9 @@ def update_all_caches(stocks, date_start, date_end, workers=2):
     _throttle_event.set()              # 初始状态：不暂停
     _abort = False                     # 熔断标志
     
-    # ── 限流参数 ──
-    CONSECUTIVE_FAIL_THRESHOLD = 3     # 连续失败阈值（尽早检测限流，避免浪费请求）
-    BASE_THROTTLE_PAUSE = 120          # 首次限流暂停秒数（后续每次翻倍：120→240→480）
-    MAX_THROTTLE_COUNT = 3             # 最多触发限流次数，超过后终止任务（疑似IP被封）
-    BATCH_PAUSE_INTERVAL = 100         # 每处理 N 只股票后暂停
-    BATCH_PAUSE_SECONDS = (8, 15)      # 批次暂停时间范围
-
     # 自适应请求延迟（每次限流恢复后自动加大 50%，上限 5-8 秒）
-    request_delay = [1.0, 3.0]         # [最小, 最大] 秒
+    request_delay = [REQUEST_DELAY_MIN, REQUEST_DELAY_MAX]
+    batch_pause_seconds = (BATCH_PAUSE_MIN, BATCH_PAUSE_MAX)
     
     def _update_one(stock):
         """更新单只股票的缓存，返回 'skip'/True/False"""
@@ -1355,12 +1391,12 @@ def update_all_caches(stocks, date_start, date_end, workers=2):
                 time.sleep(random.uniform(request_delay[0], request_delay[1]))
     
     # 限制并发数，避免过多线程同时请求 API
-    workers = min(workers, 4)
+    workers = min(workers, MAX_WORKERS)
     
     # ── 分批提交（时间换空间）──
     # 关键优化：不再一次性创建 ~4900 个 Future 对象，改为每批提交 CHUNK_SIZE 只
     # 每批处理完后 gc.collect()，避免 Future/结果对象在内存中累积
-    CHUNK_SIZE = BATCH_PAUSE_INTERVAL  # 复用批次暂停间隔（默认 100）
+    # CHUNK_SIZE 已在函数开头根据本地/服务器模式配置
     
     try:
         processed_total = 0
@@ -1449,7 +1485,7 @@ def update_all_caches(stocks, date_start, date_end, workers=2):
             gc.collect()
             remaining = len(stocks) - processed_total
             if remaining > 0 and not _abort:
-                pause = random.uniform(*BATCH_PAUSE_SECONDS)
+                pause = random.uniform(*batch_pause_seconds)
                 logging.info(
                     f"已处理 {processed_total}/{len(stocks)}"
                     f"（成功={success}, 失败={fail}, 跳过={skip}），"
