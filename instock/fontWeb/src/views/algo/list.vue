@@ -42,12 +42,13 @@
     </div>
 
     <!-- 表格 -->
-    <el-table :data="tableData" v-loading="loading" @selection-change="onSelectionChange"
+    <el-table ref="tableRef" :data="tableData" v-loading="loading" @selection-change="onSelectionChange"
+              @row-click="onTableRowClick" @row-dblclick="onTableRowDblClick"
               stripe row-key="rowKey" style="width: 100%;">
       <el-table-column type="selection" width="40" />
       <el-table-column label="" min-width="280">
         <template #default="{ row }">
-          <div class="name-cell" @click="onRowClick(row)" @dblclick.stop="onRowDblClick(row)">
+          <div class="name-cell">
             <el-icon :size="18" v-if="row.type === 'folder'" color="#e6a23c"><Folder /></el-icon>
             <el-icon :size="18" v-else color="#409eff"><Document /></el-icon>
             <!-- 行内编辑名称 -->
@@ -91,7 +92,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick, type ComponentPublicInstance } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Folder, FolderAdd, Document, Delete, ArrowLeft } from '@element-plus/icons-vue'
@@ -110,6 +111,7 @@ const currentFolderId = ref(0)
 const currentFolderName = ref('')
 const editingRowId = ref<string | null>(null)
 const editingName = ref('')
+const tableRef = ref<any>(null)
 
 const CATEGORY_MAP: Record<string, string> = {
   stock: 'Code', multi_factor: 'Factor', portfolio: 'Portfolio', blank: 'Code'
@@ -147,27 +149,47 @@ const tableData = computed(() => {
 function categoryLabel(cat: string) { return CATEGORY_MAP[cat] || 'Code' }
 function onSelectionChange(rows: any[]) { selectedRows.value = rows }
 
-function onRowClick(row: any) {
-  if (editingRowId.value) return // 正在编辑名称时不跳转
+// 单击/双击 区分：使用延迟模式
+let clickTimer: ReturnType<typeof setTimeout> | null = null
+
+function onTableRowClick(row: any, column: any, event: Event) {
+  if (column?.type === 'selection') return
+  if (editingRowId.value) return
+  // 延迟200ms执行单击，给双击留时间
+  if (clickTimer) clearTimeout(clickTimer)
+  clickTimer = setTimeout(() => {
+    clickTimer = null
+    doRowClick(row)
+  }, 200)
+}
+
+function onTableRowDblClick(row: any, column: any, event: Event) {
+  if (column?.type === 'selection') return
+  // 取消延迟的单击
+  if (clickTimer) { clearTimeout(clickTimer); clickTimer = null }
+  doRowDblClick(row)
+}
+
+function doRowClick(row: any) {
+  if (editingRowId.value) return
   if (row.type === 'folder') {
-    // 进入文件夹
     currentFolderId.value = row.id
     currentFolderName.value = row.name
+    console.log('[list] Enter folder:', row.id, row.name)
     return
   }
   router.push('/algo/edit/' + row.id)
 }
 
-function exitFolder() {
-  currentFolderId.value = 0
-  currentFolderName.value = ''
-}
-
-// 双击进入行内重命名模式
-async function onRowDblClick(row: any) {
+async function doRowDblClick(row: any) {
   editingRowId.value = row.rowKey
   editingName.value = row.name
   await nextTick()
+}
+
+function exitFolder() {
+  currentFolderId.value = 0
+  currentFolderName.value = ''
 }
 
 async function finishRename(row: any) {
@@ -199,6 +221,9 @@ async function loadData() {
       allStrategies.value = d
       allFolders.value = []
     }
+    console.log('[list] loadData:', allStrategies.value.length, 'strategies,',
+      allFolders.value.length, 'folders, currentFolder=', currentFolderId.value,
+      'root strategies:', allStrategies.value.filter(s => !s.folder_id || s.folder_id === 0).length)
   } finally {
     loading.value = false
   }
@@ -260,10 +285,20 @@ async function onRenameSelected() {
 async function onMoveToFolder(folderId: number) {
   if (selectedStrategyIds.value.length === 0) return
   try {
-    await moveStrategy(selectedStrategyIds.value, folderId)
-    ElMessage.success('\u5df2\u79fb\u52a8')
+    const res = await moveStrategy(selectedStrategyIds.value, folderId) as any
+    const code = res?.code ?? res?.data?.code
+    if (code !== 0) {
+      ElMessage.error(res?.msg || res?.data?.msg || '移动失败')
+      return
+    }
+    ElMessage.success('已移动')
+    selectedRows.value = []
+    if (tableRef.value) tableRef.value.clearSelection()
     await loadData()
-  } catch (e) { ElMessage.error('\u79fb\u52a8\u5931\u8d25') }
+  } catch (e) {
+    console.error('moveStrategy error:', e)
+    ElMessage.error('移动失败')
+  }
 }
 
 async function onBatchDelete() {
@@ -283,7 +318,7 @@ onMounted(loadData)
 .breadcrumb { margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
 .folder-path { font-size: 14px; color: #606266; font-weight: 500; }
 .toolbar { display: flex; gap: 8px; margin-bottom: 16px; padding: 12px 0; border-bottom: 1px solid #ebeef5; }
-.name-cell { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.name-cell { display: flex; align-items: center; gap: 8px; cursor: pointer; width: 100%; min-height: 32px; }
 .name-cell:hover .name-text { color: #409eff; }
 .name-text { color: #303133; font-size: 14px; transition: color 0.15s; }
 </style>

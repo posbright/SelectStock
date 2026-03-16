@@ -281,17 +281,13 @@ class SaveStrategyCodeHandler(webBase.BaseHandler, ABC):
                 result_id = strategy_id
             else:
                 # 新增
-                with mdb.get_connection() as conn:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            'INSERT INTO cn_stock_strategy_code '
-                            '(name, code, description, category, folder_id, initial_cash, '
-                            'benchmark, commission_rate, stamp_tax_rate, slippage, status) '
-                            'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
-                            (name, code, description, category, folder_id, initial_cash,
-                             benchmark, commission, tax, slippage, 'active'))
-                        cur.execute('SELECT LAST_INSERT_ID()')
-                        result_id = cur.fetchone()[0]
+                result_id = _insert_and_get_id(
+                    'INSERT INTO cn_stock_strategy_code '
+                    '(name, code, description, category, folder_id, initial_cash, '
+                    'benchmark, commission_rate, stamp_tax_rate, slippage, status) '
+                    'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                    (name, code, description, category, folder_id, initial_cash,
+                     benchmark, commission, tax, slippage, 'active'))
 
             self.write(json.dumps({'code': 0, 'data': {'id': result_id}}, ensure_ascii=False))
         except Exception as e:
@@ -439,23 +435,19 @@ class RunPortfolioBacktestHandler(webBase.BaseHandler, ABC):
                     _ensure_backtest_table()
                     m = result.get('metrics', {})
                     now = datetime.datetime.now()
-                    with mdb.get_connection() as conn:
-                        with conn.cursor() as cur:
-                            cur.execute(
-                                'INSERT INTO cn_stock_backtest_portfolio '
-                                '(strategy_id, start_date, end_date, initial_cash, status, '
-                                'started_at, completed_at, total_return, annual_return, '
-                                'max_drawdown, sharpe_ratio, alpha, beta, win_rate, trade_count, '
-                                'result_json) '
-                                'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
-                                (strategy_id, start_date, end_date, initial_cash, 'completed',
-                                 now, now, m.get('total_return'), m.get('annual_return'),
-                                 m.get('max_drawdown'), m.get('sharpe_ratio'),
-                                 m.get('alpha'), m.get('beta'),
-                                 m.get('daily_win_rate'), m.get('trade_count'),
-                                 json.dumps(result, ensure_ascii=False, default=str)))
-                            cur.execute('SELECT LAST_INSERT_ID()')
-                            bt_id = cur.fetchone()[0]
+                    bt_id = _insert_and_get_id(
+                        'INSERT INTO cn_stock_backtest_portfolio '
+                        '(strategy_id, start_date, end_date, initial_cash, status, '
+                        'started_at, completed_at, total_return, annual_return, '
+                        'max_drawdown, sharpe_ratio, alpha, beta, win_rate, trade_count, '
+                        'result_json) '
+                        'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                        (strategy_id, start_date, end_date, initial_cash, 'completed',
+                         now, now, m.get('total_return'), m.get('annual_return'),
+                         m.get('max_drawdown'), m.get('sharpe_ratio'),
+                         m.get('alpha'), m.get('beta'),
+                         m.get('daily_win_rate'), m.get('trade_count'),
+                         json.dumps(result, ensure_ascii=False, default=str)))
                     # 更新策略的 backtest_count 和 compile_count
                     if strategy_id:
                         try:
@@ -592,8 +584,23 @@ class GetPortfolioBacktestDetailHandler(webBase.BaseHandler, ABC):
 
 # ── 辅助函数 ──
 
+def _insert_and_get_id(sql, params=()):
+    """INSERT 并返回 LAST_INSERT_ID()，在同一个连接中完成"""
+    wrapper = mdb.get_connection()
+    conn = wrapper._conn if hasattr(wrapper, '_conn') else wrapper
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        cur.execute('SELECT LAST_INSERT_ID()')
+        return cur.fetchone()[0]
+
+
+_strategy_table_ready = False
+
 def _ensure_strategy_table():
-    """确保策略表存在（含 folder/category 扩展字段）"""
+    """确保策略表存在（含 folder/category 扩展字段）—— 仅首次调用时执行"""
+    global _strategy_table_ready
+    if _strategy_table_ready:
+        return
     if not mdb.checkTableIsExist('cn_stock_strategy_code'):
         mdb.executeSql('''
             CREATE TABLE IF NOT EXISTS `cn_stock_strategy_code` (
@@ -636,6 +643,7 @@ def _ensure_strategy_table():
                 `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         ''')
+    _strategy_table_ready = True
 
 
 class CreateFolderHandler(webBase.BaseHandler, ABC):
@@ -649,11 +657,8 @@ class CreateFolderHandler(webBase.BaseHandler, ABC):
                 self.write(json.dumps({'code': -1, 'msg': '文件夹名称不能为空'}))
                 return
             _ensure_strategy_table()
-            with mdb.get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute('INSERT INTO cn_stock_strategy_folder (name) VALUES (%s)', (name,))
-                    cur.execute('SELECT LAST_INSERT_ID()')
-                    folder_id = cur.fetchone()[0]
+            folder_id = _insert_and_get_id(
+                'INSERT INTO cn_stock_strategy_folder (name) VALUES (%s)', (name,))
             self.write(json.dumps({'code': 0, 'data': {'id': folder_id}}))
         except Exception as e:
             self.write(json.dumps({'code': -1, 'msg': str(e)}))
@@ -749,8 +754,13 @@ class RenameStrategyHandler(webBase.BaseHandler, ABC):
             self.write(json.dumps({'code': -1, 'msg': str(e)}))
 
 
+_backtest_table_ready = False
+
 def _ensure_backtest_table():
-    """确保回测任务表存在"""
+    """确保回测任务表存在——仅首次调用时执行"""
+    global _backtest_table_ready
+    if _backtest_table_ready:
+        return
     if not mdb.checkTableIsExist('cn_stock_backtest_portfolio'):
         mdb.executeSql('''
             CREATE TABLE IF NOT EXISTS `cn_stock_backtest_portfolio` (
@@ -782,3 +792,4 @@ def _ensure_backtest_table():
                            'ADD COLUMN `result_json` LONGTEXT AFTER `trade_count`')
         except Exception:
             pass
+    _backtest_table_ready = True

@@ -71,11 +71,43 @@ def engine_to_db(to_db):
 
 
 # DB Api -数据库连接对象connection
+# 单例连接复用（Tornado 单线程安全），避免远程 DB 频繁创建 TCP 连接
+_shared_conn = None
+
+
+class _ReusableConnection:
+    """包装 pymysql.Connection，__exit__ 不关闭底层连接（留给复用池管理）"""
+    def __init__(self, conn):
+        self._conn = conn
+    def __enter__(self):
+        return self._conn
+    def __exit__(self, *exc_info):
+        # 不关闭连接，只确保事务状态正确（autocommit=True 时无需 commit/rollback）
+        pass
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
 def get_connection():
+    """获取数据库连接。优先复用已有连接（ping 检测存活），失败则新建。
+    返回 _ReusableConnection 包装器，with 语句不会关闭底层连接。"""
+    global _shared_conn
+    if _shared_conn is not None:
+        try:
+            _shared_conn.ping(reconnect=True)
+            return _ReusableConnection(_shared_conn)
+        except Exception:
+            try:
+                _shared_conn.close()
+            except Exception:
+                pass
+            _shared_conn = None
+
     max_retries = _DB_CONN_RETRIES
     for attempt in range(1, max_retries + 1):
         try:
-            return pymysql.connect(**MYSQL_CONN_DBAPI)
+            _shared_conn = pymysql.connect(**MYSQL_CONN_DBAPI)
+            return _ReusableConnection(_shared_conn)
         except Exception as e:
             if attempt < max_retries and _is_retryable_error(e):
                 logging.warning(f"database.get_connection瞬态错误（第{attempt}/{max_retries}次重试）：{type(e).__name__}")
