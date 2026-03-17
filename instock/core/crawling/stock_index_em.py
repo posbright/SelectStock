@@ -117,6 +117,9 @@ def stock_index_spot_em() -> pd.DataFrame:
                 "开盘价", "最高价", "最低价", "昨收", "换手率",
                 "流通市值", "总市值"]:
         temp_df[col] = pd.to_numeric(temp_df[col], errors="coerce")
+    # 防御：过滤异常长度的代码（正常指数代码 ≤ 12 字符）
+    temp_df["代码"] = temp_df["代码"].astype(str).str.strip()
+    temp_df = temp_df[temp_df["代码"].str.len() <= 12].reset_index(drop=True)
     return temp_df
 
 
