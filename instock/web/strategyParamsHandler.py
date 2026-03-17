@@ -451,17 +451,15 @@ def _ensure_params_table():
     """确保参数存储表存在"""
     try:
         if not mdb.checkTableIsExist('cn_strategy_params'):
-            with mdb.get_connection() as conn:
-                with conn.cursor() as db:
-                    db.execute("""
-                        CREATE TABLE IF NOT EXISTS `cn_strategy_params` (
-                            `strategy_key` VARCHAR(50) NOT NULL COMMENT '策略标识',
-                            `param_key` VARCHAR(100) NOT NULL COMMENT '参数标识',
-                            `param_value` TEXT COMMENT '参数值(JSON)',
-                            `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                            PRIMARY KEY (`strategy_key`, `param_key`)
-                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='策略参数配置表';
-                    """)
+            mdb.executeSql("""
+                CREATE TABLE IF NOT EXISTS `cn_strategy_params` (
+                    `strategy_key` VARCHAR(50) NOT NULL COMMENT '策略标识',
+                    `param_key` VARCHAR(100) NOT NULL COMMENT '参数标识',
+                    `param_value` TEXT COMMENT '参数值(JSON)',
+                    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    PRIMARY KEY (`strategy_key`, `param_key`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='策略参数配置表';
+            """)
             logging.info("已创建策略参数表 cn_strategy_params")
     except Exception as e:
         mdb._invalidate_shared_conn()  # 废弃可能损坏的连接

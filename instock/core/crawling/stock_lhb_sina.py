@@ -11,7 +11,16 @@ import logging
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
+import sys
 from tqdm import tqdm
+
+# tqdm 在 stderr 不可用时（Windows 服务/后台进程）会抛 OSError，禁用进度条
+_tqdm_disabled = not hasattr(sys.stderr, 'fileno')
+try:
+    if not _tqdm_disabled:
+        sys.stderr.fileno()
+except (OSError, AttributeError):
+    _tqdm_disabled = True
 from instock.core.singleton_proxy import proxys
 
 
@@ -132,7 +141,7 @@ def stock_lhb_ggtj_sina(symbol: str = "5") -> pd.DataFrame:
     )
     last_page_num = _find_last_page(url, symbol)
     big_df = pd.DataFrame()
-    for page in tqdm(range(1, last_page_num + 1), leave=False):
+    for page in tqdm(range(1, last_page_num + 1), leave=False, disable=_tqdm_disabled):
         params = {
             "last": symbol,
             "p": page,
@@ -173,7 +182,7 @@ def stock_lhb_yytj_sina(symbol: str = "5") -> pd.DataFrame:
     )
     last_page_num = _find_last_page(url, symbol)
     big_df = pd.DataFrame()
-    for page in tqdm(range(1, last_page_num + 1), leave=False):
+    for page in tqdm(range(1, last_page_num + 1), leave=False, disable=_tqdm_disabled):
         params = {
             "last": "5",
             "p": page,
@@ -215,7 +224,7 @@ def stock_lhb_jgzz_sina(symbol: str = "5") -> pd.DataFrame:
     )
     last_page_num = _find_last_page(url, symbol)
     big_df = pd.DataFrame()
-    for page in tqdm(range(1, last_page_num + 1), leave=False):
+    for page in tqdm(range(1, last_page_num + 1), leave=False, disable=_tqdm_disabled):
         params = {
             "last": symbol,
             "p": page,
@@ -270,7 +279,7 @@ def stock_lhb_jgmx_sina() -> pd.DataFrame:
     except (IndexError, ValueError):
         last_page_num = 1
     big_df = pd.DataFrame()
-    for page in tqdm(range(1, last_page_num + 1), leave=False):
+    for page in tqdm(range(1, last_page_num + 1), leave=False, disable=_tqdm_disabled):
         params = {
             "p": page,
         }

@@ -6,11 +6,20 @@ Desc: 东方财富网-数据中心-年报季报-分红送配
 https://data.eastmoney.com/yjfp/
 """
 import random
+import sys
 import time
 
 import pandas as pd
 from tqdm import tqdm
 from instock.core.eastmoney_fetcher import eastmoney_fetcher
+
+# tqdm 在 stderr 不可用时（Windows 服务/后台进程）会抛 OSError，禁用进度条
+_tqdm_disabled = not hasattr(sys.stderr, 'fileno')
+try:
+    if not _tqdm_disabled:
+        sys.stderr.fileno()
+except (OSError, AttributeError):
+    _tqdm_disabled = True
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
@@ -50,7 +59,7 @@ def stock_fhps_em(date: str = "20231231") -> pd.DataFrame:
     data_json = r.json()
     total_pages = int(data_json["result"]["pages"])
     big_df = pd.DataFrame()
-    for page in tqdm(range(1, total_pages + 1), leave=False):
+    for page in tqdm(range(1, total_pages + 1), leave=False, disable=_tqdm_disabled):
         # 添加随机延迟，避免爬取过快
         time.sleep(random.uniform(1, 1.5))
         params.update({"pageNumber": page})

@@ -736,10 +736,18 @@ def _ensure_strategy_table():
     else:
         # 增量添加新字段（兼容已有表，MySQL 8.0 不支持 IF NOT EXISTS）
         def _add_col(col_def):
+            """尝试添加列，列已存在（1060）时静默忽略，不写 ERROR 日志"""
             try:
-                mdb.executeSql(f'ALTER TABLE cn_stock_strategy_code ADD COLUMN {col_def}')
-            except Exception:
-                pass  # 列已存在时忽略 (1060 Duplicate column)
+                with mdb.get_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(f'ALTER TABLE cn_stock_strategy_code ADD COLUMN {col_def}')
+            except Exception as e:
+                err_str = str(e)
+                if '1060' in err_str or 'Duplicate column' in err_str:
+                    pass  # 列已存在，正常情况
+                else:
+                    mdb._invalidate_shared_conn()
+                    logging.warning(f"ALTER TABLE ADD COLUMN 异常：{col_def} - {e}")
         _add_col('`category` VARCHAR(30) DEFAULT "stock" AFTER `description`')
         _add_col('`folder_id` INT DEFAULT 0 AFTER `category`')
         _add_col('`compile_count` INT DEFAULT 0 AFTER `slippage`')
@@ -899,8 +907,13 @@ def _ensure_backtest_table():
         ''')
     else:
         try:
-            mdb.executeSql('ALTER TABLE cn_stock_backtest_portfolio '
-                           'ADD COLUMN `result_json` LONGTEXT AFTER `trade_count`')
-        except Exception:
-            pass
+            with mdb.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute('ALTER TABLE cn_stock_backtest_portfolio '
+                                'ADD COLUMN `result_json` LONGTEXT AFTER `trade_count`')
+        except Exception as e:
+            err_str = str(e)
+            if '1060' not in err_str and 'Duplicate column' not in err_str:
+                mdb._invalidate_shared_conn()
+                logging.warning(f"ALTER TABLE cn_stock_backtest_portfolio 异常：{e}")
     _backtest_table_ready = True

@@ -9,7 +9,16 @@ import random
 import time
 
 import pandas as pd
+import sys
 from tqdm import tqdm
+
+# tqdm 在 stderr 不可用时（Windows 服务/后台进程）会抛 OSError，禁用进度条
+_tqdm_disabled = not hasattr(sys.stderr, 'fileno')
+try:
+    if not _tqdm_disabled:
+        sys.stderr.fileno()
+except (OSError, AttributeError):
+    _tqdm_disabled = True
 from instock.core.eastmoney_fetcher import eastmoney_fetcher
 
 __author__ = 'InStock'
@@ -350,7 +359,7 @@ def stock_lhb_jgstatistic_em(symbol: str = "近一月") -> pd.DataFrame:
     data_json = r.json()
     total_page = data_json["result"]["pages"]
     big_df = pd.DataFrame()
-    for page in tqdm(range(1, total_page + 1), leave=False):
+    for page in tqdm(range(1, total_page + 1), leave=False, disable=_tqdm_disabled):
         # 添加随机延迟，避免爬取过快
         time.sleep(random.uniform(1, 1.5))
         params.update({"pageNumber": page})
@@ -451,7 +460,7 @@ def stock_lhb_hyyyb_em(
     total_page = data_json["result"]["pages"]
 
     big_df = pd.DataFrame()
-    for page in tqdm(range(1, total_page + 1), leave=False):
+    for page in tqdm(range(1, total_page + 1), leave=False, disable=_tqdm_disabled):
         # 添加随机延迟，避免爬取过快
         time.sleep(random.uniform(1, 1.5))
         params.update({"pageNumber": page})
@@ -531,7 +540,7 @@ def stock_lhb_yybph_em(symbol: str = "近一月") -> pd.DataFrame:
     data_json = r.json()
     total_page = data_json["result"]["pages"]
     big_df = pd.DataFrame()
-    for page in tqdm(range(1, total_page + 1), leave=False):
+    for page in tqdm(range(1, total_page + 1), leave=False, disable=_tqdm_disabled):
         # 添加随机延迟，避免爬取过快
         time.sleep(random.uniform(1, 1.5))
         params.update({"pageNumber": page})
@@ -639,7 +648,7 @@ def stock_lhb_traderstatistic_em(symbol: str = "近一月") -> pd.DataFrame:
     data_json = r.json()
     total_page = data_json["result"]["pages"]
     big_df = pd.DataFrame()
-    for page in tqdm(range(1, total_page + 1), leave=False):
+    for page in tqdm(range(1, total_page + 1), leave=False, disable=_tqdm_disabled):
         # 添加随机延迟，避免爬取过快
         time.sleep(random.uniform(1, 1.5))
         params.update({"pageNumber": page})
