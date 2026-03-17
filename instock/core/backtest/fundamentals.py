@@ -280,8 +280,10 @@ class FundamentalDataProvider:
             }
             r = fetcher.make_request(url, params=params)
             d = r.json()
-            rows = d.get('data', {}).get('diff', [])
-            total = d.get('data', {}).get('total', 0)
+            # 防御：d.get('data') 可能返回 None 而非 {}
+            data_obj = d.get('data') or {}
+            rows = data_obj.get('diff') or []
+            total = data_obj.get('total', 0)
             all_data.extend(rows)
             if len(rows) == 0 or len(all_data) >= total:
                 break
@@ -636,22 +638,29 @@ class FundamentalDataProvider:
             return False
 
     def _save_fundamental_cache(self):
-        """保存基本面数据缓存"""
+        """保存基本面数据缓存（原子写入：写临时文件后 os.replace，避免并发读到半写文件）"""
         try:
             os.makedirs(_CACHE_DIR, exist_ok=True)
             cache_file = os.path.join(_CACHE_DIR, 'fundamental_v3.pickle')
+            tmp_file = cache_file + '.tmp'
             data = {
                 'stock_info': self._stock_info,
                 'price_lookup': self._price_lookup,
                 'volume_lookup': self._volume_lookup,
                 'candidate_codes': self._candidate_codes,
             }
-            with open(cache_file, 'wb') as f:
+            with open(tmp_file, 'wb') as f:
                 pickle.dump(data, f)
+            os.replace(tmp_file, cache_file)
             size_mb = os.path.getsize(cache_file) / 1e6
             logging.info(f"[基本面] 缓存已保存 ({size_mb:.1f} MB)")
         except Exception as e:
             logging.warning(f"[基本面] 缓存保存失败: {e}")
+            try:
+                if os.path.exists(tmp_file):
+                    os.remove(tmp_file)
+            except Exception:
+                pass
 
 
 # ── get_current_data() 代理对象 ──

@@ -48,12 +48,17 @@ def calculate_metrics(nav_series, benchmark_series=None, trades=None,
         return _empty_metrics()
 
     # ── 收益率 ──
+    if nav[0] == 0:
+        return _empty_metrics()  # 初始净值为0，无法计算
     total_return = (nav[-1] / nav[0] - 1) * 100
     n_years = n_days / _TRADING_DAYS_PER_YEAR
     annual_return = ((nav[-1] / nav[0]) ** (1 / n_years) - 1) * 100 if n_years > 0 else 0
 
-    # ── 日收益率 ──
-    daily_returns = np.diff(nav) / nav[:-1]
+    # ── 日收益率（防御净值归零导致除零） ──
+    safe_nav = nav[:-1].copy()
+    safe_nav[safe_nav == 0] = np.nan
+    daily_returns = np.diff(nav) / safe_nav
+    daily_returns = np.nan_to_num(daily_returns, nan=0.0, posinf=0.0, neginf=0.0)
 
     # ── 策略波动率（年化） ──
     strategy_volatility = float(np.std(daily_returns) * np.sqrt(_TRADING_DAYS_PER_YEAR)) * 100
@@ -107,9 +112,15 @@ def calculate_metrics(nav_series, benchmark_series=None, trades=None,
     has_bm = (benchmark_series is not None and len(benchmark_series) == n_days)
     if has_bm:
         bm = np.array(benchmark_series, dtype=float)
+        if bm[0] == 0:
+            has_bm = False  # 基准起始价为0，跳过基准指标
+    if has_bm:
         benchmark_return = (bm[-1] / bm[0] - 1) * 100
         benchmark_annual_return = ((bm[-1] / bm[0]) ** (1 / n_years) - 1) * 100 if n_years > 0 else 0
-        bm_daily = np.diff(bm) / bm[:-1]
+        safe_bm = bm[:-1].copy()
+        safe_bm[safe_bm == 0] = np.nan
+        bm_daily = np.diff(bm) / safe_bm
+        bm_daily = np.nan_to_num(bm_daily, nan=0.0, posinf=0.0, neginf=0.0)
 
         # 基准波动率（年化）
         benchmark_volatility = float(np.std(bm_daily) * np.sqrt(_TRADING_DAYS_PER_YEAR)) * 100
@@ -125,9 +136,12 @@ def calculate_metrics(nav_series, benchmark_series=None, trades=None,
         excess_nav = np.cumprod(1 + daily_excess)
         excess_nav = np.insert(excess_nav, 0, 1.0)
 
-        # 超额收益最大回撤
+        # 超额收益最大回撤（防御 excess_peak=0 的除零问题）
         excess_peak = np.maximum.accumulate(excess_nav)
-        excess_dd = (excess_nav - excess_peak) / excess_peak
+        safe_excess_peak = excess_peak.copy()
+        safe_excess_peak[safe_excess_peak == 0] = np.nan
+        excess_dd = (excess_nav - excess_peak) / safe_excess_peak
+        excess_dd = np.nan_to_num(excess_dd, nan=0.0)
         excess_max_drawdown = abs(float(np.min(excess_dd))) * 100
 
         # 超额收益夏普比率

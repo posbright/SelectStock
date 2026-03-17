@@ -3,6 +3,7 @@
 
 import datetime
 import logging
+import threading
 import instock.core.stockfetch as stf
 from instock.lib.singleton_type import singleton_type
 
@@ -17,6 +18,7 @@ class stock_trade_date(metaclass=singleton_type):
     def __init__(self):
         self.data = None
         self._loaded_date = None  # 记录数据加载时的日期
+        self._refresh_lock = threading.Lock()  # 防止多线程同时刷新
         self._refresh()
 
     def _refresh(self):
@@ -32,6 +34,9 @@ class stock_trade_date(metaclass=singleton_type):
         # 若当前日期与加载日期不同，重新获取交易日历
         today = datetime.date.today()
         if self._loaded_date is not None and today != self._loaded_date:
-            logging.info(f"stock_trade_date: 检测到跨日({self._loaded_date} → {today})，刷新交易日历")
-            self._refresh()
+            # 多线程保护：避免多线程同时触发跨日刷新
+            with self._refresh_lock:
+                if today != self._loaded_date:
+                    logging.info(f"stock_trade_date: 检测到跨日({self._loaded_date} → {today})，刷新交易日历")
+                    self._refresh()
         return self.data

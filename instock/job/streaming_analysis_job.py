@@ -357,8 +357,9 @@ def _ensure_table_schema(table_name, expected_columns):
         return  # 表不存在，后续 insert_db_from_df 会自动创建
     
     try:
-        import pymysql
-        with pymysql.connect(**mdb.MYSQL_CONN_DBAPI) as conn:
+        # 使用 mdb.get_connection() 代替 raw pymysql.connect()，
+        # 享受线程安全的连接复用和自动重试
+        with mdb.get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT COLUMN_NAME FROM information_schema.columns "
@@ -379,6 +380,7 @@ def _ensure_table_schema(table_name, expected_columns):
             mdb.executeSql(f"DROP TABLE `{table_name}`")
             logging.info(f"已删除旧表 {table_name}，将在写入时自动重建")
     except Exception as e:
+        mdb._invalidate_shared_conn()
         logging.error(f"检查表 {table_name} schema 异常（后续写入可能失败）", exc_info=True)
 
 

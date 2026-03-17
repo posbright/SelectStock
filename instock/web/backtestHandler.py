@@ -14,6 +14,7 @@ import pandas as pd
 import concurrent.futures
 from abc import ABC
 from tornado import gen
+from tornado.ioloop import IOLoop
 import instock.web.base as webBase
 import instock.core.stockfetch as stf
 import instock.core.tablestructure as tbs
@@ -102,6 +103,7 @@ class RunBacktestHandler(webBase.BaseHandler, ABC):
 
 class RunBatchBacktestHandler(webBase.BaseHandler, ABC):
     """批量回测：对某策略在指定时间段内的所有选股记录进行回测"""
+    @gen.coroutine
     def get(self):
         self.set_header('Content-Type', 'application/json;charset=UTF-8')
         
@@ -117,7 +119,10 @@ class RunBatchBacktestHandler(webBase.BaseHandler, ABC):
             return
         
         try:
-            result = _run_batch_backtest(strategy, period, int(limit), horizons=horizons, success_days=success_days)
+            # 批量回测可能耗时较长，offload到线程池避免阻塞IOLoop
+            result = yield IOLoop.current().run_in_executor(
+                None, lambda: _run_batch_backtest(strategy, period, int(limit),
+                                                   horizons=horizons, success_days=success_days))
             self.write(json.dumps(result, ensure_ascii=False, default=_json_default))
         except Exception as e:
             logging.error(f"RunBatchBacktestHandler处理异常", exc_info=True)
@@ -232,6 +237,10 @@ def _run_backtest(code, strategy, period, start_date_str, end_date_str, checkpoi
         buy_date_actual = future_data.iloc[0]['date']
         future_for_calc = future_data
     
+    # 防御：买入价为0或异常时无法计算收益率
+    if buy_price is None or buy_price <= 0:
+        return {"error": f"买入价异常({buy_price})，无法计算收益"}
+
     # 计算各天收益率（扣除交易成本）
     returns = []
     for days in checkpoints:

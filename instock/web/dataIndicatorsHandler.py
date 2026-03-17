@@ -21,19 +21,17 @@ class GetDataIndicatorsHandler(webBase.BaseHandler, ABC):
         name = self.get_argument("name", default=None, strip=False)
         comp_list = []
         try:
-            if code is None:
-                return
-            # 仅从本地缓存读取历史数据，不发起外部API请求
-            stock = stf.read_hist_from_cache((date, code))
-            if stock is None:
-                logging.warning(f"指标页面：{code} 缓存无数据，请确认数据采集任务已运行")
-                return
-
-            pk = vis.get_plot_kline(code, stock, date, name)
-            if pk is None:
-                return
-
-            comp_list.append(pk)
+            if code is not None:
+                # 仅从本地缓存读取历史数据，不发起外部API请求
+                stock = stf.read_hist_from_cache((date, code))
+                if stock is not None:
+                    pk = vis.get_plot_kline(code, stock, date, name)
+                    if pk is not None:
+                        comp_list.append(pk)
+                    else:
+                        logging.warning(f"指标页面：{code} K线图生成失败")
+                else:
+                    logging.warning(f"指标页面：{code} 缓存无数据，请确认数据采集任务已运行")
         except Exception as e:
             logging.error(f"dataIndicatorsHandler.GetDataIndicatorsHandler处理异常", exc_info=True)
 

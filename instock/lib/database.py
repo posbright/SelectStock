@@ -50,25 +50,37 @@ MYSQL_CONN_TORNDB = {'host': f'{db_host}:{str(db_port)}', 'user': db_user, 'pass
 # 通过数据库链接 engine（单例模式，避免每次调用创建新连接池）
 # 2核2G服务器优化：pool_size=2, max_overflow=3, 最多5个连接
 _engine_instance = None
+_engine_lock = threading.Lock()
+_engine_to_db_cache = {}  # {db_name: engine} — 缓存跨库连接池，避免每次创建泄漏连接
 
 
 def engine():
     global _engine_instance
-    if _engine_instance is None:
-        _engine_instance = create_engine(
-            MYSQL_CONN_URL,
-            pool_size=_cfg.get_int('INSTOCK_DB_POOL_SIZE', 2),
-            max_overflow=_cfg.get_int('INSTOCK_DB_MAX_OVERFLOW', 3),
-            pool_recycle=_cfg.get_int('INSTOCK_DB_POOL_RECYCLE', 600),
-            pool_pre_ping=True,
-            pool_timeout=_cfg.get_int('INSTOCK_DB_POOL_TIMEOUT', 30)
-        )
+    if _engine_instance is not None:
+        return _engine_instance
+    with _engine_lock:
+        # 双重检查锁定：避免多线程并发首次调用时创建多个连接池
+        if _engine_instance is None:
+            _engine_instance = create_engine(
+                MYSQL_CONN_URL,
+                pool_size=_cfg.get_int('INSTOCK_DB_POOL_SIZE', 2),
+                max_overflow=_cfg.get_int('INSTOCK_DB_MAX_OVERFLOW', 3),
+                pool_recycle=_cfg.get_int('INSTOCK_DB_POOL_RECYCLE', 600),
+                pool_pre_ping=True,
+                pool_timeout=_cfg.get_int('INSTOCK_DB_POOL_TIMEOUT', 30)
+            )
     return _engine_instance
 
 
 def engine_to_db(to_db):
-    _engine = create_engine(MYSQL_CONN_URL.replace(f'/{db_database}?', f'/{to_db}?'))
-    return _engine
+    """获取跨库连接引擎（线程安全，带缓存避免连接池泄漏）"""
+    if to_db in _engine_to_db_cache:
+        return _engine_to_db_cache[to_db]
+    with _engine_lock:
+        if to_db not in _engine_to_db_cache:
+            _engine_to_db_cache[to_db] = create_engine(
+                MYSQL_CONN_URL.replace(f'/{db_database}?', f'/{to_db}?'))
+    return _engine_to_db_cache[to_db]
 
 
 # DB Api -数据库连接对象connection
@@ -221,7 +233,8 @@ def insert_other_db_from_df(to_db, data, table_name, cols_type, write_index, pri
                 # 重新获取engine（单例模式下dispose后需要重建）
                 if to_db is None:
                     global _engine_instance
-                    _engine_instance = None
+                    with _engine_lock:
+                        _engine_instance = None
                     engine_mysql = engine()
                 else:
                     engine_mysql = engine_to_db(to_db)

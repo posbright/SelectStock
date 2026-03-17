@@ -96,6 +96,10 @@ class PortfolioBacktestEngine:
         start_time = time.time()
         logging.info(f"[回测引擎] 开始回测: {start_date} ~ {end_date}, 初始资金={initial_cash}")
 
+        # 0. 参数校验
+        if initial_cash is None or initial_cash <= 0:
+            return {'status': 'error', 'message': f'初始资金必须大于0，当前值: {initial_cash}'}
+
         # 1. 编译策略
         try:
             self._strategy_funcs = compile_strategy(strategy_code)
@@ -541,6 +545,12 @@ class PortfolioBacktestEngine:
 
         exec_price = self._current_day_prices[code]
 
+        # 防御：价格为0或负数时无法成交
+        if exec_price is None or exec_price <= 0:
+            self._log_messages.append(
+                f"[{date}] [WARN] {code} 价格异常({exec_price})，订单取消")
+            return
+
         # 涨跌停检测
         df = self._stock_data.get(code)
         if df is not None:
@@ -651,6 +661,12 @@ class PortfolioBacktestEngine:
 
             bar = prices[code]
             exec_price = bar  # 使用收盘价
+
+            # 防御：价格为0或负数时无法成交
+            if exec_price is None or exec_price <= 0:
+                self._log_messages.append(
+                    f"[{date}] [WARN] {code} 价格异常({exec_price})，订单取消")
+                continue
 
             # 涨跌停检测
             df = self._stock_data.get(code)

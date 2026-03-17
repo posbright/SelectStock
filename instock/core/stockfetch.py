@@ -191,7 +191,7 @@ __date__ = '2026/02/14'
 cpath_current = os.path.dirname(os.path.dirname(__file__))
 stock_hist_cache_path = os.path.join(cpath_current, 'cache', 'hist')
 if not os.path.exists(stock_hist_cache_path):
-    os.makedirs(stock_hist_cache_path)  # 创建多个文件夹结构。
+    os.makedirs(stock_hist_cache_path, exist_ok=True)  # 创建多个文件夹结构。
 
 
 # 600 601 603 605开头的股票是上证A股
@@ -855,7 +855,7 @@ def _get_cache_file_path(code, adjust=''):
     cache_dir = os.path.join(stock_hist_cache_path, code[:3])  # 按代码前3位分组
     try:
         if not os.path.exists(cache_dir):
-            os.makedirs(cache_dir)
+            os.makedirs(cache_dir, exist_ok=True)
     except Exception as e:
         logging.debug(f"创建缓存目录失败: {cache_dir} - {e}")
     return os.path.join(cache_dir, f"{code}{adjust}.gzip.pickle")
@@ -891,13 +891,21 @@ def _read_cache_meta(code, adjust=''):
 
 
 def _write_cache_meta(code, last_date, adjust='', filtered_version=0):
-    """写入缓存元数据（含过滤版本号）"""
+    """写入缓存元数据（含过滤版本号），使用原子写入避免并发读到半写文件"""
     meta_path = _get_cache_meta_path(code, adjust)
     try:
-        with open(meta_path, 'w') as f:
+        tmp_path = meta_path + '.tmp'
+        with open(tmp_path, 'w') as f:
             f.write(f"{last_date},{datetime.datetime.now().strftime('%Y%m%d%H%M%S')},{filtered_version}")
+        os.replace(tmp_path, meta_path)
     except Exception as e:
         logging.debug(f"写入缓存元数据失败: {code} - {e}")
+        # 清理临时文件
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
 
 
 def _fetch_from_sources(code, fetch_start, date_end, adjust=''):
@@ -1117,15 +1125,23 @@ def stock_hist_cache_incremental(code, date_start, date_end, is_cache=True, adju
                         logging.debug(f"缓存meta写入异常：{code}", exc_info=True)
         
         # 5. 保存更新后的缓存（有新数据或清除了异常行时写入）
+        # 使用原子写入模式（写临时文件 → os.replace）避免并发读取到半写的pickle文件
         need_save = has_new_data or n_outliers > 0
         if is_cache and need_save and combined_data is not None and len(combined_data) > 0:
+            tmp_file = cache_file + '.tmp'
             try:
-                combined_data.to_pickle(cache_file, compression="gzip")
+                combined_data.to_pickle(tmp_file, compression="gzip")
+                os.replace(tmp_file, cache_file)
                 if 'date' in combined_data.columns:
                     last_date = _to_date_str(combined_data['date'].max())
                     _write_cache_meta(code, last_date, adjust, filtered_version=_FILTER_VERSION)
             except Exception as e:
                 logging.warning(f"保存缓存失败: {code} - {e}")
+                try:
+                    if os.path.exists(tmp_file):
+                        os.remove(tmp_file)
+                except Exception:
+                    pass
         
         # 6. 过滤并返回请求范围内的数据
         result = combined_data[
