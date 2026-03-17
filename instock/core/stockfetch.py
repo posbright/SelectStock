@@ -13,6 +13,7 @@ import instock.core.tablestructure as tbs
 import instock.lib.trade_time as trd
 import instock.core.crawling.trade_date_hist as tdh
 import instock.core.crawling.fund_etf_em as fee
+import instock.core.crawling.stock_index_em as sie  # 指数行情
 import instock.core.crawling.stock_selection as sst
 import instock.core.crawling.stock_lhb_em as sle
 import instock.core.crawling.stock_lhb_sina as sls
@@ -364,6 +365,38 @@ def fetch_etfs(date):
         return data
     except Exception as e:
         logging.error(f"stockfetch.fetch_etfs处理异常", exc_info=True)
+    return None
+
+
+# 读取当天指数数据（东方财富数据源）
+def fetch_index_spots(date):
+    """
+    获取沪深两市全部指数的实时行情数据。
+    数据结构与 TABLE_CN_INDEX_SPOT 对齐。
+    """
+    data = None
+    try:
+        logging.info("尝试从东方财富获取指数数据...")
+        data = sie.stock_index_spot_em()
+        if data is not None and len(data.index) > 0:
+            logging.info(f"成功获取 {len(data)} 条指数数据")
+        else:
+            logging.error("指数数据获取失败：返回为空")
+            return None
+    except Exception as e:
+        logging.error(f"指数数据获取失败：{e}")
+        return None
+
+    try:
+        if date is None:
+            data.insert(0, 'date', datetime.datetime.now().strftime("%Y-%m-%d"))
+        else:
+            data.insert(0, 'date', date.strftime("%Y-%m-%d"))
+        data.columns = list(tbs.TABLE_CN_INDEX_SPOT['columns'])
+        # 指数不过滤停牌（指数始终有报价）
+        return data
+    except Exception as e:
+        logging.error(f"stockfetch.fetch_index_spots处理异常", exc_info=True)
     return None
 
 
@@ -867,7 +900,276 @@ def _get_cache_meta_path(code, adjust=''):
     return os.path.join(cache_dir, f"{code}{adjust}.meta")
 
 
-# 当前过滤算法版本号：向量化 exclude-self 邻居中位数 (2025-03)
+# ══════════════════════════════════════════════
+# 指数缓存目录（与股票缓存分离，避免代码冲突）
+# cache/hist/index/{code}.gzip.pickle
+# ══════════════════════════════════════════════
+index_hist_cache_path = os.path.join(stock_hist_cache_path, 'index')
+if not os.path.exists(index_hist_cache_path):
+    os.makedirs(index_hist_cache_path, exist_ok=True)
+
+
+def _get_index_cache_file_path(code):
+    """获取指数缓存文件路径（指数无复权，不需要 adjust 参数）"""
+    return os.path.join(index_hist_cache_path, f"{code}.gzip.pickle")
+
+
+def _get_index_cache_meta_path(code):
+    """获取指数缓存元数据文件路径"""
+    return os.path.join(index_hist_cache_path, f"{code}.meta")
+
+
+def index_hist_cache_incremental(code, date_start, date_end):
+    """
+    增量更新指数历史 K 线缓存。
+
+    与 stock_hist_cache_incremental 类似，但使用指数专用 API 和缓存目录。
+    指数无复权，缓存路径为 cache/hist/index/{code}.gzip.pickle
+
+    参数：
+        code: 指数代码（如 '000300'）
+        date_start: 起始日期 YYYYMMDD
+        date_end: 结束日期 YYYYMMDD
+
+    返回：
+        DataFrame 或 None
+    """
+    _standard_columns = ('date', 'open', 'close', 'high', 'low', 'volume',
+                         'deal_amount', 'amplitude', 'quote_change', 'ups_downs', 'turnoverrate')
+    cache_file = _get_index_cache_file_path(code)
+
+    try:
+        cached_data = None
+        cache_first_date = None
+        cache_last_date = None
+
+        # 1. 读取缓存
+        if os.path.isfile(cache_file):
+            try:
+                cached_data = pd.read_pickle(cache_file, compression="gzip")
+                if cached_data is not None and len(cached_data) > 0 and 'date' in cached_data.columns:
+                    valid_cols = [c for c in _standard_columns if c in cached_data.columns]
+                    cached_data = cached_data[valid_cols]
+                    cache_first_date = _to_date_str(cached_data['date'].min())
+                    cache_last_date = _to_date_str(cached_data['date'].max())
+                else:
+                    cached_data = None
+            except Exception as e:
+                logging.warning(f"读取指数缓存失败，将重新获取: {code} - {e}")
+                cached_data = None
+
+        # 2. 确定需要拉取的区间
+        need_tail = False
+        need_head = False
+        tail_start = None
+        head_end = None
+
+        if cached_data is None:
+            need_tail = True
+            tail_start = date_start
+        else:
+            if cache_last_date < date_end:
+                need_tail = True
+                tail_start = cache_last_date
+            if date_start < cache_first_date:
+                need_head = True
+                head_end = cache_first_date
+
+        # 3. 从东方财富获取新增数据
+        new_parts = []
+        if need_tail:
+            try:
+                raw = sie.stock_index_hist_em(
+                    symbol=code, period='daily',
+                    start_date=tail_start, end_date=date_end
+                )
+                if raw is not None and len(raw) > 0:
+                    _df = _normalize_index_hist(raw, _standard_columns)
+                    if _df is not None:
+                        new_parts.append(_df)
+                        logging.info(f"指数 {code} 尾部增量: +{len(_df)} 条")
+            except Exception as e:
+                logging.warning(f"获取指数 {code} 尾部数据失败: {e}")
+
+        if need_head:
+            try:
+                raw = sie.stock_index_hist_em(
+                    symbol=code, period='daily',
+                    start_date=date_start, end_date=head_end
+                )
+                if raw is not None and len(raw) > 0:
+                    _df = _normalize_index_hist(raw, _standard_columns)
+                    if _df is not None:
+                        new_parts.append(_df)
+                        logging.info(f"指数 {code} 头部补全: +{len(_df)} 条")
+            except Exception as e:
+                logging.warning(f"获取指数 {code} 头部数据失败: {e}")
+
+        # 4. 合并并保存
+        if new_parts:
+            all_parts = ([cached_data] if cached_data is not None else []) + new_parts
+            merged = pd.concat(all_parts, ignore_index=True)
+            merged['date'] = pd.to_datetime(merged['date'])
+            merged = merged.drop_duplicates(subset=['date'], keep='last')
+            merged = merged.sort_values('date').reset_index(drop=True)
+
+            # 原子写入缓存
+            tmp_file = cache_file + '.tmp'
+            try:
+                merged.to_pickle(tmp_file, compression="gzip")
+                if os.path.exists(cache_file):
+                    os.remove(cache_file)
+                os.rename(tmp_file, cache_file)
+            except Exception as e:
+                logging.warning(f"写入指数缓存失败: {code} - {e}")
+                if os.path.exists(tmp_file):
+                    try:
+                        os.remove(tmp_file)
+                    except Exception:
+                        pass
+
+            # 写入 meta
+            try:
+                meta_path = _get_index_cache_meta_path(code)
+                last_date = _to_date_str(merged['date'].max())
+                with open(meta_path, 'w') as f:
+                    f.write(f"{last_date},{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}")
+            except Exception:
+                pass
+
+            return merged
+
+        return cached_data
+
+    except Exception as e:
+        logging.error(f"index_hist_cache_incremental 异常: {code} - {e}", exc_info=True)
+    return None
+
+
+def _normalize_index_hist(raw_df, standard_columns):
+    """
+    将东方财富返回的中文列名指数 K 线数据 → 标准化 DataFrame
+
+    映射关系与 stock_zh_a_hist 返回格式一致。
+    """
+    col_map = {
+        '日期': 'date', '开盘': 'open', '收盘': 'close',
+        '最高': 'high', '最低': 'low', '成交量': 'volume',
+        '成交额': 'deal_amount', '振幅': 'amplitude',
+        '涨跌幅': 'quote_change', '涨跌额': 'ups_downs',
+        '换手率': 'turnoverrate',
+    }
+    df = raw_df.rename(columns=col_map)
+    valid_cols = [c for c in standard_columns if c in df.columns]
+    if 'date' not in valid_cols or 'close' not in valid_cols:
+        return None
+    df = df[valid_cols].copy()
+    df['date'] = pd.to_datetime(df['date'])
+    for c in ['open', 'high', 'low', 'close', 'volume']:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors='coerce')
+    return df
+
+
+def read_index_hist_from_cache(code, date_start=None, date_end=None):
+    """
+    从缓存读取指数历史 K 线数据（只读，不发起 API 请求）。
+
+    与 read_stock_hist_from_cache 类似，但读取指数专用缓存目录。
+
+    返回包含 date/open/high/low/close/volume 列的 DataFrame，或 None。
+    """
+    try:
+        cache_file = _get_index_cache_file_path(code)
+        if not os.path.isfile(cache_file):
+            return None
+
+        data = pd.read_pickle(cache_file, compression="gzip")
+        if data is None or len(data) == 0 or 'date' not in data.columns:
+            return None
+
+        data['date'] = pd.to_datetime(data['date'])
+
+        # 日期过滤
+        if date_start:
+            data = data[data['date'] >= pd.Timestamp(str(date_start))]
+        if date_end:
+            data = data[data['date'] <= pd.Timestamp(str(date_end))]
+
+        if len(data) == 0:
+            return None
+
+        data = data.sort_values('date').reset_index(drop=True)
+
+        # 计算 p_change（涨跌幅 ROC 1日）
+        if 'close' in data.columns:
+            data = data.copy()
+            data['p_change'] = tl.ROC(data['close'].values, 1)
+            data['p_change'] = data['p_change'].fillna(0.0)
+
+        return data
+    except Exception as e:
+        logging.warning(f"读取指数缓存异常 {code}: {e}")
+        return None
+
+
+def update_index_caches(index_codes=None, date_start=None, date_end=None):
+    """
+    批量更新指数的 K 线缓存。
+
+    参数：
+        index_codes: 指数代码列表。None 时使用默认的主要指数列表。
+        date_start: 起始日期 YYYYMMDD
+        date_end: 结束日期 YYYYMMDD
+
+    返回：
+        (success_count, fail_count)
+    """
+    # 默认主要指数
+    if index_codes is None:
+        index_codes = [
+            '000001',  # 上证指数
+            '000002',  # 上证A股指数
+            '000003',  # 上证B股指数
+            '000016',  # 上证50
+            '000300',  # 沪深300
+            '000688',  # 科创50
+            '000852',  # 中证1000
+            '000905',  # 中证500
+            '399001',  # 深证成指
+            '399005',  # 中小板指
+            '399006',  # 创业板指
+            '399300',  # 沪深300（深交所）
+            '399673',  # 创业板50
+            '399951',  # 中证银行
+        ]
+
+    if date_start is None:
+        # 默认获取 10 年数据
+        _years = HIST_DATA_DEFAULT_YEARS
+        start_dt = datetime.datetime.now() - datetime.timedelta(days=_years * 365)
+        date_start = start_dt.strftime("%Y%m%d")
+    if date_end is None:
+        date_end = datetime.datetime.now().strftime("%Y%m%d")
+
+    success = 0
+    fail = 0
+    for code in index_codes:
+        try:
+            result = index_hist_cache_incremental(code, date_start, date_end)
+            if result is not None and len(result) > 0:
+                success += 1
+                logging.info(f"指数 {code} K线缓存更新成功: {len(result)} 条")
+            else:
+                fail += 1
+                logging.warning(f"指数 {code} K线缓存更新失败: 无数据")
+            # 每个指数之间添加延迟
+            time.sleep(random.uniform(0.5, 1.5))
+        except Exception as e:
+            fail += 1
+            logging.warning(f"指数 {code} K线缓存更新异常: {e}")
+
+    return success, fail
 # 当此版本号与 .meta 中的 filtered_version 匹配时，读取缓存可跳过 _filter_ohlc_outliers
 _FILTER_VERSION = 2
 

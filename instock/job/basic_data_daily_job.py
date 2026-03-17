@@ -75,12 +75,39 @@ def save_nph_etf_spot_data(date, before=True):
         logging.error(f"basic_data_daily_job.save_nph_etf_spot_data处理异常", exc_info=True)
 
 
+# 指数实时行情数据。
+def save_nph_index_spot_data(date, before=True):
+    if before:
+        return
+    try:
+        data = stf.fetch_index_spots(date)
+        if data is None or len(data.index) == 0:
+            return
+
+        table_name = tbs.TABLE_CN_INDEX_SPOT['name']
+        # 删除老数据。
+        if mdb.checkTableIsExist(table_name):
+            try:
+                del_sql = f"DELETE FROM `{table_name}` WHERE `date` = %s"
+                mdb.executeSql(del_sql, (date,))
+            except Exception as e:
+                logging.warning(f"basic_data_daily_job.save_nph_index_spot_data删除旧数据失败，将使用upsert模式继续: {e}")
+            cols_type = None
+        else:
+            cols_type = tbs.get_field_types(tbs.TABLE_CN_INDEX_SPOT['columns'])
+
+        mdb.insert_db_from_df(data, table_name, cols_type, False, "`date`,`code`")
+    except Exception as e:
+        logging.error(f"basic_data_daily_job.save_nph_index_spot_data处理异常", exc_info=True)
+
+
 
 def main():
     if len(sys.argv) > 1:
         # 批量模式（指定日期/日期范围）— 由 run_with_args 逐日期解析
         runt.run_with_args(save_nph_stock_spot_data)
         runt.run_with_args(save_nph_etf_spot_data)
+        runt.run_with_args(save_nph_index_spot_data)
     else:
         # 当前时间模式（hourly cron / execute_daily_job 调用）
         # 确定日期一次，stock和ETF共享同一日期，
@@ -90,6 +117,7 @@ def main():
         logging.info(f"basic_data_daily_job 当前时间模式: run_date_nph={run_date_nph}")
         save_nph_stock_spot_data(run_date_nph, False)
         save_nph_etf_spot_data(run_date_nph, False)
+        save_nph_index_spot_data(run_date_nph, False)
 
 
 def _init_logging():

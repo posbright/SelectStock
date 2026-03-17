@@ -277,6 +277,10 @@ class GetKlineDataHandler(webBase.BaseHandler, ABC):
             today = datetime.datetime.now().strftime('%Y-%m-%d')
             stock = stf.read_hist_from_cache((today, code), years=50)
 
+            # 股票缓存未命中，尝试指数缓存
+            if stock is None or stock.empty:
+                stock = stf.read_index_hist_from_cache(code)
+
             if stock is None or stock.empty:
                 self.write(json.dumps({"error": "无K线数据（缓存未命中，请确认数据采集任务已运行）", "code": code}, ensure_ascii=False))
                 return

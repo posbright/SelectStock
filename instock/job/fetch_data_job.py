@@ -56,7 +56,7 @@ def fetch_all_data(date):
 
     # Step 1: 清理过期缓存
     try:
-        logging.info("Step 1/3: 清理过期缓存...")
+        logging.info("Step 1/4: 清理过期缓存...")
         cleaned = stf.clean_expired_cache()
         logging.info(f"缓存清理完成，清理了 {cleaned} 个文件")
     except Exception as e:
@@ -64,7 +64,7 @@ def fetch_all_data(date):
 
     # Step 2: 预加载实时行情（stock_data 单例）
     try:
-        logging.info("Step 2/3: 预加载实时行情数据...")
+        logging.info("Step 2/4: 预加载实时行情数据...")
         spot_start = time.time()
         spot = stock_data(date).get_data()
         if spot is not None:
@@ -80,7 +80,7 @@ def fetch_all_data(date):
     # 仅触发缓存增量更新，每只股票处理完后即释放内存
     # 后续 Phase 4 分析时从缓存按需读取，峰值内存 < 100MB
     try:
-        logging.info("Step 3/3: 批量更新历史K线缓存（低内存模式）...")
+        logging.info("Step 3/4: 批量更新历史K线缓存（低内存模式）...")
         hist_start = time.time()
         
         import instock.core.tablestructure as tbs
@@ -106,6 +106,18 @@ def fetch_all_data(date):
         logging.info(f"历史K线缓存更新完成：成功 {success}，失败 {fail}，耗时 {elapsed_hist:.1f}秒")
     except Exception as e:
         logging.error(f"历史K线缓存更新异常", exc_info=True)
+
+    # Step 4: 更新指数K线缓存
+    try:
+        logging.info("Step 4: 更新指数K线缓存...")
+        idx_start = time.time()
+        idx_success, idx_fail = stf.update_index_caches(
+            date_start=date_start, date_end=date_end
+        )
+        elapsed_idx = time.time() - idx_start
+        logging.info(f"指数K线缓存更新完成：成功 {idx_success}，失败 {idx_fail}，耗时 {elapsed_idx:.1f}秒")
+    except Exception as e:
+        logging.warning(f"指数K线缓存更新异常（不影响后续执行）：{e}")
 
     elapsed = time.time() - start_time
     logging.info(f"===== Phase 1: 数据获取完成，总耗时 {elapsed:.1f}秒 =====")

@@ -126,36 +126,77 @@ def load_stock_data(code, start_date=None, end_date=None):
 
 
 def _load_from_cache(code):
-    """从本地 pickle 缓存加载，返回 DataFrame 或 None"""
+    """
+    从本地 pickle 缓存加载，返回 DataFrame 或 None
+
+    缓存搜索顺序：
+    1. stockfetch 统一缓存路径: cache/hist/{code[:3]}/{code}qfq.gzip.pickle（压缩pickle）
+    2. data_feed 旧缓存路径: cache/hist/{code}.gzip.pickle（普通pickle）
+    """
+    # 优先：stockfetch 统一路径
+    cache_dir_unified = os.path.join(_CACHE_DIR, code[:3])
+    cache_file_unified = os.path.join(cache_dir_unified, f"{code}qfq.gzip.pickle")
+    if os.path.exists(cache_file_unified):
+        try:
+            df = pd.read_pickle(cache_file_unified, compression="gzip")
+            df = _normalize_cache_df(df)
+            if df is not None:
+                return df
+        except Exception as e:
+            logging.debug(f"读取统一缓存失败 {code}: {e}")
+
+    # 降级：旧 data_feed 路径
     cache_file = os.path.join(_CACHE_DIR, f"{code}.gzip.pickle")
     if not os.path.exists(cache_file):
         return None
     try:
         df = pd.read_pickle(cache_file)
-        if df is None or len(df) == 0:
-            return None
-
-        # 确保日期列
-        if 'date' in df.columns:
-            if not pd.api.types.is_datetime64_any_dtype(df['date']):
-                df['date'] = pd.to_datetime(df['date'])
-        elif df.index.name == 'date' or isinstance(df.index, pd.DatetimeIndex):
-            df = df.reset_index()
-            df.rename(columns={df.columns[0]: 'date'}, inplace=True)
-            df['date'] = pd.to_datetime(df['date'])
-
-        if 'date' not in df.columns:
-            return None
-
-        # 检查必需列
-        for c in ['open', 'high', 'low', 'close', 'volume']:
-            if c not in df.columns:
-                return None
-
-        return df.sort_values('date').reset_index(drop=True)
+        return _normalize_cache_df(df)
     except Exception as e:
         logging.warning(f"加载K线缓存异常 {code}: {e}")
         return None
+
+
+def _load_index_from_cache(code):
+    """
+    从指数缓存目录加载，返回 DataFrame 或 None
+
+    缓存路径: cache/hist/index/{code}.gzip.pickle
+    """
+    cache_file = os.path.join(_CACHE_DIR, 'index', f"{code}.gzip.pickle")
+    if not os.path.exists(cache_file):
+        return None
+    try:
+        df = pd.read_pickle(cache_file, compression="gzip")
+        return _normalize_cache_df(df)
+    except Exception as e:
+        logging.debug(f"加载指数缓存异常 {code}: {e}")
+        return None
+
+
+def _normalize_cache_df(df):
+    """标准化缓存 DataFrame，确保包含必需列"""
+    if df is None or len(df) == 0:
+        return None
+
+    # 确保日期列
+    if 'date' in df.columns:
+        if not pd.api.types.is_datetime64_any_dtype(df['date']):
+            df['date'] = pd.to_datetime(df['date'])
+    elif df.index.name == 'date' or isinstance(df.index, pd.DatetimeIndex):
+        df = df.reset_index()
+        df.rename(columns={df.columns[0]: 'date'}, inplace=True)
+        df['date'] = pd.to_datetime(df['date'])
+
+    if 'date' not in df.columns:
+        return None
+
+    # 检查必需列
+    for c in ['open', 'high', 'low', 'close', 'volume']:
+        if c not in df.columns:
+            return None
+
+    return df.sort_values('date').reset_index(drop=True)
 
 
 def load_multiple_stocks(codes, start_date=None, end_date=None):
@@ -219,7 +260,10 @@ def load_benchmark_data(code='000300', start_date=None, end_date=None):
     """
     加载基准指数 K 线数据。
 
-    首先尝试从缓存加载，如果没有则尝试从 AkShare 获取。
+    优先级：
+    1. 指数专用缓存（cache/hist/index/{code}.gzip.pickle）
+    2. 股票缓存（兼容旧路径，用于非指数代码）
+    3. AkShare 在线获取（最终降级）
 
     Args:
         code: 指数代码（默认沪深300 = '000300'）
@@ -229,12 +273,26 @@ def load_benchmark_data(code='000300', start_date=None, end_date=None):
     Returns:
         DataFrame: 包含 date/close 列。无数据返回 None。
     """
-    # 尝试从缓存加载
+    # 1. 优先从指数缓存加载
+    df = _load_index_from_cache(code)
+    if df is not None:
+        # 日期过滤
+        if start_date:
+            df = df[df['date'] >= pd.Timestamp(start_date)]
+        if end_date:
+            df = df[df['date'] <= pd.Timestamp(end_date)]
+        if len(df) > 0:
+            df = df.sort_values('date').reset_index(drop=True)
+            df['pre_close'] = df['close'].shift(1)
+            logging.info(f"从指数缓存加载基准 {code} 数据: {len(df)} 条")
+            return df
+
+    # 2. 降级：尝试从股票缓存加载（兼容旧数据）
     df = load_stock_data(code, start_date, end_date)
     if df is not None:
         return df
 
-    # 尝试用 AkShare 获取指数数据
+    # 3. 最终降级：尝试用 AkShare 获取指数数据
     # 主要上证/中证指数（以 0 开头但属上海交易所）
     _SH_INDICES = {'000001', '000002', '000003', '000016', '000300',
                    '000688', '000852', '000905', '000906', '000985'}

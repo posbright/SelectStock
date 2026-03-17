@@ -60,6 +60,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '每日ETF数据', tableName: 'cn_etf_spot', isRealtime: true }
       },
       {
+        path: 'index',
+        name: 'IndexSpot',
+        component: () => import('@/views/stock/StockData.vue'),
+        meta: { title: '每日指数数据', tableName: 'cn_index_spot', isRealtime: true }
+      },
+      {
         path: 'bonus',
         name: 'StockBonus',
         component: () => import('@/views/stock/StockData.vue'),

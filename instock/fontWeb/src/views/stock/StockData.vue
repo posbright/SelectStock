@@ -199,7 +199,7 @@ const monetaryAmountFields = new Set([
 ])
 
 // stock_spot / etf_spot 表中市值字段的原始值单位为"万元"，需先乘 10000 转为元再格式化
-const wanyuanSpotTables = new Set(['cn_stock_spot', 'cn_etf_spot'])
+const wanyuanSpotTables = new Set(['cn_stock_spot', 'cn_etf_spot', 'cn_index_spot'])
 const wanyuanFields = new Set(['total_market_cap', 'free_cap'])
 
 // 不应显示为百分比的字段（虽然名称中含有 rate/ratio）

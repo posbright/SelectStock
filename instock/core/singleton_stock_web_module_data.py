@@ -154,6 +154,16 @@ class stock_web_module_data(metaclass=singleton_type):
             is_realtime=True
         ), wmd.web_module_data(
             mode="query",
+            type="股票基本数据",
+            ico="fa fa-line-chart",
+            name=tbs.TABLE_CN_INDEX_SPOT['cn'],
+            table_name=tbs.TABLE_CN_INDEX_SPOT['name'],
+            columns=tuple(tbs.TABLE_CN_INDEX_SPOT['columns']),
+            column_names=tbs.get_field_cns(tbs.TABLE_CN_INDEX_SPOT['columns']),
+            primary_key=[],
+            is_realtime=True
+        ), wmd.web_module_data(
+            mode="query",
             type="股票指标数据",
             ico="fa fa-indent",
             name=tbs.TABLE_CN_STOCK_INDICATORS['cn'],
