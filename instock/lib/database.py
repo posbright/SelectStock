@@ -4,6 +4,7 @@
 import logging
 import os
 import time
+import threading
 import pymysql
 from sqlalchemy import create_engine, text
 from sqlalchemy.types import NVARCHAR
@@ -71,8 +72,10 @@ def engine_to_db(to_db):
 
 
 # DB Api -数据库连接对象connection
-# 单例连接复用（Tornado 单线程安全），避免远程 DB 频繁创建 TCP 连接
-_shared_conn = None
+# 使用 threading.local() 实现每线程独立连接，避免多线程共享连接导致协议错乱
+# （2026-03-17 故障根因：streaming_analysis ThreadPoolExecutor 中多线程共享
+#  _shared_conn 导致 Packet sequence number wrong / read of closed file 雪崩）
+_thread_local = threading.local()
 
 
 class _ReusableConnection:
@@ -88,26 +91,39 @@ class _ReusableConnection:
         return getattr(self._conn, name)
 
 
-def get_connection():
-    """获取数据库连接。优先复用已有连接（ping 检测存活），失败则新建。
-    返回 _ReusableConnection 包装器，with 语句不会关闭底层连接。"""
-    global _shared_conn
-    if _shared_conn is not None:
+def _invalidate_shared_conn():
+    """安全地废弃当前线程的数据库连接，强制下次 get_connection() 创建新连接。
+    解决连接损坏后重试仍复用坏连接导致雪崩式失败的问题（2026-03-17 故障根因）。"""
+    conn = getattr(_thread_local, 'conn', None)
+    if conn is not None:
         try:
-            _shared_conn.ping(reconnect=True)
-            return _ReusableConnection(_shared_conn)
+            conn.close()
+        except Exception:
+            pass
+        _thread_local.conn = None
+
+
+def get_connection():
+    """获取数据库连接。优先复用当前线程已有连接（ping 检测存活），失败则新建。
+    返回 _ReusableConnection 包装器，with 语句不会关闭底层连接。
+    线程安全：每个线程有独立的连接实例（threading.local）。"""
+    conn = getattr(_thread_local, 'conn', None)
+    if conn is not None:
+        try:
+            conn.ping(reconnect=True)
+            return _ReusableConnection(conn)
         except Exception:
             try:
-                _shared_conn.close()
+                conn.close()
             except Exception:
                 pass
-            _shared_conn = None
+            _thread_local.conn = None
 
     max_retries = _DB_CONN_RETRIES
     for attempt in range(1, max_retries + 1):
         try:
-            _shared_conn = pymysql.connect(**MYSQL_CONN_DBAPI)
-            return _ReusableConnection(_shared_conn)
+            _thread_local.conn = pymysql.connect(**MYSQL_CONN_DBAPI)
+            return _ReusableConnection(_thread_local.conn)
         except Exception as e:
             if attempt < max_retries and _is_retryable_error(e):
                 logging.warning(f"database.get_connection瞬态错误（第{attempt}/{max_retries}次重试）：{type(e).__name__}")
@@ -134,11 +150,16 @@ def _mysql_upsert(table, conn, keys, data_iter):
 
 # 判断是否为可重试的数据库瞬态错误（死锁、锁超时、连接异常等）
 def _is_retryable_error(e):
+    # 特殊异常类型：连接损坏导致的非数据库异常也应重试
+    if isinstance(e, (ValueError, IndexError, OSError, BrokenPipeError)):
+        return True
     error_str = str(e)
     retryable_codes = ['1205', '1213', 'Deadlock', 'Lock wait timeout',
                        'Packet sequence', 'PendingRollbackError',
                        'Lost connection', 'Gone away', 'Can\'t connect',
-                       'Connection refused', 'broken pipe']
+                       'Connection refused', 'broken pipe',
+                       'read of closed file', 'not subscriptable',
+                       'closed connection', 'server has gone']
     return any(code.lower() in error_str.lower() for code in retryable_codes)
 
 
@@ -225,6 +246,7 @@ def insert_other_db_from_df(to_db, data, table_name, cols_type, write_index, pri
                         for k in indexs:
                             db.execute(f'ALTER TABLE `{table_name}` ADD INDEX IN{k}({indexs[k]});')
         except Exception as e:
+            _invalidate_shared_conn()  # 废弃可能损坏的连接
             logging.error(f"database.insert_other_db_from_df处理异常：{table_name}表", exc_info=True)
 
 
@@ -264,6 +286,7 @@ def update_db_from_df(data, table_name, where):
                     params = set_params + where_params
                     db.execute(sql, params)
     except Exception as e:
+        _invalidate_shared_conn()  # 废弃可能损坏的连接
         logging.error(f"database.update_db_from_df处理异常：{table_name}表", exc_info=True)
 
 
@@ -279,10 +302,12 @@ def checkTableIsExist(tableName):
                         FROM information_schema.tables
                         WHERE table_schema = %s AND table_name = %s
                         """, (db_database, tableName))
-                    if db.fetchone()[0] >= 1:
+                    row = db.fetchone()
+                    if row is not None and row[0] >= 1:
                         return True
                     return False
         except Exception as e:
+            _invalidate_shared_conn()  # 废弃损坏连接，避免重试时雪崩
             if attempt < max_retries and _is_retryable_error(e):
                 logging.warning(f"database.checkTableIsExist瞬态错误（第{attempt}/{max_retries}次重试）：{type(e).__name__}")
                 time.sleep(1 * attempt)
@@ -300,6 +325,7 @@ def executeSql(sql, params=()):
                     db.execute(sql, params)
                     return
         except Exception as e:
+            _invalidate_shared_conn()  # 废弃损坏连接，避免重试时雪崩
             if attempt < max_retries and _is_retryable_error(e):
                 logging.warning(f"database.executeSql瞬态错误（第{attempt}/{max_retries}次重试）：{type(e).__name__}")
                 time.sleep(1 * attempt)
@@ -318,6 +344,7 @@ def executeSqlFetch(sql, params=()):
                     db.execute(sql, params)
                     return db.fetchall()
         except Exception as e:
+            _invalidate_shared_conn()  # 废弃损坏连接，避免重试时雪崩
             if attempt < max_retries and _is_retryable_error(e):
                 logging.warning(f"database.executeSqlFetch瞬态错误（第{attempt}/{max_retries}次重试）：{type(e).__name__}")
                 time.sleep(1 * attempt)
@@ -340,6 +367,7 @@ def executeSqlCount(sql, params=()):
                     else:
                         return 0
         except Exception as e:
+            _invalidate_shared_conn()  # 废弃损坏连接，避免重试时雪崩
             if attempt < max_retries and _is_retryable_error(e):
                 logging.warning(f"database.executeSqlCount瞬态错误（第{attempt}/{max_retries}次重试）：{type(e).__name__}")
                 time.sleep(1 * attempt)

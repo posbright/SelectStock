@@ -45,10 +45,15 @@ class CreatePaperTradingHandler(webBase.BaseHandler, ABC):
                         (strategy_id, name or f'模拟盘-{strategy_id}', initial_cash,
                          initial_cash, initial_cash, 'running'))
                     cur.execute('SELECT LAST_INSERT_ID()')
-                    paper_id = cur.fetchone()[0]
+                    row = cur.fetchone()
+                    paper_id = row[0] if row is not None else None
 
+            if paper_id is None:
+                self.write(json.dumps({'code': -1, 'msg': '创建模拟盘失败'}))
+                return
             self.write(json.dumps({'code': 0, 'data': {'id': paper_id}}, ensure_ascii=False))
         except Exception as e:
+            mdb._invalidate_shared_conn()  # 废弃可能损坏的连接
             logging.error("CreatePaperTrading异常", exc_info=True)
             self.write(json.dumps({'code': -1, 'msg': str(e)}))
 

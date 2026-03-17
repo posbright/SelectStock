@@ -464,6 +464,7 @@ def _ensure_params_table():
                     """)
             logging.info("已创建策略参数表 cn_strategy_params")
     except Exception as e:
+        mdb._invalidate_shared_conn()  # 废弃可能损坏的连接
         logging.error(f"创建策略参数表异常", exc_info=True)
 
 

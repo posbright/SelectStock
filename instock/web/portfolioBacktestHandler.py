@@ -689,13 +689,20 @@ class GetPortfolioBacktestDetailHandler(webBase.BaseHandler, ABC):
 # ── 辅助函数 ──
 
 def _insert_and_get_id(sql, params=()):
-    """INSERT 并返回 LAST_INSERT_ID()，在同一个连接中完成"""
-    wrapper = mdb.get_connection()
-    conn = wrapper._conn if hasattr(wrapper, '_conn') else wrapper
-    with conn.cursor() as cur:
-        cur.execute(sql, params)
-        cur.execute('SELECT LAST_INSERT_ID()')
-        return cur.fetchone()[0]
+    """INSERT 并返回 LAST_INSERT_ID()，在同一个连接中完成。
+    线程安全，带错误处理和连接失效保护。"""
+    try:
+        with mdb.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                cur.execute('SELECT LAST_INSERT_ID()')
+                row = cur.fetchone()
+                if row is None:
+                    raise RuntimeError("LAST_INSERT_ID() 返回 None，INSERT 可能未成功")
+                return row[0]
+    except Exception:
+        mdb._invalidate_shared_conn()
+        raise
 
 
 _strategy_table_ready = False
