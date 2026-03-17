@@ -743,3 +743,98 @@ GET /instock/api/trade_date
 
 - `run_date`: 最近已收盘的交易日（用于非实时数据表）
 - `run_date_nph`: 当前交易日（含未收盘，用于实时数据表）
+
+---
+
+## 组合回测 API
+
+> 聚宽风格的组合回测引擎，支持多股票持仓、T+1交易、基本面选股。
+
+### 获取策略模板列表
+
+```
+GET /instock/api/strategy/templates
+```
+
+**响应**:
+
+```json
+{
+  "code": 0,
+  "data": [
+    {
+      "id": "bank_rotation",
+      "name": "银行股轮动策略(聚宽)",
+      "category": "stock",
+      "description": "持有中证银行指数(399951)成份股中PB最低的银行股，每周一轮动",
+      "code": "def initialize(context): ..."
+    }
+  ]
+}
+```
+
+### 运行组合回测
+
+```
+POST /instock/api/backtest/portfolio/run
+```
+
+**请求体 (JSON)**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|-----|------|
+| code | string | 是 | Python策略代码 |
+| strategy_id | int | 否 | 关联的策略ID |
+| start_date | string | 是 | 开始日期 YYYY-MM-DD |
+| end_date | string | 是 | 结束日期 YYYY-MM-DD |
+| initial_cash | float | 否 | 初始资金，默认1000000 |
+| benchmark | string | 否 | 基准指数代码，默认000300 |
+| commission_rate | float | 否 | 佣金率，默认0.0003 |
+| stamp_tax_rate | float | 否 | 印花税率，默认0.001 |
+| slippage | float | 否 | 滑点率，默认0.002 |
+
+> 注意：回测在后台线程池中运行（max_workers=2），不会阻塞其他API请求。
+
+**响应**:
+
+```json
+{
+  "code": 0,
+  "data": {
+    "status": "completed",
+    "backtest_id": 42,
+    "metrics": {
+      "total_return": 18.20,
+      "annual_return": 8.83,
+      "max_drawdown": 26.90,
+      "sharpe_ratio": 0.44,
+      "sortino_ratio": 0.50,
+      "trade_count": 7
+    },
+    "nav": [...],
+    "trades": [...],
+    "positions": [...],
+    "logs": [...]
+  }
+}
+```
+
+### 获取历史回测列表
+
+```
+GET /instock/api/backtest/portfolio/list
+```
+
+**参数**:
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|-----|------|
+| strategy_id | int | 否 | 按策略ID筛选 |
+
+### 获取回测详情
+
+```
+GET /instock/api/backtest/portfolio/detail?id={backtest_id}
+```
+
+**响应**: 包含完整的 metrics / nav / trades / positions / logs 数据。

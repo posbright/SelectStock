@@ -31,6 +31,11 @@ from .strategy_context import (
 from .strategy_sandbox import compile_strategy, validate_code
 from .data_feed import load_stock_data, load_multiple_stocks, get_trading_dates, load_benchmark_data
 from .risk_metrics import calculate_metrics
+from .fundamentals import (
+    FundamentalDataProvider, valuation as _valuation_obj,
+    query as _query_func, OrderCost as _OrderCost,
+    _CurrentDataProxy,
+)
 
 __author__ = 'InStock'
 __date__ = '2026/03/13'
@@ -62,8 +67,12 @@ class PortfolioBacktestEngine:
         self._position_snapshots = []  # [{date, positions: [...]}]
         self._custom_records = {}      # record() 记录的自定义指标
         self._log_messages = []        # 策略日志
-        self._pending_orders = []      # 待执行订单
+        self._pending_orders = []      # 待执行订单（向后兼容，即时执行模式下不使用）
         self._all_codes = set()        # 策略涉及的所有股票代码
+        self._daily_callbacks = []     # run_daily() 注册的日级回调
+        self._weekly_callbacks = []    # run_weekly() 注册的周级回调 [(func, weekday, time)]
+        self._current_day_prices = {}  # 当日价格 {code: close_price}
+        self._fundamental_provider = None  # 基本面数据提供器
 
     def run(self, strategy_code, start_date, end_date,
             initial_cash=1000000.0, benchmark='000300',
@@ -142,6 +151,7 @@ class PortfolioBacktestEngine:
 
             # 8a. 加载当日行情
             today_prices = self._load_day_prices(date)
+            self._current_day_prices = today_prices
             self.context.portfolio._on_new_day(today_prices)
 
             # 8b. before_trading_start
@@ -153,13 +163,37 @@ class PortfolioBacktestEngine:
                     logging.warning(f"[回测] {date} before_trading_start 异常: {e}")
 
             # 8c. handle_data
-            try:
-                self._call_with_api(self._strategy_funcs['handle_data'],
-                                    [self.context, self.data_proxy], api_ns)
-            except Exception as e:
-                logging.warning(f"[回测] {date} handle_data 异常: {e}")
+            if self._strategy_funcs.get('handle_data'):
+                try:
+                    self._call_with_api(self._strategy_funcs['handle_data'],
+                                        [self.context, self.data_proxy], api_ns)
+                except Exception as e:
+                    logging.warning(f"[回测] {date} handle_data 异常: {e}")
 
-            # 8d. 执行待处理订单（使用当日开盘价/收盘价）
+            # 8c-2. 执行 run_daily 注册的回调
+            for cb in self._daily_callbacks:
+                try:
+                    self._call_with_api(cb, [self.context], api_ns)
+                except Exception as e:
+                    logging.warning(f"[回测] {date} run_daily回调异常: {e}")
+
+            # 8c-3. 执行 run_weekly 注册的回调
+            if self._weekly_callbacks:
+                # 获取当日是星期几（0=周一...6=周日）
+                if hasattr(date, 'weekday'):
+                    py_weekday = date.weekday()  # 0=Mon
+                else:
+                    py_weekday = pd.Timestamp(date).weekday()
+                # 聚宽 weekday: 1=Mon, 2=Tue, ..., 5=Fri
+                jq_weekday = py_weekday + 1
+                for (cb, wd, time_rule) in self._weekly_callbacks:
+                    if jq_weekday == wd:
+                        try:
+                            self._call_with_api(cb, [self.context], api_ns)
+                        except Exception as e:
+                            logging.warning(f"[回测] {date} run_weekly回调异常: {e}")
+
+            # 8d. 执行待处理订单（即时执行模式下队列为空）
             self._execute_pending_orders(date, today_prices)
 
             # 8e. 更新组合价值（使用收盘价）
@@ -216,7 +250,8 @@ class PortfolioBacktestEngine:
         # 9. 计算风险指标
         nav_values = [r.nav for r in self._nav_records]
         bm_values = [r.benchmark_nav for r in self._nav_records]
-        metrics = calculate_metrics(nav_values, bm_values, self._trade_records)
+        date_values = [r.date for r in self._nav_records]
+        metrics = calculate_metrics(nav_values, bm_values, self._trade_records, dates=date_values)
 
         elapsed = time.time() - start_time
         logging.info(f"[回测引擎] 完成: 收益={metrics['total_return']:.2f}%, "
@@ -245,8 +280,11 @@ class PortfolioBacktestEngine:
     # ── 策略 API 函数 ──
 
     def _create_strategy_api(self):
-        """创建策略可调用的 API 函数集"""
+        """创建策略可调用的 API 函数集（兼容聚宽风格）"""
         engine = self
+
+        # ── 基本面数据提供器 ──
+        engine._fundamental_provider = FundamentalDataProvider(engine)
 
         def order(code, amount):
             """按股数下单（正=买入，负=卖出）"""
@@ -300,14 +338,104 @@ class PortfolioBacktestEngine:
             return result.reset_index(drop=True)
 
         def set_benchmark(code):
-            """设定基准指数"""
-            engine.context.benchmark = code
+            """设定基准指数（兼容聚宽 .XSHG/.XSHE 后缀）"""
+            # 去掉聚宽的交易所后缀
+            clean = code.split('.')[0] if '.' in code else code
+            engine.context.benchmark = clean
 
-        def set_order_cost(commission=0.0003, tax=0.001, slippage=0.002):
-            """设定交易成本"""
-            engine.context.commission_rate = commission
-            engine.context.stamp_tax_rate = tax
-            engine.context.slippage_rate = slippage
+        def set_order_cost(cost_or_commission=0.0003, tax=0.001, slippage=0.002, **kwargs):
+            """设定交易成本（兼容聚宽 OrderCost 和旧版参数两种调用方式）"""
+            if isinstance(cost_or_commission, _OrderCost):
+                oc = cost_or_commission
+                engine.context.commission_rate = max(oc.open_commission, oc.close_commission)
+                engine.context.stamp_tax_rate = oc.close_tax
+                # 聚宽 min_commission -> 引擎暂不支持全局设置
+            else:
+                engine.context.commission_rate = cost_or_commission
+                engine.context.stamp_tax_rate = tax
+                engine.context.slippage_rate = slippage
+
+        def set_option(option, value=None):
+            """聚宽 set_option() — 当前回测引擎中为兼容性空操作"""
+            pass
+
+        def run_daily(func, time_rule='every_bar'):
+            """注册日级回调函数（兼容聚宽 run_daily）"""
+            engine._daily_callbacks.append(func)
+
+        def run_weekly(func, weekday=None, tradingday=None, time='open', reference_security=None):
+            """注册周级回调函数（兼容聚宽 run_weekly）
+
+            Args:
+                func: 回调函数
+                weekday: 每周星期几执行（1=周一, ..., 5=周五）
+                tradingday: 同 weekday（聚宽兼容别名）
+                time: 'before_open' / 'open' / 'after_close' / 'every_bar'
+            """
+            # weekday 优先；都为 None 时默认周一 (1)
+            wd = weekday if weekday is not None else (tradingday if tradingday is not None else 1)
+            engine._weekly_callbacks.append((func, wd, time))
+
+        def get_index_stocks(index_code, date=None):
+            """获取指数成份股列表（兼容聚宽 get_index_stocks）
+
+            支持的指数：
+            - 399951.XSHE: 中证银行指数
+            - 000300.XSHG: 沪深300
+            """
+            clean = index_code.split('.')[0] if '.' in index_code else index_code
+
+            # 中证银行指数 (399951) 成份股 — 截至2024年
+            _INDEX_STOCKS = {
+                '399951': [
+                    '601398',  # 工商银行
+                    '601939',  # 建设银行
+                    '601288',  # 农业银行
+                    '601988',  # 中国银行
+                    '600036',  # 招商银行
+                    '601166',  # 兴业银行
+                    '000001',  # 平安银行
+                    '601328',  # 交通银行
+                    '601818',  # 光大银行
+                    '600016',  # 民生银行
+                    '601009',  # 南京银行
+                    '600000',  # 浦发银行
+                    '601229',  # 上海银行
+                    '002142',  # 宁波银行
+                    '600015',  # 华夏银行
+                    '601838',  # 成都银行
+                    '601916',  # 浙商银行
+                    '601998',  # 中信银行
+                    '600926',  # 杭州银行
+                    '601169',  # 北京银行
+                    '601077',  # 渝农商行
+                    '600908',  # 无锡银行
+                    '601658',  # 邮储银行
+                    '601528',  # 瑞丰银行
+                    '601860',  # 紫金银行
+                    '601963',  # 重庆银行
+                    '601187',  # 厦门国际银行
+                    '002839',  # 张家港行
+                    '002936',  # 郑州银行
+                    '002948',  # 青岛银行
+                    '002966',  # 苏州银行
+                    '600919',  # 江苏银行
+                ],
+            }
+
+            stocks = _INDEX_STOCKS.get(clean, [])
+            if not stocks:
+                engine._log_messages.append(
+                    f"[{engine.context.current_dt}] [WARN] 未知指数 {index_code}，返回空列表")
+            return stocks
+
+        def get_fundamentals(q, date=None):
+            """聚宽 get_fundamentals() — 查询基本面数据"""
+            return engine._fundamental_provider.get_fundamentals(q, date)
+
+        def get_current_data():
+            """聚宽 get_current_data() — 获取当前股票数据（停牌等）"""
+            return _CurrentDataProxy(engine._fundamental_provider)
 
         def record(**kwargs):
             """记录自定义指标"""
@@ -336,9 +464,19 @@ class PortfolioBacktestEngine:
             'get_price': get_price,
             'set_benchmark': set_benchmark,
             'set_order_cost': set_order_cost,
+            'set_option': set_option,
+            'run_daily': run_daily,
+            'run_weekly': run_weekly,
+            'get_index_stocks': get_index_stocks,
+            'get_fundamentals': get_fundamentals,
+            'get_current_data': get_current_data,
             'record': record,
             'log': _Log(),
             'g': self.g,
+            # 聚宽兼容对象
+            'query': _query_func,
+            'valuation': _valuation_obj,
+            'OrderCost': _OrderCost,
         }
 
     def _call_with_api(self, func, args, api_ns):
@@ -351,17 +489,156 @@ class PortfolioBacktestEngine:
     # ── 订单管理 ──
 
     def _submit_order(self, code, amount=None, value=None):
-        """提交订单（延迟到当日行情加载后执行）"""
+        """提交并立即执行订单（即时执行模式，兼容聚宽行为）"""
         # 动态加载该股票数据
         if code not in self._stock_data:
             self._load_single_stock(code)
             self._all_codes.add(code)
 
-        self._pending_orders.append({
-            'code': code,
-            'amount': amount,
-            'value': value,
-        })
+        date = self.context.current_dt
+
+        # 确保当日行情可用
+        if code not in self._current_day_prices:
+            self._update_stock_day_price(code, date)
+
+        if code not in self._current_day_prices:
+            self._log_messages.append(
+                f"[{date}] [WARN] {code} 无行情数据，订单取消")
+            return
+
+        order_info = {'code': code, 'amount': amount, 'value': value}
+        self._execute_single_order(order_info, date)
+
+    def _update_stock_day_price(self, code, date):
+        """更新指定股票的当日行情到 data_proxy 和 _current_day_prices"""
+        df = self._stock_data.get(code)
+        if df is None:
+            return
+        ts_date = pd.Timestamp(date)
+        mask = df['date'] == ts_date
+        if not mask.any():
+            return
+        row = df.loc[mask].iloc[0]
+        exec_price = row['close']
+        self._current_day_prices[code] = exec_price
+        bar = {
+            'open': row.get('open', exec_price),
+            'high': row.get('high', exec_price),
+            'low': row.get('low', exec_price),
+            'close': exec_price,
+            'volume': row.get('volume', 0),
+            'pre_close': row.get('pre_close', exec_price),
+        }
+        self.data_proxy._set_current(code, bar)
+
+    def _execute_single_order(self, order_info, date):
+        """执行单笔订单（使用收盘价模拟成交）"""
+        code = order_info['code']
+        if code not in self._current_day_prices:
+            self._log_messages.append(
+                f"[{date}] [WARN] {code} 无行情数据，订单取消")
+            return
+
+        exec_price = self._current_day_prices[code]
+
+        # 涨跌停检测
+        df = self._stock_data.get(code)
+        if df is not None:
+            today_row = df[df['date'] == pd.Timestamp(date)]
+            if len(today_row) > 0:
+                row = today_row.iloc[0]
+                exec_price = row['close']
+                pre_close = row.get('pre_close', exec_price)
+                if pre_close and pre_close > 0:
+                    change_pct = (exec_price - pre_close) / pre_close
+                    limit_pct = 0.195 if code.startswith(('688', '300')) else 0.095
+
+                    order_amount = order_info.get('amount')
+                    order_value_v = order_info.get('value')
+                    is_buy = (order_amount is not None and order_amount > 0) or \
+                             (order_value_v is not None and order_value_v > 0)
+                    is_sell = (order_amount is not None and order_amount < 0) or \
+                              (order_value_v is not None and order_value_v < 0)
+
+                    if is_buy and change_pct >= limit_pct:
+                        self._log_messages.append(
+                            f"[{date}] [WARN] {code} 涨停({change_pct*100:.1f}%)，买入取消")
+                        return
+                    if is_sell and change_pct <= -limit_pct:
+                        self._log_messages.append(
+                            f"[{date}] [WARN] {code} 跌停({change_pct*100:.1f}%)，卖出取消")
+                        return
+
+        # 确定成交数量
+        amount = order_info.get('amount')
+        if amount is None and order_info.get('value') is not None:
+            value = order_info['value']
+            if value > 0:
+                amount = int(value / exec_price / 100) * 100
+            else:
+                amount = -int(abs(value) / exec_price / 100) * 100
+
+        if amount is None or amount == 0:
+            return
+
+        # 买入
+        if amount > 0:
+            amount = int(amount / 100) * 100
+            if amount <= 0:
+                return
+            actual_price = exec_price * (1 + self.context.slippage_rate)
+            total_cost = actual_price * amount
+            commission = max(total_cost * self.context.commission_rate, 5.0)
+            required = total_cost + commission
+
+            if required > self.context.portfolio.available_cash:
+                affordable = self.context.portfolio.available_cash / (actual_price * (1 + self.context.commission_rate))
+                amount = int(affordable / 100) * 100
+                if amount <= 0:
+                    return
+                total_cost = actual_price * amount
+                commission = max(total_cost * self.context.commission_rate, 5.0)
+
+            pos = self.context.portfolio._get_or_create_position(code)
+            pos._on_buy(amount, exec_price, commission)
+            self.context.portfolio.available_cash -= (total_cost + commission)
+            self.context.portfolio._update_value()
+
+            trade = TradeRecord(date, code, pos.name, 'buy', exec_price, amount)
+            trade.commission = round(commission, 2)
+            trade.slippage_cost = round(exec_price * self.context.slippage_rate * amount, 2)
+            self._trade_records.append(trade)
+
+        # 卖出
+        elif amount < 0:
+            sell_amount = abs(amount)
+            pos = self.context.portfolio.positions.get(code)
+            if not pos or pos.closeable_amount <= 0:
+                return
+
+            sell_amount = min(sell_amount, pos.closeable_amount)
+            sell_amount = int(sell_amount / 100) * 100
+            if sell_amount <= 0:
+                sell_amount = pos.closeable_amount
+
+            actual_price = exec_price * (1 - self.context.slippage_rate)
+            total_income = actual_price * sell_amount
+            commission = max(total_income * self.context.commission_rate, 5.0)
+            tax = total_income * self.context.stamp_tax_rate
+
+            pos._on_sell(sell_amount, exec_price)
+            self.context.portfolio.available_cash += (total_income - commission - tax)
+            self.context.portfolio._update_value()
+
+            # 清理空仓
+            if pos.amount == 0 and code in self.context.portfolio.positions:
+                del self.context.portfolio.positions[code]
+
+            trade = TradeRecord(date, code, pos.name, 'sell', exec_price, sell_amount)
+            trade.commission = round(commission, 2)
+            trade.tax = round(tax, 2)
+            trade.slippage_cost = round(exec_price * self.context.slippage_rate * sell_amount, 2)
+            self._trade_records.append(trade)
 
     def _execute_pending_orders(self, date, prices):
         """执行当轮所有挂单（使用收盘价模拟成交）"""

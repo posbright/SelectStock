@@ -84,8 +84,9 @@ def validate_code(code_str):
     if 'def initialize' not in code_str:
         return False, "策略代码必须定义 initialize(context) 函数"
 
-    if 'def handle_data' not in code_str:
-        return False, "策略代码必须定义 handle_data(context, data) 函数"
+    # handle_data 可选：如果使用 run_daily 注册日级回调则不需要
+    # if 'def handle_data' not in code_str:
+    #     return False, "策略代码必须定义 handle_data(context, data) 函数"
 
     return True, ""
 
@@ -129,9 +130,11 @@ def compile_strategy(code_str):
         raise ValueError("未找到 initialize(context) 函数")
     result['initialize'] = namespace['initialize']
 
-    if 'handle_data' not in namespace or not callable(namespace['handle_data']):
-        raise ValueError("未找到 handle_data(context, data) 函数")
-    result['handle_data'] = namespace['handle_data']
+    # handle_data 可选 — 使用 run_daily 时可不定义
+    if 'handle_data' in namespace and callable(namespace['handle_data']):
+        result['handle_data'] = namespace['handle_data']
+    else:
+        result['handle_data'] = None
 
     result['before_trading_start'] = namespace.get('before_trading_start')
     result['after_trading_end'] = namespace.get('after_trading_end')

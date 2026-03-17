@@ -109,60 +109,61 @@ def handle_data(context, data):
     },
     {
         'id': 'bank_rotation',
-        'name': '银行股轮动策略',
+        'name': '银行股轮动策略(聚宽)',
         'category': 'stock',
-        'description': '在银行股中选择近期涨幅最大的持有，定期轮动',
-        'code': '''# 银行股轮动策略
-# 在银行板块中选择动量最强的股票持有
-# 每两周轮动一次，选涨幅最大的2只
+        'description': '持有中证银行指数(399951)成份股中PB最低的银行股，每周一轮动',
+        'code': '''# 银行股轮动策略（聚宽风格）
+# 策略来源：聚宽 JoinQuant 经典银行轮动策略
+# 原理：在中证银行指数(399951)成份股中选择PB最低的1只持有，每周一轮动
+# 低PB银行股通常具有更高的安全边际和股息率
 
 def initialize(context):
-    # 主要银行股
-    context.banks = [
-        '601398',  # 工商银行
-        '601939',  # 建设银行
-        '601288',  # 农业银行
-        '601988',  # 中国银行
-        '600036',  # 招商银行
-        '601166',  # 兴业银行
-        '000001',  # 平安银行
-        '601328',  # 交通银行
-    ]
-    context.hold_num = 2    # 持有数量
-    context.day_count = 0
+    set_benchmark('399951.XSHE')  # 中证银行指数
+    set_option('use_real_price', True)
+    set_order_cost(OrderCost(
+        open_tax=0,
+        close_tax=0.001,
+        open_commission=0.0003,
+        close_commission=0.0003,
+        close_today_commission=0,
+        min_commission=5
+    ), type='stock')
+    g.stocks = get_index_stocks('399951.XSHE')
+    run_weekly(weekly_adjustment, weekday=1, time='open')
 
-def handle_data(context, data):
-    context.day_count += 1
-    # 每10个交易日轮动一次
-    if context.day_count % 10 != 1:
+def weekly_adjustment(context):
+    # 查询银行股基本面：PB最低的1只
+    q = query(
+        valuation.code,
+        valuation.pb_ratio
+    ).filter(
+        valuation.code.in_(g.stocks)
+    ).order_by(
+        valuation.pb_ratio.asc()
+    ).limit(1)
+    df = get_fundamentals(q)
+    if len(df) == 0:
+        log.warn("未查到银行股基本面数据")
         return
 
-    # 计算各银行股近10日涨幅
-    momentum = {}
-    for code in context.banks:
-        h = history(code, 10, 'close')
-        if len(h) >= 10 and h.iloc[0] > 0:
-            ret = h.iloc[-1] / h.iloc[0] - 1
-            momentum[code] = ret
+    target_code = df['code'].iloc[0]
+    target_pb = df['pb_ratio'].iloc[0]
+    log.info("本周目标: " + target_code + " PB=" + str(round(target_pb, 3)))
 
-    if len(momentum) < context.hold_num:
-        return
-
-    # 选涨幅最大的N只
-    selected = sorted(momentum, key=momentum.get, reverse=True)[:context.hold_num]
-
-    # 卖出不在选中列表的持仓
+    # 卖出非目标持仓
     for code in list(context.portfolio.positions.keys()):
-        if code not in selected:
+        if code != target_code:
             order_target(code, 0)
             log.info("轮出 " + code)
 
-    # 等权买入
-    target_value = context.portfolio.total_value / context.hold_num
-    for code in selected:
-        order_target_value(code, target_value)
-
-    log.info("轮动完成: " + str(selected))
+    # 全仓买入目标
+    if target_code not in context.portfolio.positions:
+        cash = context.portfolio.available_cash
+        if cash > 1000:
+            order_value(target_code, cash * 0.98)
+            log.info("买入 " + target_code + " 金额=" + str(round(cash * 0.98)))
+    else:
+        log.info("继续持有 " + target_code)
 ''',
     },
     {
@@ -216,6 +217,69 @@ def handle_data(context, data):
     for code in top3:
         order_target_value(code, target)
     log.info("动量选股: " + str(top3))
+''',
+    },
+    {
+        'id': 'small_cap_jq',
+        'name': '小市值策略(聚宽)',
+        'category': 'stock',
+        'description': '筛选市值介于20-30亿的股票，选取市值最小的3只，持有5个交易日后调仓（需要基本面数据支持）',
+        'code': '''# 小市值策略(聚宽)
+# 筛选出市值介于20-30亿的股票，选取其中市值最小的三只股票
+# 每天开盘买入，持有五个交易日，然后调仓
+
+def initialize(context):
+    set_benchmark('000300.XSHG')
+    set_option('use_real_price', True)
+    set_option('order_volume_ratio', 1)
+    set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
+                             open_commission=0.0003, close_commission=0.0003,
+                             close_today_commission=0, min_commission=5), type='stock')
+    g.stocknum = 3
+    g.days = 0
+    g.refresh_rate = 5
+    run_daily(trade, 'every_bar')
+
+def check_stocks(context):
+    q = query(
+        valuation.code,
+        valuation.market_cap
+    ).filter(
+        valuation.market_cap.between(20, 30)
+    ).order_by(
+        valuation.market_cap.asc()
+    )
+    df = get_fundamentals(q)
+    buylist = list(df['code'])
+    buylist = filter_paused_stock(buylist)
+    return buylist[:g.stocknum]
+
+def trade(context):
+    if g.days % g.refresh_rate == 0:
+        sell_list = list(context.portfolio.positions.keys())
+        if len(sell_list) > 0:
+            for stock in sell_list:
+                order_target_value(stock, 0)
+
+        if len(context.portfolio.positions) < g.stocknum:
+            Num = g.stocknum - len(context.portfolio.positions)
+            Cash = context.portfolio.cash / Num
+        else:
+            Cash = 0
+
+        stock_list = check_stocks(context)
+
+        for stock in stock_list:
+            if len(context.portfolio.positions.keys()) < g.stocknum:
+                order_value(stock, Cash)
+
+        g.days = 1
+    else:
+        g.days += 1
+
+def filter_paused_stock(stock_list):
+    current_data = get_current_data()
+    return [stock for stock in stock_list if not current_data[stock].paused]
 ''',
     },
 ]
@@ -402,7 +466,17 @@ class DeleteStrategyCodeHandler(webBase.BaseHandler, ABC):
 
 
 class RunPortfolioBacktestHandler(webBase.BaseHandler, ABC):
-    """运行组合回测（结果持久化到 DB）"""
+    """运行组合回测（结果持久化到 DB）— 使用线程池避免阻塞 IOLoop"""
+
+    # 共享线程池：限制并发回测数量，避免资源耗尽
+    _executor = None
+
+    @classmethod
+    def _get_executor(cls):
+        if cls._executor is None:
+            from concurrent.futures import ThreadPoolExecutor
+            cls._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='backtest')
+        return cls._executor
 
     @gen.coroutine
     def post(self):
@@ -423,10 +497,16 @@ class RunPortfolioBacktestHandler(webBase.BaseHandler, ABC):
                 return
 
             from instock.core.backtest.portfolio_engine import run_backtest
-            result = run_backtest(
-                strategy_code, start_date, end_date,
-                initial_cash=initial_cash, benchmark=benchmark,
-                commission=commission, tax=tax, slippage=slippage)
+            from tornado.ioloop import IOLoop
+
+            # 在线程池中运行回测，不阻塞 Tornado IOLoop
+            result = yield IOLoop.current().run_in_executor(
+                self._get_executor(),
+                lambda: run_backtest(
+                    strategy_code, start_date, end_date,
+                    initial_cash=initial_cash, benchmark=benchmark,
+                    commission=commission, tax=tax, slippage=slippage)
+            )
 
             # 持久化到 DB
             bt_id = None
@@ -486,14 +566,31 @@ class GetPortfolioBacktestListHandler(webBase.BaseHandler, ABC):
                 f'bp.start_date, bp.end_date, bp.initial_cash, bp.status, '
                 f'bp.total_return, bp.annual_return, bp.max_drawdown, '
                 f'bp.sharpe_ratio, bp.alpha, bp.beta, bp.win_rate, '
-                f'bp.trade_count, bp.completed_at '
+                f'bp.trade_count, bp.completed_at, bp.result_json '
                 f'FROM cn_stock_backtest_portfolio bp '
                 f'LEFT JOIN cn_stock_strategy_code sc ON bp.strategy_id = sc.id '
                 f'{where} ORDER BY bp.id DESC LIMIT 100', tuple(params) if params else None)
             data = []
             if rows:
                 for r in rows:
-                    data.append({
+                    # 从 result_json 提取扩展指标
+                    extra_metrics = {}
+                    elapsed = ''
+                    if r[16]:
+                        try:
+                            rj = json.loads(r[16]) if isinstance(r[16], str) else r[16]
+                            m = rj.get('metrics', {})
+                            extra_metrics = {
+                                'benchmark_return': float(m.get('benchmark_return', 0)),
+                                'excess_return': float(m.get('excess_return', 0)),
+                                'excess_max_drawdown': float(m.get('excess_max_drawdown', 0)),
+                                'excess_sharpe_ratio': float(m.get('excess_sharpe_ratio', 0)),
+                                'benchmark_annual_return': float(m.get('benchmark_annual_return', 0)),
+                            }
+                            elapsed = rj.get('elapsed', '')
+                        except Exception:
+                            pass
+                    item = {
                         'id': r[0],
                         'strategy_id': r[1],
                         'strategy_name': r[2] or '临时策略',
@@ -510,7 +607,10 @@ class GetPortfolioBacktestListHandler(webBase.BaseHandler, ABC):
                         'win_rate': float(r[13]) if r[13] else 0,
                         'trade_count': r[14] or 0,
                         'completed_at': r[15].strftime('%Y-%m-%d %H:%M:%S') if r[15] else '',
-                    })
+                        'elapsed': elapsed,
+                    }
+                    item.update(extra_metrics)
+                    data.append(item)
             self.write(json.dumps({'code': 0, 'data': data}, ensure_ascii=False))
         except Exception as e:
             self.write(json.dumps({'code': -1, 'msg': str(e)}))
@@ -570,6 +670,10 @@ class GetPortfolioBacktestDetailHandler(webBase.BaseHandler, ABC):
                     full_data = json.loads(result_json)
                 except Exception:
                     pass
+
+            # 如果 result_json 中有完整 metrics，用它覆盖（字段更全）
+            if full_data.get('metrics'):
+                info['metrics'] = full_data['metrics']
 
             info['nav'] = full_data.get('nav', [])
             info['trades'] = full_data.get('trades', [])

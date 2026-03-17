@@ -54,6 +54,11 @@
                 </div>
               </div>
               <div ref="chartEl" class="nav-chart"></div>
+              <div v-if="btBacktestId" style="text-align: right; padding: 4px 8px;">
+                <el-button type="primary" link @click="$router.push('/algo/backtest-detail/' + btBacktestId)">
+                  查看完整回测详情 →
+                </el-button>
+              </div>
             </div>
           </el-tab-pane>
           <el-tab-pane :label="'交易(' + (btResult?.trades?.length || 0) + ')'" name="trades">
@@ -137,6 +142,7 @@ const dirty = ref(false)
 const editingName = ref(false)
 const activeTab = ref('overview')
 const chartEl = ref<HTMLElement>()
+const btBacktestId = ref<number | null>(null)
 let chart: echarts.ECharts | null = null
 
 const dateShortcuts = [
@@ -148,17 +154,22 @@ const dateShortcuts = [
 const metricCards = computed(() => {
   const m = btResult.value?.metrics
   if (!m) return []
+  const f = (v: number, d = 2) => v == null ? '--' : `${v >= 0 ? '+' : ''}${Number(v).toFixed(d)}%`
+  const n = (v: number, d = 3) => v == null ? '--' : Number(v).toFixed(d)
+  const c = (v: number) => v == null ? '' : v >= 0 ? 'val-red' : 'val-green'
   return [
-    { key: 'ret', label: '策略收益', val: (m.total_return >= 0 ? '+' : '') + m.total_return.toFixed(2) + '%',
-      cls: m.total_return >= 0 ? 'val-red' : 'val-green' },
-    { key: 'annual', label: '年化收益', val: (m.annual_return >= 0 ? '+' : '') + m.annual_return.toFixed(2) + '%',
-      cls: m.annual_return >= 0 ? 'val-red' : 'val-green' },
-    { key: 'sharpe', label: '夏普比率', val: m.sharpe_ratio.toFixed(3), cls: '' },
-    { key: 'dd', label: '最大回撤', val: m.max_drawdown.toFixed(2) + '%', cls: 'val-green' },
-    { key: 'alpha', label: 'Alpha', val: (m.alpha || 0).toFixed(2) + '%', cls: '' },
-    { key: 'beta', label: 'Beta', val: (m.beta || 0).toFixed(3), cls: '' },
-    { key: 'wr', label: '日胜率', val: (m.daily_win_rate || 0).toFixed(1) + '%', cls: '' },
-    { key: 'tc', label: '交易次数', val: String(m.trade_count), cls: '' },
+    { key: 'ret', label: '策略收益', val: f(m.total_return), cls: c(m.total_return) },
+    { key: 'annual', label: '策略年化收益', val: f(m.annual_return), cls: c(m.annual_return) },
+    { key: 'excess', label: '超额收益', val: f(m.excess_return), cls: c(m.excess_return) },
+    { key: 'bm', label: '基准收益', val: f(m.benchmark_return), cls: c(m.benchmark_return) },
+    { key: 'sharpe', label: '夏普比率', val: n(m.sharpe_ratio), cls: '' },
+    { key: 'dd', label: '最大回撤', val: f(-m.max_drawdown), cls: 'val-green' },
+    { key: 'alpha', label: 'Alpha', val: n(m.alpha), cls: '' },
+    { key: 'beta', label: 'Beta', val: n(m.beta), cls: '' },
+    { key: 'sortino', label: '索提诺比率', val: n(m.sortino_ratio), cls: '' },
+    { key: 'plr', label: '盈亏比', val: n(m.profit_loss_ratio), cls: '' },
+    { key: 'wr', label: '日胜率', val: f(m.daily_win_rate, 1), cls: '' },
+    { key: 'tc', label: '交易次数', val: String(m.trade_count ?? 0), cls: '' },
   ]
 })
 
@@ -236,8 +247,11 @@ async function doRun() {
       showResults.value = true
       if (data.status === 'completed') {
         ElMessage.success('回测完成 (' + data.elapsed + 's)')
+        btBacktestId.value = data.backtest_id || null
+        activeTab.value = 'overview'
         await nextTick()
-        renderChart()
+        // el-tabs 需要额外一帧完成渲染后 chartEl 才可用
+        setTimeout(() => renderChart(), 100)
       } else if (data.status === 'error') {
         ElMessage.error(data.message)
       }
@@ -266,23 +280,40 @@ async function doCreatePaper() {
 
 function renderChart() {
   if (!chartEl.value || !btResult.value?.nav?.length) return
+  // 确保元素有尺寸（el-tabs 可能还没完成布局）
+  if (chartEl.value.clientWidth === 0) {
+    setTimeout(() => renderChart(), 100)
+    return
+  }
   if (chart) chart.dispose()
   chart = echarts.init(chartEl.value)
   const nav = btResult.value.nav
-  chart.setOption({
-    tooltip: { trigger: 'axis' },
-    legend: { data: ['策略收益', '基准收益'], top: 5 },
-    grid: { left: 50, right: 15, top: 40, bottom: 30 },
-    xAxis: { type: 'category', data: nav.map((r: any) => r.date), axisLabel: { fontSize: 10 } },
-    yAxis: { type: 'value', axisLabel: { formatter: '{value}%', fontSize: 10 } },
-    series: [
-      { name: '策略收益', type: 'line', data: nav.map((r: any) => ((r.nav - 1) * 100).toFixed(2)),
-        symbol: 'none', lineStyle: { width: 2, color: '#e6a23c' },
-        areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-          { offset: 0, color: 'rgba(230,162,60,0.3)' }, { offset: 1, color: 'rgba(230,162,60,0.02)' }]) }},
+  const hasBenchmark = nav.some((r: any) => r.benchmark_nav != null && Math.abs(r.benchmark_nav - 1) > 0.0001)
+  const legend = ['策略收益']
+  const series: any[] = [
+    { name: '策略收益', type: 'line', data: nav.map((r: any) => ((r.nav - 1) * 100).toFixed(2)),
+      symbol: 'none', lineStyle: { width: 2, color: '#e6a23c' },
+      areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+        { offset: 0, color: 'rgba(230,162,60,0.25)' }, { offset: 1, color: 'rgba(230,162,60,0.02)' }]) }},
+  ]
+  if (hasBenchmark) {
+    legend.push('基准收益')
+    series.push(
       { name: '基准收益', type: 'line', data: nav.map((r: any) => ((r.benchmark_nav - 1) * 100).toFixed(2)),
         symbol: 'none', lineStyle: { width: 1.5, type: 'dashed', color: '#909399' }},
-    ]
+    )
+  }
+  chart.setOption({
+    tooltip: { trigger: 'axis', formatter: (p: any) => {
+      let h = `<b>${p[0].name}</b><br/>`
+      p.forEach((s: any) => { h += `${s.marker} ${s.seriesName}: ${s.value}%<br/>` })
+      return h
+    }},
+    legend: { data: legend, top: 5 },
+    grid: { left: 55, right: 15, top: 40, bottom: 30 },
+    xAxis: { type: 'category', data: nav.map((r: any) => r.date), axisLabel: { fontSize: 10 } },
+    yAxis: { type: 'value', axisLabel: { formatter: '{value}%', fontSize: 10 } },
+    series,
   })
 }
 
@@ -296,6 +327,14 @@ watch(() => route.params.id, async (newId) => {
       btResult.value = null
       dirty.value = false
     }
+  }
+})
+
+// 切换 Tab 回 overview 时重绘图表
+watch(activeTab, async (tab) => {
+  if (tab === 'overview' && btResult.value?.nav?.length) {
+    await nextTick()
+    setTimeout(() => renderChart(), 50)
   }
 })
 

@@ -9,9 +9,9 @@
       </el-select>
     </div>
 
-    <el-table :data="list" v-loading="loading" stripe style="width: 100%;">
-      <el-table-column prop="id" label="ID" width="60" />
-      <el-table-column prop="strategy_name" label="策略名称" width="150">
+    <el-table :data="list" v-loading="loading" stripe style="width: 100%;" :default-sort="{ prop: 'id', order: 'descending' }">
+      <el-table-column prop="id" label="ID" width="60" sortable />
+      <el-table-column prop="strategy_name" label="策略名称" width="150" show-overflow-tooltip>
         <template #default="{ row }">
           <el-link type="primary" @click="$router.push('/algo/edit/' + row.strategy_id)">
             {{ row.strategy_name }}
@@ -21,31 +21,50 @@
       <el-table-column label="回测区间" width="200">
         <template #default="{ row }">{{ row.start_date }} ~ {{ row.end_date }}</template>
       </el-table-column>
-      <el-table-column prop="initial_cash" label="初始资金" width="110" align="right">
+      <el-table-column prop="initial_cash" label="初始资金" width="100" align="right">
         <template #default="{ row }">{{ formatCash(row.initial_cash) }}</template>
       </el-table-column>
-      <el-table-column prop="total_return" label="策略收益" width="100" align="right">
+      <el-table-column prop="total_return" label="策略收益" width="95" align="right" sortable>
         <template #default="{ row }">
-          <span :style="{ color: row.total_return >= 0 ? '#f56c6c' : '#67c23a', fontWeight: 600 }">
-            {{ row.total_return >= 0 ? '+' : '' }}{{ row.total_return.toFixed(2) }}%
+          <span :class="retCls(row.total_return)">
+            {{ fmtRet(row.total_return) }}
           </span>
         </template>
       </el-table-column>
-      <el-table-column prop="annual_return" label="年化收益" width="100" align="right">
+      <el-table-column prop="annual_return" label="年化收益" width="95" align="right" sortable>
         <template #default="{ row }">
-          <span :style="{ color: row.annual_return >= 0 ? '#f56c6c' : '#67c23a' }">
-            {{ row.annual_return >= 0 ? '+' : '' }}{{ row.annual_return.toFixed(2) }}%
-          </span>
+          <span :class="retCls(row.annual_return)">{{ fmtRet(row.annual_return) }}</span>
         </template>
       </el-table-column>
-      <el-table-column prop="max_drawdown" label="最大回撤" width="90" align="right">
-        <template #default="{ row }">{{ row.max_drawdown.toFixed(2) }}%</template>
+      <el-table-column label="基准收益" width="95" align="right" sortable :sort-method="(a:any,b:any)=> (a.benchmark_return||0)-(b.benchmark_return||0)">
+        <template #default="{ row }">
+          <span :class="retCls(row.benchmark_return)">{{ fmtRet(row.benchmark_return) }}</span>
+        </template>
       </el-table-column>
-      <el-table-column prop="sharpe_ratio" label="夏普" width="70" align="right">
-        <template #default="{ row }">{{ row.sharpe_ratio.toFixed(2) }}</template>
+      <el-table-column label="超额收益" width="95" align="right" sortable :sort-method="(a:any,b:any)=> (a.excess_return||0)-(b.excess_return||0)">
+        <template #default="{ row }">
+          <span :class="retCls(row.excess_return)">{{ fmtRet(row.excess_return) }}</span>
+        </template>
       </el-table-column>
-      <el-table-column prop="trade_count" label="交易数" width="70" align="right" />
-      <el-table-column prop="completed_at" label="完成时间" width="160" />
+      <el-table-column prop="max_drawdown" label="最大回撤" width="90" align="right" sortable>
+        <template #default="{ row }">
+          <span class="val-green">{{ N(row.max_drawdown).toFixed(2) }}%</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="超额最大回撤" width="110" align="right" sortable :sort-method="(a:any,b:any)=> (a.excess_max_drawdown||0)-(b.excess_max_drawdown||0)">
+        <template #default="{ row }">
+          <span class="val-green">{{ N(row.excess_max_drawdown || 0).toFixed(2) }}%</span>
+        </template>
+      </el-table-column>
+      <el-table-column prop="sharpe_ratio" label="夏普" width="70" align="right" sortable>
+        <template #default="{ row }">{{ N(row.sharpe_ratio).toFixed(2) }}</template>
+      </el-table-column>
+      <el-table-column label="超额夏普" width="85" align="right" sortable :sort-method="(a:any,b:any)=> (a.excess_sharpe_ratio||0)-(b.excess_sharpe_ratio||0)">
+        <template #default="{ row }">{{ N(row.excess_sharpe_ratio || 0).toFixed(2) }}</template>
+      </el-table-column>
+      <el-table-column prop="trade_count" label="交易数" width="70" align="right" sortable />
+      <el-table-column prop="elapsed" label="回测耗时" width="90" align="right" show-overflow-tooltip />
+      <el-table-column prop="completed_at" label="完成时间" width="160" sortable />
       <el-table-column label="操作" width="80" fixed="right">
         <template #default="{ row }">
           <el-button size="small" type="primary" text @click="viewDetail(row.id)">详情</el-button>
@@ -68,8 +87,17 @@ const strategies = ref<any[]>([])
 const loading = ref(false)
 const filterStrategyId = ref(0)
 
+const N = Number
 function formatCash(v: number) {
   return v >= 10000 ? (v / 10000).toFixed(0) + '万' : v.toFixed(0)
+}
+function fmtRet(v: number | undefined) {
+  if (v == null) return '--'
+  return `${v >= 0 ? '+' : ''}${N(v).toFixed(2)}%`
+}
+function retCls(v: number | undefined) {
+  if (v == null || v === 0) return ''
+  return v > 0 ? 'val-red' : 'val-green'
 }
 
 function viewDetail(id: number) {
@@ -102,4 +130,6 @@ onMounted(() => { loadData(); loadStrategies() })
 .bt-history { padding: 20px; }
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
 .page-header h2 { margin: 0; }
+.val-red { color: #f56c6c; font-weight: 600; }
+.val-green { color: #67c23a; font-weight: 600; }
 </style>

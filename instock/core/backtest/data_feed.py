@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-数据加载层 — 从本地 K 线缓存加载回测用数据
+数据加载层 — 从本地 K 线缓存 / EastMoney API 加载回测用数据
 
 支持：
 - 从 cache/hist/ 加载单只/多只股票的日 K 线
+- 当缓存不足时自动从 EastMoney API 补全
 - 加载基准指数（沪深300等）日 K 线
 - 获取交易日历
 """
@@ -12,20 +13,70 @@
 import os
 import logging
 import datetime
+import time
 import pandas as pd
 import numpy as np
 
 __author__ = 'InStock'
-__date__ = '2026/03/13'
+__date__ = '2026/03/16'
 
 # 缓存目录
 _CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
                           'cache', 'hist')
 
 
+def _fetch_stock_from_eastmoney(code, start_date=None, end_date=None, adjust='qfq'):
+    """
+    从 EastMoney API 获取个股日 K 线，返回标准化的 DataFrame。
+
+    Returns:
+        DataFrame with columns [date, open, high, low, close, volume] or None
+    """
+    try:
+        from instock.core.crawling.stock_hist_em import stock_zh_a_hist
+        sd = pd.Timestamp(start_date).strftime('%Y%m%d') if start_date else '19700101'
+        ed = pd.Timestamp(end_date).strftime('%Y%m%d') if end_date else '20500101'
+        raw = stock_zh_a_hist(symbol=code, start_date=sd, end_date=ed,
+                              period='daily', adjust=adjust)
+        if raw is None or len(raw) == 0:
+            return None
+
+        # 东方财富返回中文列名，需映射
+        col_map = {'日期': 'date', '开盘': 'open', '收盘': 'close',
+                    '最高': 'high', '最低': 'low', '成交量': 'volume'}
+        df = raw.rename(columns=col_map)
+        for c in ['date', 'open', 'high', 'low', 'close', 'volume']:
+            if c not in df.columns:
+                logging.warning(f"EastMoney数据缺少 {c} 列: {code}")
+                return None
+        df['date'] = pd.to_datetime(df['date'])
+        for c in ['open', 'high', 'low', 'close']:
+            df[c] = pd.to_numeric(df[c], errors='coerce')
+        df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0).astype(int)
+        df = df[['date', 'open', 'high', 'low', 'close', 'volume']]
+        df = df.sort_values('date').reset_index(drop=True)
+        logging.info(f"从 EastMoney 获取 {code} K线数据: {len(df)} 条 "
+                     f"({df['date'].iloc[0].date()} ~ {df['date'].iloc[-1].date()})")
+        return df
+    except Exception as e:
+        logging.debug(f"EastMoney 获取 {code} 数据失败: {e}")
+        return None
+
+
+def _save_cache(code, df):
+    """保存 DataFrame 到缓存文件"""
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        cache_file = os.path.join(_CACHE_DIR, f"{code}.gzip.pickle")
+        df.to_pickle(cache_file)
+        logging.debug(f"缓存已更新: {code} ({len(df)} 条)")
+    except Exception as e:
+        logging.debug(f"缓存保存失败 {code}: {e}")
+
+
 def load_stock_data(code, start_date=None, end_date=None):
     """
-    从本地缓存加载股票日 K 线数据。
+    加载股票日 K 线数据。优先从缓存加载，缓存不足时从 EastMoney 补全。
 
     Args:
         code: 6位股票代码（如 '000001'）
@@ -33,14 +84,52 @@ def load_stock_data(code, start_date=None, end_date=None):
         end_date: 结束日期
 
     Returns:
-        DataFrame: 包含 date/open/high/low/close/volume/p_change 列，
+        DataFrame: 包含 date/open/high/low/close/volume/pre_close 列，
                    按日期升序排列。无数据返回 None。
     """
-    cache_file = os.path.join(_CACHE_DIR, f"{code}.gzip.pickle")
-    if not os.path.exists(cache_file):
-        logging.debug(f"缓存文件不存在: {cache_file}")
+    df = _load_from_cache(code)
+    need_online = False
+
+    if df is None or len(df) == 0:
+        need_online = True
+    elif end_date:
+        # 缓存最后日期是否覆盖 end_date（允许3天宽松度，周末/节假日）
+        cache_end = df['date'].max().date() if hasattr(df['date'].max(), 'date') else df['date'].max()
+        req_end = pd.Timestamp(end_date).date()
+        if cache_end < req_end - datetime.timedelta(days=3):
+            need_online = True
+            logging.info(f"{code} 缓存截止 {cache_end}，需要数据到 {req_end}，尝试在线获取")
+
+    if need_online:
+        online_df = _fetch_stock_from_eastmoney(code, start_date, end_date)
+        if online_df is not None and len(online_df) > 0:
+            df = online_df
+            # 更新缓存（保存完整获取范围）
+            _save_cache(code, df)
+
+    if df is None or len(df) == 0:
         return None
 
+    # 日期过滤
+    if start_date:
+        df = df[df['date'] >= pd.Timestamp(start_date)]
+    if end_date:
+        df = df[df['date'] <= pd.Timestamp(end_date)]
+
+    if len(df) == 0:
+        return None
+
+    # 计算前收盘价
+    df = df.sort_values('date').reset_index(drop=True)
+    df['pre_close'] = df['close'].shift(1)
+    return df
+
+
+def _load_from_cache(code):
+    """从本地 pickle 缓存加载，返回 DataFrame 或 None"""
+    cache_file = os.path.join(_CACHE_DIR, f"{code}.gzip.pickle")
+    if not os.path.exists(cache_file):
+        return None
     try:
         df = pd.read_pickle(cache_file)
         if df is None or len(df) == 0:
@@ -56,37 +145,14 @@ def load_stock_data(code, start_date=None, end_date=None):
             df['date'] = pd.to_datetime(df['date'])
 
         if 'date' not in df.columns:
-            logging.warning(f"K线数据缺少 date 列: {code}")
             return None
 
-        df = df.sort_values('date').reset_index(drop=True)
-
-        # 日期过滤
-        if start_date:
-            start = pd.Timestamp(start_date)
-            df = df[df['date'] >= start]
-        if end_date:
-            end = pd.Timestamp(end_date)
-            df = df[df['date'] <= end]
-
-        if len(df) == 0:
-            return None
-
-        # 标准化列名
-        col_map = {
-            'open': 'open', 'high': 'high', 'low': 'low',
-            'close': 'close', 'volume': 'volume',
-        }
-        for need_col in col_map.values():
-            if need_col not in df.columns:
-                logging.warning(f"K线数据缺少 {need_col} 列: {code}")
+        # 检查必需列
+        for c in ['open', 'high', 'low', 'close', 'volume']:
+            if c not in df.columns:
                 return None
 
-        # 计算前收盘价
-        df['pre_close'] = df['close'].shift(1)
-
-        return df.reset_index(drop=True)
-
+        return df.sort_values('date').reset_index(drop=True)
     except Exception as e:
         logging.warning(f"加载K线缓存异常 {code}: {e}")
         return None
@@ -169,20 +235,21 @@ def load_benchmark_data(code='000300', start_date=None, end_date=None):
         return df
 
     # 尝试用 AkShare 获取指数数据
+    # 主要上证/中证指数（以 0 开头但属上海交易所）
+    _SH_INDICES = {'000001', '000002', '000003', '000016', '000300',
+                   '000688', '000852', '000905', '000906', '000985'}
     try:
         import akshare as ak
-        # AkShare 的指数代码不同：沪市前缀 sh，深市前缀 sz
-        if code.startswith('0'):
-            ak_code = f"sz{code}"
-        else:
+        # 确定 AkShare 所需的前缀
+        if code in _SH_INDICES or code.startswith(('9', '5')):
             ak_code = f"sh{code}"
-
-        start_str = pd.Timestamp(start_date).strftime('%Y%m%d') if start_date else '20150101'
-        end_str = pd.Timestamp(end_date).strftime('%Y%m%d') if end_date else datetime.datetime.now().strftime('%Y%m%d')
+        elif code.startswith(('6', '1')):
+            ak_code = f"sh{code}"
+        else:
+            ak_code = f"sz{code}"
 
         idx_df = ak.stock_zh_index_daily(symbol=ak_code)
         if idx_df is not None and len(idx_df) > 0:
-            idx_df = idx_df.rename(columns={'date': 'date'})
             idx_df['date'] = pd.to_datetime(idx_df['date'])
             if start_date:
                 idx_df = idx_df[idx_df['date'] >= pd.Timestamp(start_date)]
@@ -190,7 +257,22 @@ def load_benchmark_data(code='000300', start_date=None, end_date=None):
                 idx_df = idx_df[idx_df['date'] <= pd.Timestamp(end_date)]
             idx_df = idx_df.sort_values('date').reset_index(drop=True)
             if len(idx_df) > 0:
-                logging.info(f"从 AkShare 获取基准指数 {code} 数据: {len(idx_df)} 条")
+                logging.info(f"从 AkShare 获取基准指数 {code} ({ak_code}) 数据: {len(idx_df)} 条")
+                return idx_df
+
+        # 如果上面失败，尝试另一前缀
+        alt_code = f"sh{code}" if ak_code.startswith('sz') else f"sz{code}"
+        logging.debug(f"尝试替代前缀 {alt_code}")
+        idx_df = ak.stock_zh_index_daily(symbol=alt_code)
+        if idx_df is not None and len(idx_df) > 0:
+            idx_df['date'] = pd.to_datetime(idx_df['date'])
+            if start_date:
+                idx_df = idx_df[idx_df['date'] >= pd.Timestamp(start_date)]
+            if end_date:
+                idx_df = idx_df[idx_df['date'] <= pd.Timestamp(end_date)]
+            idx_df = idx_df.sort_values('date').reset_index(drop=True)
+            if len(idx_df) > 0:
+                logging.info(f"从 AkShare 获取基准指数 {code} ({alt_code}) 数据: {len(idx_df)} 条")
                 return idx_df
     except Exception as e:
         logging.debug(f"AkShare 获取指数数据失败: {e}")

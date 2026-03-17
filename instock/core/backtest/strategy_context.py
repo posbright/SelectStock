@@ -90,6 +90,15 @@ class Portfolio:
         self.positions = {}                   # {code: Position}
         self._frozen_cash = 0.0               # 冻结资金（挂单中）
 
+    @property
+    def cash(self):
+        """可用现金（兼容聚宽 context.portfolio.cash）"""
+        return self.available_cash
+
+    @cash.setter
+    def cash(self, value):
+        self.available_cash = value
+
     def _update_value(self):
         """更新组合市值"""
         self.market_value = sum(p.value for p in self.positions.values() if p.amount > 0)
@@ -254,6 +263,7 @@ class TradeRecord:
             'value': self.value,
             'commission': self.commission,
             'tax': self.tax,
+            'slippage_cost': self.slippage_cost,
         }
 
 

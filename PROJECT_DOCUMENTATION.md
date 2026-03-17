@@ -257,7 +257,13 @@ SelectStock/
 │   │   │   └── indicator_web_dic.py # 指标字典
 │   │   │
 │   │   └── backtest/           # 🔄 回测模块
-│   │       └── rate_stats.py   # 收益率统计
+│   │       ├── rate_stats.py           # 收益率统计
+│   │       ├── portfolio_engine.py     # 聚宽风格组合回测引擎
+│   │       ├── fundamentals.py         # 基本面数据（市值/PB/PE）
+│   │       ├── strategy_sandbox.py     # 策略安全沙箱
+│   │       ├── strategy_context.py     # 回测上下文/持仓/交易
+│   │       ├── data_feed.py            # K线数据加载层
+│   │       └── risk_metrics.py         # 25项风险指标计算
 │   │
 │   ├── job/                     # ⏰ 定时作业
 │   │   ├── execute_daily_job.py    # 整体作业调度（Phase 0→1→2→3→4 流水线）
@@ -454,6 +460,79 @@ SelectStock/
 |----------|------|-----|------|
 | `stock_data_cache` | 512条 | 5分钟 | Web数据页面查询缓存 |
 | `filter_result_cache` | 128条 | 10分钟 | 策略筛选结果缓存 |
+
+### 9. 组合回测引擎 (core/backtest/)
+
+聚宽(JoinQuant)风格的事件驱动组合回测引擎，支持多股票持仓、T+1交易和完整风险指标。
+
+#### 架构总览
+
+```
+策略代码(Python字符串)
+    ↓   compile_strategy()
+安全沙箱 (strategy_sandbox.py)
+    ↓   提取 initialize / handle_data / run_daily / run_weekly
+回测引擎 (portfolio_engine.py)
+    ↓   逐交易日驱动
+    ├── 基本面数据 (fundamentals.py)  — 市值/PB/PE 查询
+    ├── K线数据 (data_feed.py)        — 缓存 + EastMoney API
+    ├── 策略上下文 (strategy_context.py) — Portfolio/Position/T+1
+    └── 风险指标 (risk_metrics.py)     — 25项量化指标
+```
+
+#### 支持的聚宽API
+
+| API | 说明 |
+|-----|------|
+| `order(code, amount)` | 按股数下单 |
+| `order_target(code, amount)` | 调整到目标持仓 |
+| `order_value(code, value)` | 按金额下单 |
+| `order_target_value(code, value)` | 调整到目标金额 |
+| `history(code, count, field)` | 获取历史数据 |
+| `get_price(code, start, end)` | 获取区间数据 |
+| `set_benchmark(code)` | 设定基准指数 |
+| `set_order_cost(OrderCost(...))` | 设定交易成本 |
+| `run_daily(func, time)` | 注册日级回调 |
+| `run_weekly(func, weekday, time)` | 注册周级回调 |
+| `get_index_stocks(index_code)` | 获取指数成份股 |
+| `get_fundamentals(query)` | 基本面数据查询 |
+| `get_current_data()` | 当前数据（停牌检测） |
+| `query(valuation.code, ...)` | 构建查询对象 |
+| `valuation.market_cap` / `.pb_ratio` | 估值字段 |
+| `valuation.code.in_(list)` | 代码过滤 |
+| `record(**kwargs)` | 记录自定义指标 |
+| `log.info(msg)` | 策略日志 |
+
+#### 内置策略模板
+
+| ID | 策略名称 | 说明 |
+|----|---------|------|
+| `small_cap` | 小市值策略 | 每月选市值最小的5只等权买入 |
+| `dual_ma` | 双均线策略 | MA5/MA20 金叉死叉信号 |
+| `bank_rotation` | 银行股轮动(聚宽) | PB最低银行股每周轮动 |
+| `equal_weight` | 多股票等权 | 等分配置定期再平衡 |
+| `momentum` | 动量策略 | 20日涨幅最大的股票 |
+| `small_cap_jq` | 小市值策略(聚宽) | 20-30亿市值最小3只5日轮动 |
+
+#### 基本面数据源（三级降级）
+
+1. **数据库** `cn_stock_spot` — 最快，含PB(pbnewmrq)
+2. **push2his API** — 东方财富实时数据(f12/f14/f2/f20/f23)，代理加速
+3. **stock_zh_a_spot_em** — AkShare全市场API，备用
+
+#### 数据缓存策略
+
+- **K线缓存**: `cache/hist/{code}.gzip.pickle`，按股票代码独立文件
+- **基本面缓存**: `cache/fundamental/fundamental_v3.pickle`，7天过期自动刷新
+- **延迟加载**: `_ensure_stocks_loaded()` 自动加载策略引用的非候选股票并持久化缓存
+- **缓存扩展**: 延迟加载的额外股票自动追加到基本面缓存，避免重复API请求
+
+#### 线程安全
+
+- **Web层**: `RunPortfolioBacktestHandler` 使用 `run_in_executor` + `ThreadPoolExecutor(max_workers=2)` 在线程池中运行回测，不阻塞Tornado IOLoop
+- **代理池**: `singleton_proxy` 使用 `RLock` 保护所有共享状态
+- **HTTP会话**: `eastmoney_fetcher` 使用 `threading.local()` 为每个线程提供独立的 requests.Session
+- **K线缓存文件**: 每只股票独立文件，多线程并行写入无冲突
 
 ---
 
