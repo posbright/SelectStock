@@ -215,7 +215,7 @@ async function doAction(id: number, action: 'pause' | 'resume' | 'stop') {
   }
   try {
     const res = await paperTradingAction({ id, action })
-    if (res.data?.code === 0) {
+    if ((res as any)?.code === 0 || res.data?.code === 0) {
       ElMessage.success('操作成功')
       loadList()
     }
@@ -226,12 +226,13 @@ async function doRun(id: number) {
   runningId.value = id
   try {
     const res = await runPaperTrading(id)
-    if (res.data?.code === 0) {
-      const r = res.data.data
+    const body = (res as any)?.code !== undefined ? (res as any) : res.data
+    if (body?.code === 0) {
+      const r = body.data
       ElMessage.success(r.message || '执行完成')
       loadList()
     } else {
-      ElMessage.error(res.data?.msg || '执行失败')
+      ElMessage.error(body?.msg || '执行失败')
     }
   } finally {
     runningId.value = null
@@ -250,12 +251,13 @@ async function doCreate() {
       name: createForm.value.name,
       initial_cash: createForm.value.initial_cash,
     })
-    if (res.data?.code === 0) {
+    const body = (res as any)?.code !== undefined ? (res as any) : res.data
+    if (body?.code === 0) {
       ElMessage.success('模拟盘创建成功')
       showCreateDialog.value = false
       loadList()
     } else {
-      ElMessage.error(res.data?.msg || '创建失败')
+      ElMessage.error(body?.msg || '创建失败')
     }
   } finally {
     creating.value = false

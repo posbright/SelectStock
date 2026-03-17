@@ -172,9 +172,9 @@ let navChart: echarts.ECharts | null = null
 
 onMounted(async () => {
   try {
-    const res = await getStrategyTemplates()
-    if (res.data?.code === 0) {
-      templates.value = res.data.data
+    const res: any = await getStrategyTemplates()
+    if (res?.code === 0) {
+      templates.value = res.data
     }
   } catch (e) {
     console.error('加载模板失败', e)
@@ -203,14 +203,14 @@ async function runBacktest() {
   running.value = true
   result.value = null
   try {
-    const res = await runPortfolioBacktest({
+    const res: any = await runPortfolioBacktest({
       code: strategyCode.value,
       start_date: dateRange.value[0],
       end_date: dateRange.value[1],
       initial_cash: initialCash.value,
     })
-    if (res.data?.code === 0) {
-      result.value = res.data.data
+    if (res?.code === 0) {
+      result.value = res.data
       if (result.value?.status === 'completed') {
         ElMessage.success(`回测完成，耗时 ${result.value.elapsed}s`)
         await nextTick()
@@ -219,7 +219,7 @@ async function runBacktest() {
         ElMessage.error(result.value.message)
       }
     } else {
-      ElMessage.error(res.data?.msg || '回测失败')
+      ElMessage.error(res?.msg || '回测失败')
     }
   } catch (e: any) {
     ElMessage.error(`回测异常: ${e.message}`)
@@ -234,15 +234,15 @@ async function saveStrategy() {
     return
   }
   try {
-    const res = await saveStrategyCode({
+    const res: any = await saveStrategyCode({
       name: strategyName.value,
       code: strategyCode.value,
       initial_cash: initialCash.value,
     })
-    if (res.data?.code === 0) {
+    if (res?.code === 0) {
       ElMessage.success('策略已保存')
     } else {
-      ElMessage.error(res.data?.msg || '保存失败')
+      ElMessage.error(res?.msg || '保存失败')
     }
   } catch (e: any) {
     ElMessage.error(`保存异常: ${e.message}`)

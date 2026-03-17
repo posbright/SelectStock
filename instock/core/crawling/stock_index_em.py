@@ -51,7 +51,7 @@ def stock_index_spot_em() -> pd.DataFrame:
         "invt": "2",
         "wbp2u": "|0|0|0|web",
         "fid": "f12",
-        "fs": "m:1+s:2,m:0+t:5",
+        "fs": "m:1 s:2,m:0 t:5",
         "fields": "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f12,f13,f14,f15,f16,f17,f18,f20,f21,f23,f24,f25,f22,f11,f62,f128,f136,f115,f152",
         "_": "1672806290972",
     }

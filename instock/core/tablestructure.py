@@ -62,7 +62,7 @@ TABLE_CN_ETF_SPOT = {'name': 'cn_etf_spot', 'cn': '每日ETF数据',
 
 TABLE_CN_INDEX_SPOT = {'name': 'cn_index_spot', 'cn': '每日指数数据',
                        'columns': {'date': {'type': DATE, 'cn': '日期', 'size': 0},
-                                   'code': {'type': VARCHAR(6, _COLLATE), 'cn': '代码', 'size': 60},
+                                   'code': {'type': VARCHAR(8, _COLLATE), 'cn': '代码', 'size': 80},
                                    'name': {'type': VARCHAR(20, _COLLATE), 'cn': '名称', 'size': 120},
                                    'new_price': {'type': FLOAT, 'cn': '最新价', 'size': 80},
                                    'change_rate': {'type': FLOAT, 'cn': '涨跌幅', 'size': 70},
