@@ -12,9 +12,15 @@ import math
 import logging
 import pandas as pd
 from instock.core.eastmoney_fetcher import eastmoney_fetcher
+import instock.lib.envconfig as _cfg
 
 __author__ = 'InStock'
 __date__ = '2025/07/15'
+
+# 指数K线API内部延迟（与股票爬虫延迟开关共用 INSTOCK_CRAWL_DELAY_ENABLED）
+_CRAWL_DELAY_ENABLED = _cfg.get_bool('INSTOCK_CRAWL_DELAY_ENABLED', True)
+_CRAWL_DELAY_INDEX_MIN = _cfg.get_float('INSTOCK_CRAWL_DELAY_INDEX_MIN', 0.2)
+_CRAWL_DELAY_INDEX_MAX = _cfg.get_float('INSTOCK_CRAWL_DELAY_INDEX_MAX', 0.5)
 
 # 创建全局实例，供所有函数使用
 fetcher = eastmoney_fetcher()
@@ -166,7 +172,8 @@ def stock_index_hist_em(
         "end": end_date,
         "_": "1623766962675",
     }
-    time.sleep(random.uniform(0.2, 0.5))
+    if _CRAWL_DELAY_ENABLED:
+        time.sleep(random.uniform(_CRAWL_DELAY_INDEX_MIN, _CRAWL_DELAY_INDEX_MAX))
     r = fetcher.make_request(url, params=params)
     data_json = r.json()
     if not (data_json.get("data") and data_json["data"].get("klines")):

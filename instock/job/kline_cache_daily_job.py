@@ -84,6 +84,7 @@ def fetch_all_data(date):
     2. 清理过期缓存（退市股票、除权除息数据）
     3. 预加载实时行情（stock_data 单例）
     4. 批量更新历史K线缓存（仅更新磁盘缓存，不保留在内存中）
+    5. 更新指数K线缓存（~15个主要指数）
 
     参数：
         date: 交易日期
@@ -100,7 +101,7 @@ def fetch_all_data(date):
     # Step 1: 清理过期缓存
     t1 = record_task_start(_JOB_NAME, 'clean_cache', date)
     try:
-        logging.info("Step 1/3: 清理过期缓存...")
+        logging.info("Step 1/4: 清理过期缓存...")
         cleaned = stf.clean_expired_cache()
         logging.info(f"缓存清理完成，清理了 {cleaned} 个文件")
         record_task_end(_JOB_NAME, 'clean_cache', date, t1, success=True,
@@ -112,7 +113,7 @@ def fetch_all_data(date):
     # Step 2: 预加载实时行情（stock_data 单例）
     t2 = record_task_start(_JOB_NAME, 'load_spot', date)
     try:
-        logging.info("Step 2/3: 预加载实时行情数据...")
+        logging.info("Step 2/4: 预加载实时行情数据...")
         spot_start = time.time()
         spot = stock_data(date).get_data()
         if spot is not None:
@@ -132,7 +133,7 @@ def fetch_all_data(date):
     # Step 3: 批量更新历史K线缓存（自动检测本地/服务器模式）
     t3 = record_task_start(_JOB_NAME, 'update_kline_cache', date)
     try:
-        logging.info("Step 3/3: 批量更新历史K线缓存...")
+        logging.info("Step 3/4: 批量更新历史K线缓存...")
         hist_start = time.time()
 
         _subset = spot[list(tbs.TABLE_CN_STOCK_FOREIGN_KEY['columns'])]
@@ -162,6 +163,21 @@ def fetch_all_data(date):
     except Exception as e:
         logging.error(f"历史K线缓存更新异常", exc_info=True)
         record_task_end(_JOB_NAME, 'update_kline_cache', date, t3, success=False, message=str(e))
+
+    # Step 4: 指数K线缓存更新（~15个主要指数）
+    t4 = record_task_start(_JOB_NAME, 'update_index_cache', date)
+    try:
+        logging.info("Step 4/4: 更新指数K线缓存...")
+        idx_start = time.time()
+        idx_ok, idx_fail = stf.update_index_caches(date_start=date_start, date_end=date_end)
+        elapsed_idx = time.time() - idx_start
+        logging.info(f"指数K线缓存更新完成：成功 {idx_ok}，失败 {idx_fail}，耗时 {elapsed_idx:.1f}秒")
+        record_task_end(_JOB_NAME, 'update_index_cache', date, t4, success=True,
+                        rows_affected=idx_ok,
+                        message=f"成功 {idx_ok}，失败 {idx_fail}")
+    except Exception as e:
+        logging.error(f"指数K线缓存更新异常", exc_info=True)
+        record_task_end(_JOB_NAME, 'update_index_cache', date, t4, success=False, message=str(e))
 
     elapsed = time.time() - start_time
     record_task_end(_JOB_NAME, '__overall__', date, overall_start, success=True,

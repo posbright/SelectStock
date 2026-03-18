@@ -1152,10 +1152,27 @@ def update_index_caches(index_codes=None, date_start=None, date_end=None):
     if date_end is None:
         date_end = datetime.datetime.now().strftime("%Y%m%d")
 
+    # 指数间请求延迟（可通过环境变量配置）
+    idx_delay_min = _cfg.get_float('INSTOCK_INDEX_DELAY_MIN', 0.5)
+    idx_delay_max = _cfg.get_float('INSTOCK_INDEX_DELAY_MAX', 1.5)
+
     success = 0
     fail = 0
+    skip = 0
     for code in index_codes:
         try:
+            # 预检查：meta 已最新则跳过（与股票缓存一致）
+            meta_path = _get_index_cache_meta_path(code)
+            if os.path.isfile(meta_path):
+                try:
+                    with open(meta_path, 'r') as f:
+                        meta_last_date = f.read().strip().split(',')[0]
+                    if meta_last_date >= date_end:
+                        skip += 1
+                        continue
+                except Exception:
+                    pass  # meta 读取失败不影响，继续正常更新
+
             result = index_hist_cache_incremental(code, date_start, date_end)
             if result is not None and len(result) > 0:
                 success += 1
@@ -1164,12 +1181,14 @@ def update_index_caches(index_codes=None, date_start=None, date_end=None):
                 fail += 1
                 logging.warning(f"指数 {code} K线缓存更新失败: 无数据")
             # 每个指数之间添加延迟
-            time.sleep(random.uniform(0.5, 1.5))
+            time.sleep(random.uniform(idx_delay_min, idx_delay_max))
         except Exception as e:
             fail += 1
             logging.warning(f"指数 {code} K线缓存更新异常: {e}")
 
-    return success, fail
+    if skip > 0:
+        logging.info(f"指数缓存更新：成功={success}, 失败={fail}, 已最新跳过={skip}")
+    return success + skip, fail
 # 当此版本号与 .meta 中的 filtered_version 匹配时，读取缓存可跳过 _filter_ohlc_outliers
 _FILTER_VERSION = 2
 
