@@ -584,6 +584,16 @@ class GetStrategyParamsHandler(webBase.BaseHandler, ABC):
             self.write(json.dumps({"error": f"未知策略: {strategy_key}"}, ensure_ascii=False))
             return
         
+        # 安全处理：对 password 类型的参数值进行脱敏，防止 API 密钥泄露
+        for group in params.get('groups', []):
+            for param in group.get('params', []):
+                if param.get('type') == 'password' and param.get('value'):
+                    val = str(param['value'])
+                    if len(val) > 8:
+                        param['value'] = val[:4] + '*' * (len(val) - 8) + val[-4:]
+                    elif len(val) > 0:
+                        param['value'] = '****'
+        
         self.write(json.dumps(params, ensure_ascii=False))
 
 

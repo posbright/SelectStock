@@ -37,6 +37,7 @@ def get_previous_trade_date(date, count=1):
 def get_one_previous_trade_date(date):
     trade_date = stock_trade_date().get_data()
     if trade_date is None:
+        logging.warning(f"get_one_previous_trade_date: 交易日历不可用，返回原始日期 {date}（可能不正确）")
         return date
     tmp_date = date
     for _ in range(365):  # 最多向前找1年
@@ -50,6 +51,7 @@ def get_one_previous_trade_date(date):
 def get_next_trade_date(date):
     trade_date = stock_trade_date().get_data()
     if trade_date is None:
+        logging.warning(f"get_next_trade_date: 交易日历不可用，返回原始日期 {date}（可能不正确）")
         return date
     tmp_date = date
     for _ in range(365):  # 最多向后找1年

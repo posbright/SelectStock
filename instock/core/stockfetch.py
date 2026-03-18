@@ -1310,12 +1310,19 @@ def _try_spot_append(code, spot_row, date_end, exrights_threshold):
                 return 0.0
         
         date_end_dash = _to_dash_date(date_end)
+        _open = _safe_float(spot_row.get('open_price', 0))
+        _close = _safe_float(spot_row.get('new_price', 0))
+        _high = _safe_float(spot_row.get('high_price', 0))
+        _low = _safe_float(spot_row.get('low_price', 0))
+        # OHLC 完整性校验：任一价格字段为 0 则数据不可信，回退到 API
+        if _open <= 0 or _close <= 0 or _high <= 0 or _low <= 0:
+            return 'error'
         new_row = pd.DataFrame([{
             'date': date_end_dash,
-            'open': _safe_float(spot_row.get('open_price', 0)),
-            'close': _safe_float(spot_row.get('new_price', 0)),
-            'high': _safe_float(spot_row.get('high_price', 0)),
-            'low': _safe_float(spot_row.get('low_price', 0)),
+            'open': _open,
+            'close': _close,
+            'high': _high,
+            'low': _low,
             'volume': _safe_float(spot_row.get('volume', 0)) / 100,  # 股 → 手
             'amount': _safe_float(spot_row.get('deal_amount', 0)),
             'amplitude': _safe_float(spot_row.get('amplitude', 0)),
@@ -1326,6 +1333,8 @@ def _try_spot_append(code, spot_row, date_end, exrights_threshold):
         
         # ── 追加并去重 ──
         combined = pd.concat([cached_data, new_row], ignore_index=True)
+        # 统一 date 列类型为字符串，避免 Timestamp vs str 导致 drop_duplicates 失效
+        combined['date'] = combined['date'].apply(_to_dash_date_safe)
         combined = combined.drop_duplicates(subset=['date'], keep='last')
         combined = combined.sort_values(by='date').reset_index(drop=True)
         
@@ -1441,6 +1450,22 @@ def _to_dash_date(yyyymmdd):
     return f"{yyyymmdd[:4]}-{yyyymmdd[4:6]}-{yyyymmdd[6:]}"
 
 
+def _to_dash_date_safe(d):
+    """将任意日期类型（str / Timestamp / datetime）统一转为 YYYY-MM-DD 字符串。
+    用于 drop_duplicates 前的类型归一化，防止 Timestamp vs str 导致去重失败。"""
+    if isinstance(d, str):
+        # 已经是字符串
+        if '-' in d:
+            return d[:10]  # 截取 YYYY-MM-DD
+        # YYYYMMDD → YYYY-MM-DD
+        return f"{d[:4]}-{d[4:6]}-{d[6:8]}" if len(d) >= 8 else d
+    # Timestamp / datetime
+    try:
+        return d.strftime("%Y-%m-%d")
+    except (AttributeError, ValueError):
+        return str(d)
+
+
 def stock_hist_cache_incremental(code, date_start, date_end, is_cache=True, adjust=''):
     """
     增量更新的股票历史数据缓存（多数据源支持）
@@ -1541,6 +1566,8 @@ def stock_hist_cache_incremental(code, date_start, date_end, is_cache=True, adju
             combined_data = parts[0]
         else:
             combined_data = pd.concat(parts, ignore_index=True)
+            # 统一 date 列类型，避免 Timestamp vs str 导致 drop_duplicates 失效
+            combined_data['date'] = combined_data['date'].apply(_to_dash_date_safe)
             combined_data = combined_data.drop_duplicates(subset=['date'], keep='last')
             combined_data = combined_data.sort_values(by='date').reset_index(drop=True)
         
@@ -2312,6 +2339,9 @@ def read_stock_hist_from_cache(code, date_start, date_end):
                     valid_cols = [c for c in data.columns if c in _spot_row.columns]
                     _spot_row = _spot_row[valid_cols]
                     data = pd.concat([data, _spot_row], ignore_index=True)
+                    # 统一 date 类型并去重，防止 Timestamp vs str 导致重复行
+                    data['date'] = data['date'].apply(_to_dash_date_safe)
+                    data = data.drop_duplicates(subset=['date'], keep='last').reset_index(drop=True)
                     logging.debug(f"DB回填：{code} 补充 {_to_dash_date(date_end)} 行情（来自 cn_stock_spot）")
         except Exception as e:
             logging.debug(f"DB回填异常（不影响已有数据）：{code} - {e}")

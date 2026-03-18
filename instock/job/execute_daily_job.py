@@ -104,17 +104,21 @@ def _run_job_subprocess(script_name, label, timeout=_JOB_TIMEOUT):
         return False
 
 
-def _is_analysis_done():
+def _is_analysis_done(run_date_nph=None):
     """
     检查今日分析数据是否已由其他节点完成。
     用于 execute_daily_job 中跳过 Phase 3/4（分析+回测），
     但仍执行 Phase 0/1/2（初始化+轻量数据+K线缓存）。
     可通过 INSTOCK_FORCE_ANALYSIS=1 强制执行。
+
+    参数：
+        run_date_nph: 由调用方传入，避免重复调用 get_trade_date_last 产生 TOCTOU 时间竞争
     """
     if _cfg.get_bool('INSTOCK_FORCE_ANALYSIS', False):
         return False
     try:
-        run_date, run_date_nph = trd.get_trade_date_last()
+        if run_date_nph is None:
+            _, run_date_nph = trd.get_trade_date_last()
         date_str = run_date_nph.strftime("%Y-%m-%d")
         table_name = 'cn_stock_indicators'
         if not mdb.checkTableIsExist(table_name):
@@ -369,7 +373,7 @@ def main():
     # ================================================================
     # Phase 3: 数据分析（流式处理 — 低内存模式）
     # ================================================================
-    analysis_already_done = _is_analysis_done()
+    analysis_already_done = _is_analysis_done(run_date_nph)
 
     if analysis_already_done:
         logging.info("Phase 3 跳过：分析数据已由其他节点完成")
@@ -408,7 +412,7 @@ def main():
     # ================================================================
     # 数据健康检查
     # ================================================================
-    _data_health_check(start)
+    _data_health_check(start, run_date_nph)
 
     elapsed = time.time() - start
     record_task_end(_JOB_NAME, '__overall__', run_date_nph, overall_start,
@@ -416,12 +420,13 @@ def main():
     logging.info("######## 完成任务, 使用时间: %s 秒 #######" % (time.time() - start))
 
 
-def _data_health_check(pipeline_start):
+def _data_health_check(pipeline_start, run_date_nph=None):
     """流水线结束后，检查核心表是否有当日数据"""
     try:
         import instock.lib.database as mdb
-        import instock.lib.trade_time as trd
-        run_date, run_date_nph = trd.get_trade_date_last()
+        if run_date_nph is None:
+            import instock.lib.trade_time as trd
+            _, run_date_nph = trd.get_trade_date_last()
         date_str = run_date_nph.strftime("%Y-%m-%d")
 
         tables_to_check = [
