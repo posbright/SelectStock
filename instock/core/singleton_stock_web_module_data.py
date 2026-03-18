@@ -107,7 +107,7 @@ class stock_web_module_data(metaclass=singleton_type):
             primary_key=[],
             is_realtime=True,
             order_columns=f"(SELECT `datetime` FROM `{tbs.TABLE_CN_STOCK_ATTENTION['name']}` WHERE `code`=`{tbs.TABLE_CN_STOCK_lHB['name']}`.`code`) AS `cdatetime`",
-            order_by=" `cdatetime`,`ranking_times` DESC"
+            order_by=" `cdatetime` DESC,`ranking_times` DESC"
         ), wmd.web_module_data(
             mode="query",
             type="股票基本数据",

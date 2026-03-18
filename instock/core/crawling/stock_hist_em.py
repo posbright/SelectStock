@@ -180,15 +180,12 @@ def stock_zh_a_spot_em() -> pd.DataFrame:
     temp_df["加权净资产收益率"] = pd.to_numeric(temp_df["加权净资产收益率"], errors="coerce")
     temp_df["毛利率"] = pd.to_numeric(temp_df["毛利率"], errors="coerce")
     temp_df["资产负债率"] = pd.to_numeric(temp_df["资产负债率"], errors="coerce")
-    temp_df["营业收入"] = pd.to_numeric(temp_df["营业收入"], errors="coerce")
+    # BIGINT 列：统一转为 int64 并将 NaN 填 0（与腾讯/新浪源保持一致）
+    for _int_col in ["成交量", "成交额", "营业收入", "归属净利润", "总股本", "已流通股份", "总市值", "流通市值"]:
+        temp_df[_int_col] = pd.to_numeric(temp_df[_int_col], errors="coerce").fillna(0).astype('int64')
     temp_df["营业收入同比增长"] = pd.to_numeric(temp_df["营业收入同比增长"], errors="coerce")
-    temp_df["归属净利润"] = pd.to_numeric(temp_df["归属净利润"], errors="coerce")
     temp_df["归属净利润同比增长"] = pd.to_numeric(temp_df["归属净利润同比增长"], errors="coerce")
     temp_df["报告期"] = pd.to_datetime(temp_df["报告期"], format='%Y%m%d', errors="coerce")
-    temp_df["总股本"] = pd.to_numeric(temp_df["总股本"], errors="coerce")
-    temp_df["已流通股份"] = pd.to_numeric(temp_df["已流通股份"], errors="coerce")
-    temp_df["总市值"] = pd.to_numeric(temp_df["总市值"], errors="coerce")
-    temp_df["流通市值"] = pd.to_numeric(temp_df["流通市值"], errors="coerce")
     temp_df["上市时间"] = pd.to_datetime(temp_df["上市时间"], format='%Y%m%d', errors="coerce")
 
     return temp_df

@@ -1589,6 +1589,9 @@ def stock_hist_cache_incremental(code, date_start, date_end, is_cache=True, adju
         
         if len(parts) == 1:
             combined_data = parts[0]
+            # 单部分也需统一 date 列类型（缓存可能含 Timestamp 类型）
+            if 'date' in combined_data.columns:
+                combined_data['date'] = combined_data['date'].apply(_to_dash_date_safe)
         else:
             combined_data = pd.concat(parts, ignore_index=True)
             # 统一 date 列类型，避免 Timestamp vs str 导致 drop_duplicates 失效

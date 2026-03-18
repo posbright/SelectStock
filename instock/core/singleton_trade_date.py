@@ -23,11 +23,16 @@ class stock_trade_date(metaclass=singleton_type):
 
     def _refresh(self):
         try:
-            self.data = stf.fetch_stocks_trade_date()
-            self._loaded_date = datetime.date.today()
+            new_data = stf.fetch_stocks_trade_date()
+            if new_data is not None and len(new_data) > 30:
+                self.data = new_data
+                self._loaded_date = datetime.date.today()
+            else:
+                # 返回数据异常（空或太少），保留旧数据比无数据好
+                logging.warning("stock_trade_date: 获取交易日历返回结果异常(None或太少)，保留已有数据")
         except Exception as e:
-            self.data = None
-            logging.error(f"singleton.stock_trade_date处理异常", exc_info=True)
+            # 保留旧数据 — 过时的交易日历远比无数据好
+            logging.error(f"singleton.stock_trade_date刷新失败，保留已有数据", exc_info=True)
 
     def get_data(self):
         # 跨日检测：Web 服务器可能运行数天不重启，

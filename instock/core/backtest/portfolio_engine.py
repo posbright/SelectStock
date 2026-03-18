@@ -608,9 +608,12 @@ class PortfolioBacktestEngine:
                     return
                 total_cost = actual_price * amount
                 commission = max(total_cost * self.context.commission_rate, 5.0)
+                # 防御：最低佣金5元可能导致超支，再次检查
+                if total_cost + commission > self.context.portfolio.available_cash:
+                    return
 
             pos = self.context.portfolio._get_or_create_position(code)
-            pos._on_buy(amount, exec_price, commission)
+            pos._on_buy(amount, actual_price, commission)
             self.context.portfolio.available_cash -= (total_cost + commission)
             self.context.portfolio._update_value()
 
@@ -636,7 +639,7 @@ class PortfolioBacktestEngine:
             commission = max(total_income * self.context.commission_rate, 5.0)
             tax = total_income * self.context.stamp_tax_rate
 
-            pos._on_sell(sell_amount, exec_price)
+            pos._on_sell(sell_amount, actual_price)
             self.context.portfolio.available_cash += (total_income - commission - tax)
             self.context.portfolio._update_value()
 
@@ -732,10 +735,13 @@ class PortfolioBacktestEngine:
                         continue
                     total_cost = actual_price * amount
                     commission = max(total_cost * self.context.commission_rate, 5.0)
+                    # 防御：最低佣金5元可能导致超支
+                    if total_cost + commission > self.context.portfolio.available_cash:
+                        continue
 
                 # 执行买入
                 pos = self.context.portfolio._get_or_create_position(code)
-                pos._on_buy(amount, exec_price, commission)
+                pos._on_buy(amount, actual_price, commission)
                 self.context.portfolio.available_cash -= (total_cost + commission)
 
                 trade = TradeRecord(date, code, pos.name, 'buy', exec_price, amount)
@@ -762,7 +768,7 @@ class PortfolioBacktestEngine:
                 tax = total_income * self.context.stamp_tax_rate
 
                 # 执行卖出
-                pos._on_sell(sell_amount, exec_price)
+                pos._on_sell(sell_amount, actual_price)
                 self.context.portfolio.available_cash += (total_income - commission - tax)
 
                 trade = TradeRecord(date, code, pos.name, 'sell', exec_price, sell_amount)

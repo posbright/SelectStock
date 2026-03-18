@@ -242,9 +242,12 @@ def run_paper_trading_daily(paper_id):
                         continue
                     total_cost = actual_price * amount
                     commission = max(total_cost * context.commission_rate, 5.0)
+                    # 防御：最低佣金5元可能导致超支
+                    if total_cost + commission > context.portfolio.available_cash:
+                        continue
 
                 pos = context.portfolio._get_or_create_position(code)
-                pos._on_buy(amount, exec_price, commission)
+                pos._on_buy(amount, actual_price, commission)
                 context.portfolio.available_cash -= (total_cost + commission)
 
                 trade = TradeRecord(run_date_nph, code, pos.name, 'buy', exec_price, amount)
@@ -266,7 +269,7 @@ def run_paper_trading_daily(paper_id):
                 commission = max(total_income * context.commission_rate, 5.0)
                 tax = total_income * context.stamp_tax_rate
 
-                pos._on_sell(sell_amount, exec_price)
+                pos._on_sell(sell_amount, actual_price)
                 context.portfolio.available_cash += (total_income - commission - tax)
 
                 trade = TradeRecord(run_date_nph, code, pos.name, 'sell', exec_price, sell_amount)
