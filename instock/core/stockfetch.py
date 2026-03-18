@@ -1275,19 +1275,27 @@ def _try_spot_append(code, spot_row, date_end, exrights_threshold):
             return 'error'
         
         # ── 构造新行（spot → hist格式）──
+        def _safe_float(v):
+            """安全转换为float，NaN/None/空值均返回0.0"""
+            try:
+                v = float(v or 0)
+                return 0.0 if pd.isna(v) else v
+            except (ValueError, TypeError):
+                return 0.0
+        
         date_end_dash = _to_dash_date(date_end)
         new_row = pd.DataFrame([{
             'date': date_end_dash,
-            'open': float(spot_row.get('open_price', 0) or 0),
-            'close': float(spot_row.get('new_price', 0) or 0),
-            'high': float(spot_row.get('high_price', 0) or 0),
-            'low': float(spot_row.get('low_price', 0) or 0),
-            'volume': float(spot_row.get('volume', 0) or 0) / 100,  # 股 → 手
-            'amount': float(spot_row.get('deal_amount', 0) or 0),
-            'amplitude': float(spot_row.get('amplitude', 0) or 0),
-            'quote_change': float(spot_row.get('change_rate', 0) or 0),
-            'ups_downs': float(spot_row.get('ups_downs', 0) or 0),
-            'turnover': float(spot_row.get('turnoverrate', 0) or 0),
+            'open': _safe_float(spot_row.get('open_price', 0)),
+            'close': _safe_float(spot_row.get('new_price', 0)),
+            'high': _safe_float(spot_row.get('high_price', 0)),
+            'low': _safe_float(spot_row.get('low_price', 0)),
+            'volume': _safe_float(spot_row.get('volume', 0)) / 100,  # 股 → 手
+            'amount': _safe_float(spot_row.get('deal_amount', 0)),
+            'amplitude': _safe_float(spot_row.get('amplitude', 0)),
+            'quote_change': _safe_float(spot_row.get('change_rate', 0)),
+            'ups_downs': _safe_float(spot_row.get('ups_downs', 0)),
+            'turnover': _safe_float(spot_row.get('turnoverrate', 0)),
         }])
         
         # ── 追加并去重 ──
@@ -1745,7 +1753,6 @@ def update_all_caches(stocks, date_start, date_end, workers=2, spot_df=None):
         DEFAULT_WORKERS = 6              # 本地默认6线程
         MAX_WORKERS = 12                 # 本地最大12线程
         REQUEST_DELAY = (0.2, 0.5)       # 本地请求间隔更短
-        BATCH_PAUSE_INTERVAL = 300       # 本地每300只暂停一次
         BATCH_PAUSE_SECONDS = (2, 4)     # 本地暂停时间更短
         CONSECUTIVE_FAIL_THRESHOLD = 5   # 本地容忍更多失败
         BASE_THROTTLE_PAUSE = 60         # 本地限流暂停更短
@@ -1757,7 +1764,6 @@ def update_all_caches(stocks, date_start, date_end, workers=2, spot_df=None):
         DEFAULT_WORKERS = 2              # 服务器默认2线程
         MAX_WORKERS = 4                  # 服务器最大4线程
         REQUEST_DELAY = (1.0, 3.0)       # 服务器请求间隔更长
-        BATCH_PAUSE_INTERVAL = 100       # 服务器每100只暂停一次
         BATCH_PAUSE_SECONDS = (8, 15)    # 服务器暂停时间更长
         CONSECUTIVE_FAIL_THRESHOLD = 3   # 服务器容忍较少失败
         BASE_THROTTLE_PAUSE = 120        # 服务器限流暂停更长
@@ -1768,7 +1774,6 @@ def update_all_caches(stocks, date_start, date_end, workers=2, spot_df=None):
     workers = _cfg.get_int('INSTOCK_KLINE_CACHE_WORKERS', workers if workers > 2 else DEFAULT_WORKERS)
     REQUEST_DELAY_MIN = _cfg.get_float('INSTOCK_KLINE_REQUEST_DELAY_MIN', REQUEST_DELAY[0])
     REQUEST_DELAY_MAX = _cfg.get_float('INSTOCK_KLINE_REQUEST_DELAY_MAX', REQUEST_DELAY[1])
-    BATCH_PAUSE_INTERVAL = _cfg.get_int('INSTOCK_KLINE_BATCH_INTERVAL', BATCH_PAUSE_INTERVAL)
     BATCH_PAUSE_MIN = _cfg.get_float('INSTOCK_KLINE_BATCH_PAUSE_MIN', BATCH_PAUSE_SECONDS[0])
     BATCH_PAUSE_MAX = _cfg.get_float('INSTOCK_KLINE_BATCH_PAUSE_MAX', BATCH_PAUSE_SECONDS[1])
     CHUNK_SIZE = _cfg.get_int('INSTOCK_KLINE_CHUNK_SIZE', CHUNK_SIZE)
@@ -1910,9 +1915,10 @@ def update_all_caches(stocks, date_start, date_end, workers=2, spot_df=None):
     
     try:
         processed_total = 0
-        api_processed = 0  # 实际发起 API 请求的数量（用于批次暂停计数）
+        api_processed = 0  # 实际发起 API 请求的累计数量
         
         for chunk_start in range(0, len(stocks), CHUNK_SIZE):
+            chunk_api_count = 0  # 本批次实际 API 请求数（用于判断是否需要批次暂停）
             if _abort:
                 break
             
@@ -1936,9 +1942,11 @@ def update_all_caches(stocks, date_start, date_end, workers=2, spot_df=None):
                             elif result:
                                 success += 1
                                 api_processed += 1
+                                chunk_api_count += 1
                             else:
                                 fail += 1
                                 api_processed += 1
+                                chunk_api_count += 1
                                 # 限流检测：连续失败达到阈值时触发暂停
                                 should_throttle = False
                                 pause_time = 0
@@ -1982,6 +1990,7 @@ def update_all_caches(stocks, date_start, date_end, workers=2, spot_df=None):
                         except Exception as e:
                             fail += 1
                             api_processed += 1
+                            chunk_api_count += 1
                             stock = future_to_stock[future]
                             logging.error(f"update_all_caches处理异常：{stock[1]} -", exc_info=True)
                         
@@ -2000,7 +2009,7 @@ def update_all_caches(stocks, date_start, date_end, workers=2, spot_df=None):
             # ThreadPoolExecutor 上下文退出后，本批所有线程/Future 已释放
             gc.collect()
             remaining = len(stocks) - processed_total
-            if remaining > 0 and not _abort and api_processed > 0:
+            if remaining > 0 and not _abort and chunk_api_count > 0:
                 # 仅在本批有实际API请求时才暂停（全部skip/spot的批次无需暂停）
                 pause = random.uniform(*batch_pause_seconds)
                 logging.info(
