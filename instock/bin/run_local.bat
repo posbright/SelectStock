@@ -47,6 +47,9 @@ if exist "%PROJECT_ROOT%\.venv\Scripts\activate.bat" (
 
 cd instock\job
 
+REM === 本地模式标志（启用高并发、少延迟、大内存配置）===
+if not defined INSTOCK_LOCAL_MODE set INSTOCK_LOCAL_MODE=1
+
 REM === 高并发配置（利用本地充足的 CPU 和内存）===
 REM 以下参数仅在 .env 未定义时使用本地默认值。
 REM 若需自定义，请在 .env 中设置，无需修改此脚本。

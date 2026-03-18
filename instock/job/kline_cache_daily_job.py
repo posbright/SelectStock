@@ -129,10 +129,10 @@ def fetch_all_data(date):
         record_task_end(_JOB_NAME, 'load_spot', date, t2, success=False, message=str(e))
         return
 
-    # Step 3: 批量更新历史K线缓存（低内存模式）
+    # Step 3: 批量更新历史K线缓存（自动检测本地/服务器模式）
     t3 = record_task_start(_JOB_NAME, 'update_kline_cache', date)
     try:
-        logging.info("Step 3/3: 批量更新历史K线缓存（低内存模式）...")
+        logging.info("Step 3/3: 批量更新历史K线缓存...")
         hist_start = time.time()
 
         _subset = spot[list(tbs.TABLE_CN_STOCK_FOREIGN_KEY['columns'])]

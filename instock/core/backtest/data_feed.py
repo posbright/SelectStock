@@ -64,11 +64,12 @@ def _fetch_stock_from_eastmoney(code, start_date=None, end_date=None, adjust='qf
 
 
 def _save_cache(code, df):
-    """保存 DataFrame 到缓存文件"""
+    """保存 DataFrame 到缓存文件（统一路径 cache/hist/{prefix}/{code}qfq.gzip.pickle）"""
     try:
-        os.makedirs(_CACHE_DIR, exist_ok=True)
-        cache_file = os.path.join(_CACHE_DIR, f"{code}.gzip.pickle")
-        df.to_pickle(cache_file)
+        sub_dir = os.path.join(_CACHE_DIR, code[:3])
+        os.makedirs(sub_dir, exist_ok=True)
+        cache_file = os.path.join(sub_dir, f"{code}qfq.gzip.pickle")
+        df.to_pickle(cache_file, compression="gzip")
         logging.debug(f"缓存已更新: {code} ({len(df)} 条)")
     except Exception as e:
         logging.debug(f"缓存保存失败 {code}: {e}")
