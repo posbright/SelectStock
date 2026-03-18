@@ -152,7 +152,8 @@ def fetch_all_data(date):
             date_end = str(raw_date).replace("-", "").replace("/", "")[:8]
 
         success, fail = stf.update_all_caches(stocks, date_start, date_end,
-                                                workers=_cfg.get_int('INSTOCK_KLINE_CACHE_WORKERS', 2))
+                                                workers=_cfg.get_int('INSTOCK_KLINE_CACHE_WORKERS', 2),
+                                                spot_df=spot)
         elapsed_hist = time.time() - hist_start
         logging.info(f"历史K线缓存更新完成：成功 {success}，失败 {fail}，耗时 {elapsed_hist:.1f}秒")
         record_task_end(_JOB_NAME, 'update_kline_cache', date, t3, success=True,

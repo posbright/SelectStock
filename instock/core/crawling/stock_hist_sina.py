@@ -11,9 +11,15 @@ import requests
 import pandas as pd
 import datetime
 import logging
+import instock.lib.envconfig as _cfg
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
+
+# 爬虫内部延迟开关（当调度层已有限流时可关闭，避免双重延迟）
+_CRAWL_DELAY_ENABLED = _cfg.get_bool('INSTOCK_CRAWL_DELAY_ENABLED', True)
+_CRAWL_DELAY_SINA_MIN = _cfg.get_float('INSTOCK_CRAWL_DELAY_SINA_MIN', 3.0)
+_CRAWL_DELAY_SINA_MAX = _cfg.get_float('INSTOCK_CRAWL_DELAY_SINA_MAX', 6.0)
 
 # 请求配置
 HEADERS = {
@@ -116,7 +122,9 @@ def stock_zh_a_hist_sina(
             "datalen": datalen
         }
         
-        time.sleep(random.uniform(3, 6))  # 添加随机延迟（防止456限流）
+        # 添加随机延迟（防止456限流），可通过 INSTOCK_CRAWL_DELAY_ENABLED=0 关闭
+        if _CRAWL_DELAY_ENABLED:
+            time.sleep(random.uniform(_CRAWL_DELAY_SINA_MIN, _CRAWL_DELAY_SINA_MAX))
         
         response = requests.get(url, params=params, headers=HEADERS, timeout=30)
         response.raise_for_status()
@@ -258,7 +266,9 @@ def stock_zh_a_hist_sina_v2(
             "datalen": datalen
         }
         
-        time.sleep(random.uniform(3, 6))  # 添加随机延迟（防止456限流）
+        # 添加随机延迟（防止456限流），可通过 INSTOCK_CRAWL_DELAY_ENABLED=0 关闭
+        if _CRAWL_DELAY_ENABLED:
+            time.sleep(random.uniform(_CRAWL_DELAY_SINA_MIN, _CRAWL_DELAY_SINA_MAX))
         
         response = requests.get(url, params=params, headers=HEADERS, timeout=30)
         response.raise_for_status()

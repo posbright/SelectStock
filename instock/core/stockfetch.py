@@ -1210,6 +1210,110 @@ def _write_cache_meta(code, last_date, adjust='', filtered_version=0):
             pass  # 临时文件清理失败影响较小，忽略
 
 
+def _delete_cache(code, adjust=''):
+    """删除指定股票的缓存文件和元数据文件"""
+    try:
+        cf = _get_cache_file_path(code, adjust)
+        mf = _get_cache_meta_path(code, adjust)
+        if os.path.exists(cf):
+            os.remove(cf)
+        if os.path.exists(mf):
+            os.remove(mf)
+    except Exception as e:
+        logging.warning(f"删除缓存失败: {code} - {e}")
+
+
+def _try_spot_append(code, spot_row, date_end, exrights_threshold):
+    """
+    尝试使用实时行情数据(spot)追加到K线缓存，避免逐股API调用。
+    
+    前置条件：
+    - 缓存最后日期恰好是前一个交易日（仅差1天数据）
+    - 该股票当日有交易（已在外部检查）
+    
+    安全检查：
+    - 除权除息检测：比较spot的昨收(pre_close_price)与缓存最后收盘价
+      如果差异超过阈值，说明发生了除权除息，前复权数据全部变化，
+      需要删除缓存并全量重新获取
+    - 数据完整性：读取pickle失败则回退到API
+    
+    列映射（spot → hist cache）：
+      open_price → open, new_price → close, high_price → high, low_price → low,
+      volume/100 → volume（股→手）, deal_amount → amount, amplitude → amplitude,
+      change_rate → quote_change, ups_downs → ups_downs, turnoverrate → turnover
+    
+    Returns:
+        'success'  — 追加成功，无需API调用
+        'exrights' — 检测到除权除息，需要删除缓存全量重新获取
+        'error'    — 追加失败，回退到API
+    """
+    try:
+        cache_file = _get_cache_file_path(code, 'qfq')
+        if not os.path.isfile(cache_file):
+            return 'error'
+        
+        # 读取现有缓存
+        cached_data = pd.read_pickle(cache_file, compression="gzip")
+        if cached_data is None or len(cached_data) == 0 or 'date' not in cached_data.columns:
+            return 'error'
+        
+        # ── 除权除息检测 ──
+        # 前复权(qfq)下，除权除息会改变全部历史价格。
+        # 比较 spot 的昨收价与缓存最后一天收盘价，差异过大说明已发生除权。
+        last_close = float(cached_data['close'].iloc[-1])
+        pre_close = float(spot_row.get('pre_close_price', 0) or 0)
+        if last_close > 0 and pre_close > 0:
+            diff_ratio = abs(pre_close - last_close) / last_close
+            if diff_ratio > exrights_threshold:
+                logging.info(
+                    f"检测到除权除息: {code}, spot昨收={pre_close:.2f}, "
+                    f"缓存末收盘={last_close:.2f}, 差异={diff_ratio:.2%}"
+                )
+                return 'exrights'
+        elif last_close <= 0 or pre_close <= 0:
+            # 数据异常，回退到API
+            return 'error'
+        
+        # ── 构造新行（spot → hist格式）──
+        date_end_dash = _to_dash_date(date_end)
+        new_row = pd.DataFrame([{
+            'date': date_end_dash,
+            'open': float(spot_row.get('open_price', 0) or 0),
+            'close': float(spot_row.get('new_price', 0) or 0),
+            'high': float(spot_row.get('high_price', 0) or 0),
+            'low': float(spot_row.get('low_price', 0) or 0),
+            'volume': float(spot_row.get('volume', 0) or 0) / 100,  # 股 → 手
+            'amount': float(spot_row.get('deal_amount', 0) or 0),
+            'amplitude': float(spot_row.get('amplitude', 0) or 0),
+            'quote_change': float(spot_row.get('change_rate', 0) or 0),
+            'ups_downs': float(spot_row.get('ups_downs', 0) or 0),
+            'turnover': float(spot_row.get('turnoverrate', 0) or 0),
+        }])
+        
+        # ── 追加并去重 ──
+        combined = pd.concat([cached_data, new_row], ignore_index=True)
+        combined = combined.drop_duplicates(subset=['date'], keep='last')
+        combined = combined.sort_values(by='date').reset_index(drop=True)
+        
+        # ── 原子写入 ──
+        tmp_file = cache_file + '.tmp'
+        combined.to_pickle(tmp_file, compression="gzip")
+        os.replace(tmp_file, cache_file)
+        _write_cache_meta(code, date_end, 'qfq', filtered_version=_FILTER_VERSION)
+        
+        return 'success'
+    except Exception as e:
+        logging.warning(f"Spot追加失败: {code} - {e}")
+        # 清理可能残留的临时文件
+        try:
+            tmp = _get_cache_file_path(code, 'qfq') + '.tmp'
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+        return 'error'
+
+
 def _fetch_from_sources(code, fetch_start, date_end, adjust=''):
     """
     从多个数据源获取K线数据（东方财富 → 腾讯财经 → 新浪财经）
@@ -1591,13 +1695,22 @@ def stock_hist_cache(code, date_start, date_end=None, is_cache=True, adjust=''):
     return stock_hist_cache_incremental(code, date_start, date_end, is_cache, adjust)
 
 
-def update_all_caches(stocks, date_start, date_end, workers=2):
+def update_all_caches(stocks, date_start, date_end, workers=2, spot_df=None):
     """
     批量更新所有股票的缓存文件（仅更新缓存，不保留在内存中）
     
     与 stock_hist_data 的区别：
     - stock_hist_data: 全部加载到内存的 dict 中（~1.6GB），供后续分析直接读取
     - update_all_caches: 仅触发增量缓存更新，处理完每只股票即释放内存
+    
+    核心优化 — Spot快速追加（spot_df 不为 None 时启用）：
+    使用批量实时行情数据(1-2次API)替代逐股历史API调用，大幅减少请求数。
+    仅当缓存恰好差1天数据时生效，其他情况回退到传统API获取。
+    
+    安全机制：
+    - 除权除息检测：比较 spot 昨收价 vs 缓存最后收盘价，差异过大则删除缓存全量重取
+    - 停牌跳过：当日成交量为0的股票无新K线数据，直接跳过
+    - 缓存损坏：读取失败自动回退到API
     
     5层限流防护策略：
     第1层 - 控制并发：默认 2 线程（最大 8），可通过环境变量 INSTOCK_KLINE_CACHE_WORKERS 配置
@@ -1615,6 +1728,8 @@ def update_all_caches(stocks, date_start, date_end, workers=2):
         date_start: 起始日期 YYYYMMDD
         date_end: 结束日期 YYYYMMDD
         workers: 并发线程数（默认2，本地可设置更高）
+        spot_df: 实时行情DataFrame（来自 stock_data().get_data()），
+                 包含全市场当日OHLCV数据，用于快速追加模式
     返回：
         (success_count, fail_count)
     """
@@ -1661,6 +1776,9 @@ def update_all_caches(stocks, date_start, date_end, workers=2):
     success = 0
     fail = 0
     skip = 0                           # 缓存已最新，无需请求API
+    spot_appended = 0                  # 通过Spot快速追加更新（零API调用）
+    suspended_skip = 0                 # 停牌股跳过
+    exrights_refetch = 0               # 除权除息全量重取
     consecutive_fails = 0              # 连续失败计数（用于检测限流）
     throttle_count = 0                 # 限流暂停累计触发次数
     _lock = threading.Lock()           # 保护所有共享计数器
@@ -1672,9 +1790,44 @@ def update_all_caches(stocks, date_start, date_end, workers=2):
     request_delay = [REQUEST_DELAY_MIN, REQUEST_DELAY_MAX]
     batch_pause_seconds = (BATCH_PAUSE_MIN, BATCH_PAUSE_MAX)
     
+    # ── Spot快速追加配置 ──
+    # 使用批量行情数据(1-2次API调用)直接追加到缓存，替代逐股API调用
+    # 可将每日增量更新从 ~5000次 降低到 <100次 API调用
+    SPOT_APPEND_ENABLED = _cfg.get_bool('INSTOCK_SPOT_APPEND_ENABLED', True) and spot_df is not None
+    SKIP_SUSPENDED = _cfg.get_bool('INSTOCK_SKIP_SUSPENDED', True)
+    EXRIGHTS_THRESHOLD = _cfg.get_float('INSTOCK_EXRIGHTS_THRESHOLD', 0.01)  # 1%差异视为除权
+    
+    # 预处理 spot 数据，建立 code → row 的快速索引
+    spot_indexed = None
+    prev_trade_date_str = None
+    if SPOT_APPEND_ENABLED:
+        try:
+            spot_indexed = spot_df.set_index('code')
+            # 计算前一个交易日（用于判断缓存是否恰好差1天）
+            date_end_obj = datetime.datetime.strptime(date_end, "%Y%m%d").date()
+            prev_trade_date = trd.get_previous_trade_date(date_end_obj)
+            prev_trade_date_str = prev_trade_date.strftime("%Y%m%d")
+            logging.info(
+                f"Spot快速追加已启用：{len(spot_indexed)} 只股票，"
+                f"前一交易日={prev_trade_date_str}，除权阈值={EXRIGHTS_THRESHOLD:.1%}"
+            )
+        except Exception as e:
+            logging.warning(f"Spot数据预处理失败，将回退到API模式: {e}")
+            SPOT_APPEND_ENABLED = False
+            spot_indexed = None
+    
     def _update_one(stock):
-        """更新单只股票的缓存，返回 'skip'/True/False"""
-        nonlocal consecutive_fails
+        """
+        更新单只股票的缓存。
+        
+        返回值：
+            'skip'  — 缓存已最新，无需任何操作
+            'spot'  — 通过Spot快速追加完成（零API调用）
+            'suspended' — 停牌股跳过
+            True    — API调用成功
+            False   — API调用失败
+        """
+        nonlocal consecutive_fails, exrights_refetch
         code = stock[1]
         
         # 熔断检查：任务已终止则立即返回
@@ -1686,6 +1839,45 @@ def update_all_caches(stocks, date_start, date_end, workers=2):
         if meta and meta.get('last_date') and meta['last_date'] >= date_end:
             return 'skip'
         
+        # ── Spot快速追加路径（核心优化）──
+        # 条件：spot数据可用 + 缓存恰好差1天 + 股票当日有交易
+        if SPOT_APPEND_ENABLED and spot_indexed is not None:
+            try:
+                if code in spot_indexed.index:
+                    spot_row = spot_indexed.loc[code]
+                    # 处理 set_index 后可能返回 DataFrame（重复代码）的情况
+                    if isinstance(spot_row, pd.DataFrame):
+                        spot_row = spot_row.iloc[0]
+                    
+                    stock_volume = float(spot_row.get('volume', 0) or 0)
+                    stock_price = float(spot_row.get('new_price', 0) or 0)
+                    
+                    # 停牌检测：当日无成交或无价格 → 无新K线数据可追加
+                    if SKIP_SUSPENDED and (stock_volume == 0 or stock_price == 0):
+                        return 'suspended'
+                    
+                    # 仅当缓存恰好差1天时可用spot追加
+                    if meta and meta.get('last_date') and meta['last_date'] == prev_trade_date_str:
+                        result = _try_spot_append(code, spot_row, date_end, EXRIGHTS_THRESHOLD)
+                        if result == 'success':
+                            return 'spot'
+                        elif result == 'exrights':
+                            # 除权除息：删除缓存，后续走API全量获取
+                            _delete_cache(code, 'qfq')
+                            with _lock:
+                                exrights_refetch += 1
+                            logging.info(f"除权除息已清理缓存: {code}，将全量重新获取")
+                            # 继续向下走API路径
+                        # else: 'error' — 回退到API路径
+                else:
+                    # 不在spot数据中（可能已退市或非A股），跳过
+                    if SKIP_SUSPENDED:
+                        return 'suspended'
+            except Exception as e:
+                logging.debug(f"Spot快速追加预检查异常: {code} - {e}")
+                # 异常不影响，回退到API路径
+        
+        # ── 传统API获取路径 ──
         # 等待限流暂停恢复
         _throttle_event.wait()
         
@@ -1737,6 +1929,10 @@ def update_all_caches(stocks, date_start, date_end, workers=2):
                             result = future.result()
                             if result == 'skip':
                                 skip += 1
+                            elif result == 'spot':
+                                spot_appended += 1
+                            elif result == 'suspended':
+                                suspended_skip += 1
                             elif result:
                                 success += 1
                                 api_processed += 1
@@ -1757,7 +1953,8 @@ def update_all_caches(stocks, date_start, date_end, workers=2):
                                             logging.error(
                                                 f"限流已触发 {throttle_count} 次，疑似 IP 被封禁，"
                                                 f"终止任务以避免进一步封禁。"
-                                                f"当前进度：成功={success}, 失败={fail}, 跳过={skip}"
+                                                f"当前进度：API成功={success}, 失败={fail}, "
+                                                f"Spot追加={spot_appended}, 跳过={skip}, 停牌={suspended_skip}"
                                             )
                                             _abort = True
                                             break
@@ -1792,7 +1989,8 @@ def update_all_caches(stocks, date_start, date_end, workers=2):
                 except KeyboardInterrupt:
                     logging.warning(
                         f"用户中断(Ctrl+C)，正在取消剩余任务... "
-                        f"当前进度：成功={success}, 失败={fail}, 跳过={skip}"
+                        f"当前进度：API成功={success}, 失败={fail}, "
+                        f"Spot追加={spot_appended}, 跳过={skip}, 停牌={suspended_skip}"
                     )
                     _abort = True
                     for f in future_to_stock:
@@ -1803,28 +2001,33 @@ def update_all_caches(stocks, date_start, date_end, workers=2):
             gc.collect()
             remaining = len(stocks) - processed_total
             if remaining > 0 and not _abort and api_processed > 0:
-                # 仅在本批有实际API请求时才暂停（全部skip的批次无需暂停）
+                # 仅在本批有实际API请求时才暂停（全部skip/spot的批次无需暂停）
                 pause = random.uniform(*batch_pause_seconds)
                 logging.info(
                     f"已处理 {processed_total}/{len(stocks)}"
-                    f"（成功={success}, 失败={fail}, 跳过={skip}），"
+                    f"（API成功={success}, 失败={fail}, Spot追加={spot_appended}, "
+                    f"跳过={skip}, 停牌={suspended_skip}），"
                     f"暂停 {pause:.0f} 秒，剩余 {remaining}"
                 )
                 time.sleep(pause)
     except KeyboardInterrupt:
         logging.warning(
             f"用户中断(Ctrl+C)，缓存更新已停止。"
-            f"当前进度：成功={success}, 失败={fail}, 跳过={skip}"
+            f"当前进度：API成功={success}, 失败={fail}, "
+            f"Spot追加={spot_appended}, 跳过={skip}, 停牌={suspended_skip}"
         )
     except Exception as e:
         logging.error(f"update_all_caches处理异常", exc_info=True)
     
     logging.info(
-        f"缓存更新完成：成功={success}, 失败={fail}, "
-        f"缓存已最新={skip}, 限流触发={throttle_count}次"
+        f"缓存更新完成：API成功={success}, 失败={fail}, "
+        f"Spot快速追加={spot_appended}, 缓存已最新={skip}, "
+        f"停牌跳过={suspended_skip}, 除权重取={exrights_refetch}, "
+        f"限流触发={throttle_count}次, "
+        f"实际API调用={api_processed}次"
     )
     
-    return success + skip, fail
+    return success + skip + spot_appended + suspended_skip, fail
 
 
 def read_hist_from_cache(data_base, years=None):

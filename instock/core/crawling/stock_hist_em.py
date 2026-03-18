@@ -10,9 +10,15 @@ import time
 import pandas as pd
 import math
 from instock.core.eastmoney_fetcher import eastmoney_fetcher
+import instock.lib.envconfig as _cfg
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
+
+# 爬虫内部延迟开关（当调度层已有限流时可关闭，避免双重延迟）
+_CRAWL_DELAY_ENABLED = _cfg.get_bool('INSTOCK_CRAWL_DELAY_ENABLED', True)
+_CRAWL_DELAY_EM_MIN = _cfg.get_float('INSTOCK_CRAWL_DELAY_EM_MIN', 0.2)
+_CRAWL_DELAY_EM_MAX = _cfg.get_float('INSTOCK_CRAWL_DELAY_EM_MAX', 0.5)
 
 # 创建全局实例，供所有函数使用
 fetcher = eastmoney_fetcher()
@@ -280,7 +286,9 @@ def stock_zh_a_hist(
         "_": "1623766962675",
     }
     # 添加随机延迟，降低并发请求对东方财富API的瞬时压力
-    time.sleep(random.uniform(0.2, 0.5))
+    # 当调度层已有限流（update_all_caches）时可通过 INSTOCK_CRAWL_DELAY_ENABLED=0 关闭
+    if _CRAWL_DELAY_ENABLED:
+        time.sleep(random.uniform(_CRAWL_DELAY_EM_MIN, _CRAWL_DELAY_EM_MAX))
     r =  fetcher.make_request(url, params=params)
     data_json = r.json()
     if not (data_json["data"] and data_json["data"]["klines"]):

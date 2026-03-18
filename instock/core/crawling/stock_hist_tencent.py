@@ -23,9 +23,17 @@ import requests
 import pandas as pd
 import datetime
 import logging
+import instock.lib.envconfig as _cfg
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
+
+# 爬虫内部延迟开关（当调度层已有限流时可关闭，避免双重延迟）
+_CRAWL_DELAY_ENABLED = _cfg.get_bool('INSTOCK_CRAWL_DELAY_ENABLED', True)
+_CRAWL_DELAY_TC_SHORT_MIN = _cfg.get_float('INSTOCK_CRAWL_DELAY_TC_SHORT_MIN', 0.3)
+_CRAWL_DELAY_TC_SHORT_MAX = _cfg.get_float('INSTOCK_CRAWL_DELAY_TC_SHORT_MAX', 0.8)
+_CRAWL_DELAY_TC_LONG_MIN = _cfg.get_float('INSTOCK_CRAWL_DELAY_TC_LONG_MIN', 0.5)
+_CRAWL_DELAY_TC_LONG_MAX = _cfg.get_float('INSTOCK_CRAWL_DELAY_TC_LONG_MAX', 1.5)
 
 # 请求配置
 HEADERS = {
@@ -167,7 +175,8 @@ def stock_zh_a_hist_tencent(
 
         if estimated_trading_days <= MAX_RECORDS_PER_REQUEST:
             # 单次请求即可
-            time.sleep(random.uniform(0.3, 0.8))
+            if _CRAWL_DELAY_ENABLED:
+                time.sleep(random.uniform(_CRAWL_DELAY_TC_SHORT_MIN, _CRAWL_DELAY_TC_SHORT_MAX))
             records = _fetch_one_batch(full_code, fq_type, kline_key, start_str, end_str, MAX_RECORDS_PER_REQUEST)
             if records:
                 all_records.extend(records)
@@ -182,7 +191,8 @@ def stock_zh_a_hist_tencent(
                 batch_start_str = current_start.strftime("%Y-%m-%d")
                 batch_end_str = current_end.strftime("%Y-%m-%d")
 
-                time.sleep(random.uniform(0.5, 1.5))
+                if _CRAWL_DELAY_ENABLED:
+                    time.sleep(random.uniform(_CRAWL_DELAY_TC_LONG_MIN, _CRAWL_DELAY_TC_LONG_MAX))
                 records = _fetch_one_batch(full_code, fq_type, kline_key, batch_start_str, batch_end_str, MAX_RECORDS_PER_REQUEST)
                 if records:
                     all_records.extend(records)
