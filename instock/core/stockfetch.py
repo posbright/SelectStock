@@ -27,6 +27,8 @@ import instock.core.crawling.stock_tencent as stc  # 腾讯财经备选
 import instock.core.crawling.stock_sina as ssa  # 新浪财经备选
 import instock.core.crawling.etf_tencent as etc  # ETF腾讯财经备选
 import instock.core.crawling.etf_sina as esa  # ETF新浪财经备选
+import instock.core.crawling.index_tencent as itc  # 指数腾讯财经备选
+import instock.core.crawling.index_sina as isa  # 指数新浪财经备选
 import instock.core.crawling.stock_fund_sina as sfs  # 新浪财经资金流向
 import instock.core.crawling.stock_hist_sina as shs  # 新浪财经历史K线
 import instock.core.crawling.stock_hist_tencent as sht  # 腾讯财经历史K线
@@ -368,26 +370,49 @@ def fetch_etfs(date):
     return None
 
 
-# 读取当天指数数据（东方财富数据源）
+# 读取当天指数数据（支持多数据源自动切换）
+# 优先级: 东方财富 -> 腾讯财经 -> 新浪财经
 def fetch_index_spots(date):
     """
     获取沪深两市全部指数的实时行情数据。
     数据结构与 TABLE_CN_INDEX_SPOT 对齐。
+
+    支持多数据源自动切换：
+    - 东方财富（首选）：覆盖最全（~1067个指数），数据最完整
+    - 腾讯财经（备选）：覆盖常见指数（~533个），数据较完整
+    - 新浪财经（兜底）：覆盖常见指数，缺少换手率和市值数据
     """
     data = None
-    try:
-        logging.info("尝试从东方财富获取指数数据...")
-        data = sie.stock_index_spot_em()
-        if data is not None and len(data.index) > 0:
-            logging.info(f"成功获取 {len(data)} 条指数数据")
-        else:
-            logging.error("指数数据获取失败：返回为空")
-            return None
-    except Exception as e:
-        logging.error(f"指数数据获取失败：{e}")
+    source = None
+
+    # 数据源列表，按优先级排序
+    data_sources = [
+        ("东方财富", sie.stock_index_spot_em),
+        ("腾讯财经", itc.index_spot_tencent),
+        ("新浪财经", isa.index_spot_sina),
+    ]
+    data_sources = _sort_sources_by_health(data_sources)
+
+    for source_name, fetch_func in data_sources:
+        try:
+            logging.info(f"尝试从{source_name}获取指数数据...")
+            data = fetch_func()
+            if data is not None and len(data.index) > 0:
+                source = source_name
+                _report_source_success(source_name)
+                break
+        except Exception as e:
+            logging.warning(f"{source_name}指数数据获取失败：{e}，切换下一个数据源")
+            _report_source_failure(source_name)
+            data = None
+
+    # 所有数据源都失败
+    if data is None or len(data.index) == 0:
+        logging.error("所有指数数据源均获取失败")
         return None
 
     try:
+        logging.info(f"成功从{source}获取 {len(data)} 条指数数据")
         if date is None:
             data.insert(0, 'date', datetime.datetime.now().strftime("%Y-%m-%d"))
         else:
