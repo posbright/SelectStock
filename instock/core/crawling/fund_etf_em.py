@@ -96,8 +96,8 @@ def fund_etf_spot_em() -> pd.DataFrame:
             "最低价",
             "昨收",
             "换手率",
-            "流通市值",
             "总市值",
+            "流通市值",
         ]
     ]
     temp_df["最新价"] = pd.to_numeric(temp_df["最新价"], errors="coerce")

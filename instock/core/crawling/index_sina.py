@@ -174,9 +174,9 @@ def index_spot_sina() -> pd.DataFrame:
     作为第三优先级数据源。新浪缺少换手率和市值数据，
     但价格数据可靠，可作为最后的兜底方案。
 
-    列顺序与东方财富 stock_index_spot_em() 一致：
+    列顺序与 TABLE_CN_INDEX_SPOT 对齐：
     代码, 名称, 最新价, 涨跌幅, 涨跌额, 成交量, 成交额,
-    开盘价, 最高价, 最低价, 昨收, 换手率, 流通市值, 总市值
+    开盘价, 最高价, 最低价, 昨收, 换手率, 总市值, 流通市值
 
     :return: 指数实时行情 DataFrame
     :rtype: pandas.DataFrame
@@ -211,7 +211,7 @@ def index_spot_sina() -> pd.DataFrame:
     # 列顺序与东方财富一致
     columns_order = [
         "代码", "名称", "最新价", "涨跌幅", "涨跌额", "成交量", "成交额",
-        "开盘价", "最高价", "最低价", "昨收", "换手率", "流通市值", "总市值",
+        "开盘价", "最高价", "最低价", "昨收", "换手率", "总市值", "流通市值",
     ]
 
     for col in columns_order:

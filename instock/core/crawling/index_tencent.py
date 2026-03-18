@@ -161,9 +161,9 @@ def index_spot_tencent() -> pd.DataFrame:
     2. 合并核心指数代码（确保关键指数不遗漏）
     3. 批量查询腾讯API
 
-    列顺序与东方财富 stock_index_spot_em() 一致：
+    列顺序与 TABLE_CN_INDEX_SPOT 对齐：
     代码, 名称, 最新价, 涨跌幅, 涨跌额, 成交量, 成交额,
-    开盘价, 最高价, 最低价, 昨收, 换手率, 流通市值, 总市值
+    开盘价, 最高价, 最低价, 昨收, 换手率, 总市值, 流通市值
 
     :return: 指数实时行情 DataFrame
     :rtype: pandas.DataFrame
@@ -199,7 +199,7 @@ def index_spot_tencent() -> pd.DataFrame:
     # 列顺序与东方财富一致
     columns_order = [
         "代码", "名称", "最新价", "涨跌幅", "涨跌额", "成交量", "成交额",
-        "开盘价", "最高价", "最低价", "昨收", "换手率", "流通市值", "总市值",
+        "开盘价", "最高价", "最低价", "昨收", "换手率", "总市值", "流通市值",
     ]
 
     for col in columns_order:
