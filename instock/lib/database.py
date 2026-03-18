@@ -111,7 +111,7 @@ def _invalidate_shared_conn():
         try:
             conn.close()
         except Exception:
-            pass
+            logging.debug("_invalidate_shared_conn: 关闭连接异常（已忽略）", exc_info=True)
         _thread_local.conn = None
 
 
@@ -125,10 +125,11 @@ def get_connection():
             conn.ping(reconnect=True)
             return _ReusableConnection(conn)
         except Exception:
+            logging.debug("DB ping 失败，将重建连接", exc_info=True)
             try:
                 conn.close()
             except Exception:
-                pass
+                logging.debug("关闭失效连接异常", exc_info=True)
             _thread_local.conn = None
 
     max_retries = _DB_CONN_RETRIES

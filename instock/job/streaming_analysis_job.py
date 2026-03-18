@@ -229,8 +229,8 @@ def streaming_analysis(date):
             if cache_max_str < date_str:
                 result['stale'] = True
                 # 仍然继续处理：基于最后可用K线计算指标（优于跳过）
-        except Exception:
-            pass  # 日期解析异常不影响后续计算
+        except Exception as e:
+            logging.debug(f"缓存日期解析异常: {code} - {e}")  # 不影响后续计算
 
         # --- 指标计算 ---
         try:
@@ -238,7 +238,7 @@ def streaming_analysis(date):
             if indicator_result is not None:
                 result['indicator'] = indicator_result
         except Exception as e:
-            logging.debug(f"指标计算异常：{code} - {e}")
+            logging.info(f"指标计算异常：{code} - {e}")
 
         # --- K线形态识别 ---
         try:
@@ -246,7 +246,7 @@ def streaming_analysis(date):
             if kline_result is not None:
                 result['kline'] = kline_result
         except Exception as e:
-            logging.debug(f"K线形态识别异常：{code} - {e}")
+            logging.info(f"K线形态识别异常：{code} - {e}")
 
         # --- 策略检测 ---
         for strategy in strategies:
@@ -259,7 +259,7 @@ def streaming_analysis(date):
                 if matched:
                     result['strategies'][strategy['name']] = True
             except Exception as e:
-                logging.debug(f"策略检测异常：{code} {strategy['name']} - {e}")
+                logging.info(f"策略检测异常：{code} {strategy['name']} - {e}")
 
         # 显式释放大 DataFrame，降低 GC 延迟回收的影响
         del hist_data

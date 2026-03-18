@@ -1034,8 +1034,8 @@ def index_hist_cache_incremental(code, date_start, date_end):
                 last_date = _to_date_str(merged['date'].max())
                 with open(meta_path, 'w') as f:
                     f.write(f"{last_date},{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}")
-            except Exception:
-                pass
+            except Exception as e:
+                logging.debug(f"写入指数缓存 meta 失败: {code} - {e}")
 
             return merged
 
@@ -1201,13 +1201,13 @@ def _write_cache_meta(code, last_date, adjust='', filtered_version=0):
             f.write(f"{last_date},{datetime.datetime.now().strftime('%Y%m%d%H%M%S')},{filtered_version}")
         os.replace(tmp_path, meta_path)
     except Exception as e:
-        logging.debug(f"写入缓存元数据失败: {code} - {e}")
+        logging.warning(f"写入缓存元数据失败: {code} - {e}")
         # 清理临时文件
         try:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
         except Exception:
-            pass
+            pass  # 临时文件清理失败影响较小，忽略
 
 
 def _fetch_from_sources(code, fetch_start, date_end, adjust=''):
@@ -1629,13 +1629,13 @@ def update_all_caches(stocks, date_start, date_end, workers=2):
         # 本地模式：更激进的配置
         DEFAULT_WORKERS = 6              # 本地默认6线程
         MAX_WORKERS = 12                 # 本地最大12线程
-        REQUEST_DELAY = (0.3, 0.8)       # 本地请求间隔更短
-        BATCH_PAUSE_INTERVAL = 200       # 本地每200只暂停一次
-        BATCH_PAUSE_SECONDS = (3, 6)     # 本地暂停时间更短
+        REQUEST_DELAY = (0.2, 0.5)       # 本地请求间隔更短
+        BATCH_PAUSE_INTERVAL = 300       # 本地每300只暂停一次
+        BATCH_PAUSE_SECONDS = (2, 4)     # 本地暂停时间更短
         CONSECUTIVE_FAIL_THRESHOLD = 5   # 本地容忍更多失败
         BASE_THROTTLE_PAUSE = 60         # 本地限流暂停更短
         MAX_THROTTLE_COUNT = 5           # 本地容忍更多限流
-        CHUNK_SIZE = 200                 # 本地更大的批次
+        CHUNK_SIZE = 300                 # 本地更大的批次
         logging.info("K线缓存更新：本地模式（高并发、少延迟）")
     else:
         # 服务器模式：保守配置（防OOM、防限流）
@@ -1698,15 +1698,15 @@ def update_all_caches(stocks, date_start, date_end, workers=2):
             if ok:
                 with _lock:
                     consecutive_fails = 0  # 成功时重置连续失败计数
+            # 实际发起了API请求，添加请求间隔防限流
+            if not _abort:
+                time.sleep(random.uniform(request_delay[0], request_delay[1]))
             return ok
         except Exception as e:
             logging.error(f"update_all_caches处理异常：{code} -", exc_info=True)
-            return False
-        finally:
-            # 仅在实际可能发起 API 请求时添加延迟
-            # （预检查跳过的股票通过 return 'skip' 提前返回，不经过此路径）
             if not _abort:
                 time.sleep(random.uniform(request_delay[0], request_delay[1]))
+            return False
     
     # 限制并发数，避免过多线程同时请求 API
     workers = min(workers, MAX_WORKERS)
@@ -1802,7 +1802,8 @@ def update_all_caches(stocks, date_start, date_end, workers=2):
             # ThreadPoolExecutor 上下文退出后，本批所有线程/Future 已释放
             gc.collect()
             remaining = len(stocks) - processed_total
-            if remaining > 0 and not _abort:
+            if remaining > 0 and not _abort and api_processed > 0:
+                # 仅在本批有实际API请求时才暂停（全部skip的批次无需暂停）
                 pause = random.uniform(*batch_pause_seconds)
                 logging.info(
                     f"已处理 {processed_total}/{len(stocks)}"
@@ -1939,7 +1940,7 @@ def _filter_ohlc_outliers(data, code=''):
 
         return data, 0
     except Exception as e:
-        logging.debug(f"_filter_ohlc_outliers 异常: {code} - {e}")
+        logging.warning(f"_filter_ohlc_outliers 异常: {code} - {e}")
         return data, 0
 
 
@@ -2028,8 +2029,8 @@ def read_stock_hist_from_cache(code, date_start, date_end):
                     _spot_row = _spot_row[valid_cols]
                     data = pd.concat([data, _spot_row], ignore_index=True)
                     logging.debug(f"DB回填：{code} 补充 {_to_dash_date(date_end)} 行情（来自 cn_stock_spot）")
-        except Exception:
-            pass  # 回填失败不影响已有数据的正常处理
+        except Exception as e:
+            logging.debug(f"DB回填异常（不影响已有数据）：{code} - {e}")
         
         # 添加 p_change 列和 volume 单位转换
         data['p_change'] = tl.ROC(data['close'].values, 1)

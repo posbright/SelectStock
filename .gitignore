@@ -163,3 +163,7 @@ test/
 .vite/
 *.log
 *.out
+
+git_log.txt
+test_*.py
+!tests/test_*.py

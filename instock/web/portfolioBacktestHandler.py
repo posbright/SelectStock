@@ -534,8 +534,8 @@ class RunPortfolioBacktestHandler(webBase.BaseHandler, ABC):
                             mdb.executeSql(
                                 'UPDATE cn_stock_strategy_code SET backtest_count=backtest_count+1, '
                                 'compile_count=compile_count+1 WHERE id=%s', (strategy_id,))
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logging.debug(f"backtest_count 更新异常（不影响回测结果）: strategy_id={strategy_id} - {e}")
                 except Exception as e:
                     logging.warning(f"回测结果持久化异常: {e}")
 
@@ -588,8 +588,8 @@ class GetPortfolioBacktestListHandler(webBase.BaseHandler, ABC):
                                 'benchmark_annual_return': float(m.get('benchmark_annual_return', 0)),
                             }
                             elapsed = rj.get('elapsed', '')
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logging.debug(f"result_json 解析异常（回测列表）: id={r[0]} - {e}")
                     item = {
                         'id': r[0],
                         'strategy_id': r[1],
@@ -668,8 +668,8 @@ class GetPortfolioBacktestDetailHandler(webBase.BaseHandler, ABC):
             if result_json:
                 try:
                     full_data = json.loads(result_json)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logging.warning(f"result_json 解析失败（回测详情）: backtest_id={r[0]} - {e}")
 
             # 如果 result_json 中有完整 metrics，用它覆盖（字段更全）
             if full_data.get('metrics'):
@@ -734,24 +734,38 @@ def _ensure_strategy_table():
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         ''')
     else:
-        # 增量添加新字段（兼容已有表，MySQL 8.0 不支持 IF NOT EXISTS）
-        def _add_col(col_def):
-            """尝试添加列，列已存在（1060）时静默忽略，不写 ERROR 日志"""
+        # 增量添加新字段（通过 INFORMATION_SCHEMA 检查列是否存在，避免 ALTER TABLE 报错）
+        def _column_exists(table_name, column_name):
+            """通过 INFORMATION_SCHEMA 检查列是否存在（MySQL 全版本兼容）"""
             try:
                 with mdb.get_connection() as conn:
                     with conn.cursor() as cur:
-                        cur.execute(f'ALTER TABLE cn_stock_strategy_code ADD COLUMN {col_def}')
+                        cur.execute(
+                            "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS "
+                            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s",
+                            (table_name, column_name)
+                        )
+                        return cur.fetchone() is not None
             except Exception as e:
-                err_str = str(e)
-                if '1060' in err_str or 'Duplicate column' in err_str:
-                    pass  # 列已存在，正常情况
-                else:
-                    mdb._invalidate_shared_conn()
-                    logging.warning(f"ALTER TABLE ADD COLUMN 异常：{col_def} - {e}")
-        _add_col('`category` VARCHAR(30) DEFAULT "stock" AFTER `description`')
-        _add_col('`folder_id` INT DEFAULT 0 AFTER `category`')
-        _add_col('`compile_count` INT DEFAULT 0 AFTER `slippage`')
-        _add_col('`backtest_count` INT DEFAULT 0 AFTER `compile_count`')
+                logging.warning(f"检查列是否存在异常：{table_name}.{column_name} - {e}")
+                return True  # 出错时保守地认为列已存在，避免重复 ALTER
+
+        def _add_col_safe(table_name, col_name, col_def):
+            """安全添加列：先检查再 ALTER，避免静默异常"""
+            if _column_exists(table_name, col_name):
+                return  # 列已存在，无需操作
+            try:
+                with mdb.get_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(f'ALTER TABLE `{table_name}` ADD COLUMN {col_def}')
+                logging.info(f"成功添加列：{table_name}.{col_name}")
+            except Exception as e:
+                logging.warning(f"ALTER TABLE ADD COLUMN 异常：{table_name}.{col_name} - {e}")
+
+        _add_col_safe('cn_stock_strategy_code', 'category', '`category` VARCHAR(30) DEFAULT "stock" AFTER `description`')
+        _add_col_safe('cn_stock_strategy_code', 'folder_id', '`folder_id` INT DEFAULT 0 AFTER `category`')
+        _add_col_safe('cn_stock_strategy_code', 'compile_count', '`compile_count` INT DEFAULT 0 AFTER `slippage`')
+        _add_col_safe('cn_stock_strategy_code', 'backtest_count', '`backtest_count` INT DEFAULT 0 AFTER `compile_count`')
 
     # 确保文件夹表存在
     if not mdb.checkTableIsExist('cn_stock_strategy_folder'):
@@ -906,14 +920,20 @@ def _ensure_backtest_table():
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         ''')
     else:
+        # 使用 _column_exists（在 _ensure_strategy_table 中定义）检查后再 ALTER
         try:
+            _col_check_sql = (
+                "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cn_stock_backtest_portfolio' "
+                "AND COLUMN_NAME = 'result_json'"
+            )
             with mdb.get_connection() as conn:
                 with conn.cursor() as cur:
-                    cur.execute('ALTER TABLE cn_stock_backtest_portfolio '
-                                'ADD COLUMN `result_json` LONGTEXT AFTER `trade_count`')
+                    cur.execute(_col_check_sql)
+                    if cur.fetchone() is None:
+                        cur.execute('ALTER TABLE cn_stock_backtest_portfolio '
+                                    'ADD COLUMN `result_json` LONGTEXT AFTER `trade_count`')
+                        logging.info("成功添加列：cn_stock_backtest_portfolio.result_json")
         except Exception as e:
-            err_str = str(e)
-            if '1060' not in err_str and 'Duplicate column' not in err_str:
-                mdb._invalidate_shared_conn()
-                logging.warning(f"ALTER TABLE cn_stock_backtest_portfolio 异常：{e}")
+            logging.warning(f"ALTER TABLE cn_stock_backtest_portfolio 异常：{e}")
     _backtest_table_ready = True

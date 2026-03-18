@@ -59,7 +59,7 @@ def _fetch_stock_from_eastmoney(code, start_date=None, end_date=None, adjust='qf
                      f"({df['date'].iloc[0].date()} ~ {df['date'].iloc[-1].date()})")
         return df
     except Exception as e:
-        logging.debug(f"EastMoney 获取 {code} 数据失败: {e}")
+        logging.warning(f"EastMoney 获取 {code} 数据失败: {e}")
         return None
 
 
@@ -72,7 +72,7 @@ def _save_cache(code, df):
         df.to_pickle(cache_file, compression="gzip")
         logging.debug(f"缓存已更新: {code} ({len(df)} 条)")
     except Exception as e:
-        logging.debug(f"缓存保存失败 {code}: {e}")
+        logging.warning(f"缓存保存失败 {code}: {e}")
 
 
 def load_stock_data(code, start_date=None, end_date=None):
@@ -144,7 +144,7 @@ def _load_from_cache(code):
             if df is not None:
                 return df
         except Exception as e:
-            logging.debug(f"读取统一缓存失败 {code}: {e}")
+            logging.warning(f"读取统一缓存失败 {code}: {e}")
 
     # 降级：旧 data_feed 路径
     cache_file = os.path.join(_CACHE_DIR, f"{code}.gzip.pickle")
@@ -242,7 +242,7 @@ def get_trading_dates(start_date, end_date):
             if dates:
                 return dates
     except Exception:
-        pass
+        logging.debug("从 DB 获取交易日异常，降级到缓存", exc_info=True)
 
     # 降级：从沪深300或000001的缓存提取交易日
     for code in ['000001', '600000', '000300']:
