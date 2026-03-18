@@ -1307,6 +1307,8 @@ def _try_spot_append(code, spot_row, date_end, exrights_threshold):
         tmp_file = cache_file + '.tmp'
         combined.to_pickle(tmp_file, compression="gzip")
         os.replace(tmp_file, cache_file)
+        # 标记 filtered_version：spot数据来自交易所API（已收盘），不会是异常值。
+        # 即使未经 _filter_ohlc_outliers 过滤，下次增量更新有新API数据时也会触发过滤。
         _write_cache_meta(code, date_end, 'qfq', filtered_version=_FILTER_VERSION)
         
         return 'success'
@@ -1801,6 +1803,40 @@ def update_all_caches(stocks, date_start, date_end, workers=2, spot_df=None):
     SPOT_APPEND_ENABLED = _cfg.get_bool('INSTOCK_SPOT_APPEND_ENABLED', True) and spot_df is not None
     SKIP_SUSPENDED = _cfg.get_bool('INSTOCK_SKIP_SUSPENDED', True)
     EXRIGHTS_THRESHOLD = _cfg.get_float('INSTOCK_EXRIGHTS_THRESHOLD', 0.01)  # 1%差异视为除权
+    
+    # ── Spot数据时效性安全检查 ──
+    # spot API (stock_zh_a_spot_em) 始终返回当前实时行情，而非历史数据。
+    # 仅当以下条件同时满足时，spot数据才可安全用于日K缓存追加：
+    #   1. date_end 是今天（spot数据对应的日期必须匹配目标日期）
+    #   2. 当天A股市场已收盘（>= 15:00），数据代表完整的日K
+    #
+    # 危险场景 — 盘中运行：
+    #   spot数据是不完整的盘中快照（如14:00的价格/成交量），追加后meta会标记
+    #   该日期为已更新。收盘后重运行时meta检查通过（last_date >= date_end），
+    #   导致跳过该股票，缓存中永久保留错误的盘中数据。
+    #   传统API路径(stock_zh_a_hist)不受影响，因为K线API只返回已完成交易日数据。
+    #
+    # 危险场景 — 手动指定历史日期：
+    #   python kline_cache_daily_job.py 2026-03-10 时，spot API返回的是今天的
+    #   实时数据而非3月10日的数据，用于追加会写入错误的OHLCV。
+    if SPOT_APPEND_ENABLED:
+        _now = datetime.datetime.now()
+        _today_str = _now.strftime("%Y%m%d")
+        
+        if date_end != _today_str:
+            # date_end不是今天：spot数据不匹配目标日期（可能是手动指定历史日期或周末补跑）
+            SPOT_APPEND_ENABLED = False
+            logging.info(
+                f"Spot快速追加已禁用：date_end({date_end}) ≠ 今天({_today_str})，"
+                f"spot数据不匹配目标日期，回退到传统API模式"
+            )
+        elif not trd.is_close(_now):
+            # 市场未收盘：spot数据是不完整的盘中快照，不可用于日K缓存追加
+            SPOT_APPEND_ENABLED = False
+            logging.info(
+                f"Spot快速追加已禁用：A股市场尚未收盘（当前 {_now.strftime('%H:%M')}），"
+                f"spot数据不完整，回退到传统API模式"
+            )
     
     # 预处理 spot 数据，建立 code → row 的快速索引
     spot_indexed = None
