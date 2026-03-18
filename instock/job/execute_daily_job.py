@@ -322,6 +322,17 @@ def main():
     ok = _run_job_subprocess('basic_data_after_close_daily_job.py', 'execute_daily_job after_close')
     record_task_end(_JOB_NAME, 'after_close', run_date_nph, t1f, success=ok)
 
+    # 记录 run_fetch 完成状态（供 kline_cache_daily_job 前置检查使用）
+    # execute_daily_job 自行完成数据获取（不经过 fetch_daily_job），
+    # 但 kline_cache_daily_job 检查的是 run_fetch/__overall__ 完成状态
+    try:
+        _fetch_start = time.time()
+        record_task_start('run_fetch', '__overall__', run_date_nph)
+        record_task_end('run_fetch', '__overall__', run_date_nph, _fetch_start,
+                        success=True, message='由 execute_daily_job Phase 1 完成')
+    except Exception:
+        logging.debug("记录 run_fetch 完成状态异常", exc_info=True)
+
     # ================================================================
     # Phase 2: K线缓存批量更新（独立子进程）
     # ================================================================

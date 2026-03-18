@@ -64,7 +64,7 @@ def stock_index_spot_em() -> pd.DataFrame:
     r = fetcher.make_request(url, params=params)
     data_json = r.json()
 
-    data = data_json.get("data", {}).get("diff")
+    data = (data_json.get("data") or {}).get("diff")
     if not data:
         return pd.DataFrame()
 
@@ -76,7 +76,7 @@ def stock_index_spot_em() -> pd.DataFrame:
         params["pn"] = page_current
         r = fetcher.make_request(url, params=params)
         data_json = r.json()
-        _data = data_json.get("data", {}).get("diff")
+        _data = (data_json.get("data") or {}).get("diff")
         if _data:
             data.extend(_data)
         page_count -= 1

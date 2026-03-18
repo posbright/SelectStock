@@ -54,10 +54,23 @@
 
 ### 3. `clean_expired_cache(expire_days=None)`
 
-清理过期的缓存文件。
+智能清理缓存文件：
+- 删除已退市股票（不在当前股票列表中）的缓存
+- 刷新近 35 天内除权除息股票的前复权缓存
+- 删除损坏的 `.meta` 文件
+- 自动跳过 `index/` 子目录（指数缓存不受退市清理影响）
 
 **参数：**
-- `expire_days`: 过期天数，默认 7 天
+- `expire_days`: 兼容参数，不再使用（保留以避免调用方报错）
+
+### 4. `update_index_caches(date_start, date_end, index_codes=None)`
+
+批量更新指数K线缓存（~15个主要指数）。
+
+**特性：**
+- meta 预检查：已最新的指数自动跳过（零 API 调用）
+- 延迟可配置：`INSTOCK_INDEX_DELAY_MIN/MAX`
+- 缓存目录：`cache/hist/index/`
 
 ## 配置参数
 
@@ -77,6 +90,11 @@ HIST_DATA_DEFAULT_YEARS = 10     # 默认获取历史数据年数（Docker默认
 
 ```
 instock/cache/hist/
+├── index/                   # 指数K线缓存
+│   ├── 000001.gzip.pickle  # 上证指数
+│   ├── 000001.meta
+│   ├── 399001.gzip.pickle  # 深证成指
+│   └── ...
 ├── 000/                    # 按股票代码前3位分组
 │   ├── 000001.gzip.pickle  # 压缩的缓存数据
 │   ├── 000001.meta         # 缓存元数据（最后更新日期）
@@ -108,8 +126,12 @@ df = stf.fetch_stock_hist(data_base, years=5)
 df = stf.stock_hist_cache_incremental('000001', '20240101', '20240630')
 
 # 示例5: 清理过期缓存
-cleaned = stf.clean_expired_cache(expire_days=30)
+cleaned = stf.clean_expired_cache()
 print(f'清理了 {cleaned} 个过期缓存文件')
+
+# 示例6: 更新指数K线缓存
+success, fail = stf.update_index_caches(date_start='20240101', date_end='20240630')
+print(f'指数缓存更新：成功 {success}，失败 {fail}')
 ```
 
 ## 数据源模块

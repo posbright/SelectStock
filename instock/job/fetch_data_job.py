@@ -79,6 +79,8 @@ def fetch_all_data(date):
     # Step 3: 批量更新历史K线缓存（低内存模式）
     # 仅触发缓存增量更新，每只股票处理完后即释放内存
     # 后续 Phase 4 分析时从缓存按需读取，峰值内存 < 100MB
+    date_start = None
+    date_end = None
     try:
         logging.info("Step 3/4: 批量更新历史K线缓存（低内存模式）...")
         hist_start = time.time()
@@ -110,13 +112,16 @@ def fetch_all_data(date):
 
     # Step 4: 更新指数K线缓存
     try:
-        logging.info("Step 4: 更新指数K线缓存...")
-        idx_start = time.time()
-        idx_success, idx_fail = stf.update_index_caches(
-            date_start=date_start, date_end=date_end
-        )
-        elapsed_idx = time.time() - idx_start
-        logging.info(f"指数K线缓存更新完成：成功 {idx_success}，失败 {idx_fail}，耗时 {elapsed_idx:.1f}秒")
+        if date_start is not None and date_end is not None:
+            logging.info("Step 4: 更新指数K线缓存...")
+            idx_start = time.time()
+            idx_success, idx_fail = stf.update_index_caches(
+                date_start=date_start, date_end=date_end
+            )
+            elapsed_idx = time.time() - idx_start
+            logging.info(f"指数K线缓存更新完成：成功 {idx_success}，失败 {idx_fail}，耗时 {elapsed_idx:.1f}秒")
+        else:
+            logging.warning("Step 4: 跳过指数缓存更新（Step 3 未成功计算日期区间）")
     except Exception as e:
         logging.warning(f"指数K线缓存更新异常（不影响后续执行）：{e}")
 

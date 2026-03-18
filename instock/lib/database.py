@@ -270,38 +270,47 @@ def update_db_from_df(data, table_name, where):
     update_string = f'UPDATE `{table_name}` set '
     where_string = ' where '
     cols = tuple(data.columns)
-    try:
-        with get_connection() as conn:
-            with conn.cursor() as db:
-                for row in data.values:
-                    set_parts = []
-                    set_params = []
-                    where_parts = []
-                    where_params = []
-                    for index, col in enumerate(cols):
-                        val = row[index]
-                        # 检测 None 和 NaN（NaN != NaN）
-                        is_null = val is None or (val != val)
-                        if col in where:
-                            if is_null:
-                                where_parts.append(f'`{col}` IS NULL')
+    max_retries = _DB_CONN_RETRIES
+    for attempt in range(1, max_retries + 1):
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as db:
+                    for row in data.values:
+                        set_parts = []
+                        set_params = []
+                        where_parts = []
+                        where_params = []
+                        for index, col in enumerate(cols):
+                            val = row[index]
+                            # 检测 None 和 NaN（NaN != NaN）
+                            is_null = val is None or (val != val)
+                            if col in where:
+                                if is_null:
+                                    where_parts.append(f'`{col}` IS NULL')
+                                else:
+                                    where_parts.append(f'`{col}` = %s')
+                                    where_params.append(val)
                             else:
-                                where_parts.append(f'`{col}` = %s')
-                                where_params.append(val)
-                        else:
-                            if is_null:
-                                set_parts.append(f'`{col}` = NULL')
-                            else:
-                                set_parts.append(f'`{col}` = %s')
-                                set_params.append(val)
-                    if not set_parts or not where_parts:
-                        continue
-                    sql = update_string + ', '.join(set_parts) + where_string + ' and '.join(where_parts)
-                    params = set_params + where_params
-                    db.execute(sql, params)
-    except Exception as e:
-        _invalidate_shared_conn()  # 废弃可能损坏的连接
-        logging.error(f"database.update_db_from_df处理异常：{table_name}表", exc_info=True)
+                                if is_null:
+                                    set_parts.append(f'`{col}` = NULL')
+                                else:
+                                    set_parts.append(f'`{col}` = %s')
+                                    set_params.append(val)
+                        if not set_parts or not where_parts:
+                            continue
+                        sql = update_string + ', '.join(set_parts) + where_string + ' and '.join(where_parts)
+                        params = set_params + where_params
+                        db.execute(sql, params)
+            break  # 成功则跳出重试循环
+        except Exception as e:
+            if attempt < max_retries and _is_retryable_error(e):
+                logging.warning(f"database.update_db_from_df瞬态错误（第{attempt}/{max_retries}次重试）：{table_name}表 - {type(e).__name__}")
+                _invalidate_shared_conn()
+                time.sleep(2 * attempt)
+            else:
+                _invalidate_shared_conn()
+                logging.error(f"database.update_db_from_df处理异常：{table_name}表", exc_info=True)
+                return
 
 
 # 检查表是否存在

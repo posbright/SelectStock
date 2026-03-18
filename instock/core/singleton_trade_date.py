@@ -33,10 +33,20 @@ class stock_trade_date(metaclass=singleton_type):
         # 跨日检测：Web 服务器可能运行数天不重启，
         # 若当前日期与加载日期不同，重新获取交易日历
         today = datetime.date.today()
-        if self._loaded_date is not None and today != self._loaded_date:
-            # 多线程保护：避免多线程同时触发跨日刷新
+        need_refresh = False
+        if self._loaded_date is None and self.data is None:
+            # 初始加载失败，允许重试
+            need_refresh = True
+        elif self._loaded_date is not None and today != self._loaded_date:
+            need_refresh = True
+        if need_refresh:
+            # 多线程保护：避免多线程同时触发刷新
             with self._refresh_lock:
-                if today != self._loaded_date:
-                    logging.info(f"stock_trade_date: 检测到跨日({self._loaded_date} → {today})，刷新交易日历")
+                # 双重检查：进入锁后再次确认是否仍需刷新
+                if self.data is None or (self._loaded_date is not None and today != self._loaded_date):
+                    if self._loaded_date is not None:
+                        logging.info(f"stock_trade_date: 检测到跨日({self._loaded_date} → {today})，刷新交易日历")
+                    else:
+                        logging.info("stock_trade_date: 初次加载失败，重试刷新交易日历")
                     self._refresh()
         return self.data

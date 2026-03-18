@@ -220,7 +220,7 @@ VR:
 区间时间作业 python execute_daily_job.py 2022-01-01 2022-03-01
 
 ------单功能作业，支持批量作业，回测数据自动填补到当前
-数据获取作业 python fetch_data_job.py  (实时行情+历史K线+缓存清理)
+数据获取作业 python fetch_data_job.py  (实时行情+历史K线+指数K线+缓存清理)
 基础数据实时作业 python basic_data_daily_job.py
 基础数据非实时作业 python basic_data_other_daily_job.py
 指标数据作业 python indicators_data_daily_job.py
@@ -244,7 +244,7 @@ python fetch_data_job.py
 # 指定日期拉取
 python fetch_data_job.py 2024-06-15
 ```
-该脚本会自动清理过期缓存、拉取实时行情、增量更新历史K线。
+该脚本会自动清理过期缓存、拉取实时行情、增量更新历史K线、更新指数K线缓存。
 
 数据源优先级：东方财富 → 腾讯财经 → 新浪财经，自动容错切换。
 
@@ -1047,9 +1047,10 @@ run_kline_cache (Shell)
   ├── 交易日检测 → 非交易日直接退出
   └── 调用 kline_cache_daily_job.py
         ├── Step 0: 检查 run_fetch 是否已完成（cn_job_status 查询）
-        ├── Step 1: 清理过期缓存（退市股票、除权除息数据）
+        ├── Step 1: 清理过期缓存（退市股票、除权除息数据，跳过 index/ 子目录）
         ├── Step 2: 预加载实时行情（stock_data 单例）
-        └── Step 3: 批量更新K线缓存（~5000只股票，增量模式）
+        ├── Step 3: 批量更新股票K线缓存（~5000只股票，增量模式，Spot快速追加）
+        └── Step 4: 更新指数K线缓存（~15个主要指数，增量模式）
 ```
 
 ---
@@ -1074,7 +1075,7 @@ run_kline_cache (Shell)
 | 项目 | 说明 |
 |------|------|
 | **函数** | `stf.clean_expired_cache()` |
-| **功能** | ①删除退市股票缓存 ②刷新近 35 天内除权除息股票的前复权缓存 ③删除损坏的 `.meta` 文件 |
+| **功能** | ①删除退市股票缓存 ②刷新近 35 天内除权除息股票的前复权缓存 ③删除损坏的 `.meta` 文件（自动跳过 `index/` 子目录） |
 | **API 调用** | 无（纯本地文件操作） |
 | **预计耗时** | **1~5 秒** |
 
@@ -1101,6 +1102,18 @@ run_kline_cache (Shell)
 | **默认年数** | 本地 10 年，Docker 3 年（可通过 `HIST_DATA_DEFAULT_YEARS` 环境变量调整） |
 | **防限流策略** | 5 层防护：①2 线程并发限制 ②请求间隔 1~3 秒 ③每 100 只暂停 8~15 秒 ④连续 3 次失败触发限流暂停（120s→240s→480s 指数退避） ⑤累计 3 次限流触发熔断终止 |
 | **预计耗时** | 首次全量：**2~6 小时**；增量更新：**20~60 分钟** |
+
+#### Step 4：更新指数K线缓存
+
+| 项目 | 说明 |
+|------|------|
+| **函数** | `stf.update_index_caches(date_start, date_end)` |
+| **功能** | 对 ~15 个主要指数调用 `index_hist_cache_incremental()` 进行增量缓存更新 |
+| **meta 预检查** | 预读 `.meta` 文件，已最新的指数直接跳过（零 API 调用） |
+| **缓存目录** | `instock/cache/hist/index/{code}.gzip.pickle` + `{code}.meta` |
+| **API 数据源** | **东方财富**（`stock_index_hist_em`） |
+| **限流策略** | 可配置延迟 `INSTOCK_INDEX_DELAY_MIN/MAX`（默认 0.5~1.5 秒） |
+| **预计耗时** | **10~30 秒**（~15 个指数，大部分被 meta 跳过时 < 5 秒） |
 
 ---
 
@@ -1455,7 +1468,7 @@ cat InStock/instock/bin/run_job.sh
 ------单功能作业，支持批量作业，回测数据自动填补到当前
 数据获取管道 python fetch_daily_job.py  (Phase 1-3 + 收盘后，包含所有API调用)
 数据分析管道 python analysis_daily_job.py  (GPT + 流式分析 + 回测，零API调用)
-数据获取作业 python fetch_data_job.py  (实时行情+历史K线+缓存清理)
+数据获取作业 python fetch_data_job.py  (实时行情+历史K线+指数K线+缓存清理)
 基础数据实时作业 python basic_data_daily_job.py
 基础数据非实时作业 python basic_data_other_daily_job.py
 综合选股作业 python selection_data_daily_job.py

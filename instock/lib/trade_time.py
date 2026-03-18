@@ -18,6 +18,7 @@ def is_trade_date(date=None):
         date = datetime.date.today()
     trade_date = stock_trade_date().get_data()
     if trade_date is None:
+        logging.warning("is_trade_date: 交易日历不可用（API或单例加载失败），默认返回 False")
         return False
     if date in trade_date:
         return True

@@ -74,7 +74,7 @@ run_web.bat
 ```bash
 cd instock/job
 
-# 拉取当前交易日的最新数据（实时行情 + 历史K线，增量更新）
+# 拉取当前交易日的最新数据（实时行情 + 历史K线 + 指数K线，增量更新）
 python fetch_data_job.py
 
 # 指定日期拉取

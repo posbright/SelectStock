@@ -970,7 +970,10 @@ def index_hist_cache_incremental(code, date_start, date_end):
         else:
             if cache_last_date < date_end:
                 need_tail = True
-                tail_start = cache_last_date
+                # 与 stock_hist_cache_incremental 一致：跳过已缓存的最后一天，从下一天开始拉取
+                last_obj = datetime.datetime.strptime(cache_last_date, "%Y%m%d")
+                next_day = (last_obj + datetime.timedelta(days=1)).strftime("%Y%m%d")
+                tail_start = next_day
             if date_start < cache_first_date:
                 need_head = True
                 head_end = cache_first_date
@@ -1280,7 +1283,11 @@ def _try_spot_append(code, spot_row, date_end, exrights_threshold):
         # 前复权(qfq)下，除权除息会改变全部历史价格。
         # 比较 spot 的昨收价与缓存最后一天收盘价，差异过大说明已发生除权。
         last_close = float(cached_data['close'].iloc[-1])
-        pre_close = float(spot_row.get('pre_close_price', 0) or 0)
+        _raw_pre = spot_row.get('pre_close_price', 0)
+        pre_close = float(_raw_pre if _raw_pre is not None else 0)
+        # NaN 保护：pre_close 或 last_close 为 NaN 时无法做除权判断，回退到 API
+        if pd.isna(pre_close) or pd.isna(last_close):
+            return 'error'
         if last_close > 0 and pre_close > 0:
             diff_ratio = abs(pre_close - last_close) / last_close
             if diff_ratio > exrights_threshold:
@@ -1613,12 +1620,18 @@ def clean_expired_cache(expire_days=None):
     try:
         raw_data = she.stock_zh_a_spot_em()
         if raw_data is not None and len(raw_data) > 0:
-            # 东方财富返回的列中，'代码'列（第11列，f12字段）包含股票代码
-            code_col = '代码' if '代码' in raw_data.columns else raw_data.columns[10]
-            all_codes = raw_data[code_col].astype(str).tolist()
-            # 只保留A股代码
-            active_codes = set(c for c in all_codes if is_a_stock(c))
-            logging.info(f"获取到 {len(active_codes)} 只A股代码（含停牌股）")
+            # 东方财富返回的列中，'代码'列（f12字段）包含股票代码
+            if '代码' in raw_data.columns:
+                code_col = '代码'
+            else:
+                logging.warning("clean_expired_cache: 代码列未找到，跳过退市清理")
+                active_codes = set()
+                code_col = None
+            if code_col is not None:
+                all_codes = raw_data[code_col].astype(str).tolist()
+                # 只保留A股代码
+                active_codes = set(c for c in all_codes if is_a_stock(c))
+                logging.info(f"获取到 {len(active_codes)} 只A股代码（含停牌股）")
         else:
             logging.warning("无法获取股票列表，跳过退市股票清理（避免误删）")
     except Exception as e:
@@ -1649,6 +1662,8 @@ def clean_expired_cache(expire_days=None):
 
     try:
         for root, dirs, files in os.walk(stock_hist_cache_path):
+            # 跳过 index/ 子目录 — 指数缓存不属于A股，不应被退市清理删除
+            dirs[:] = [d for d in dirs if d != 'index']
             for file in files:
                 if not file.endswith('.meta'):
                     continue
@@ -2266,8 +2281,10 @@ def read_stock_hist_from_cache(code, date_start, date_end):
             if data is not None and len(data) > 0:
                 try:
                     if n_outliers > 0:
-                        # 有异常行被清除 → 回写数据 + 更新 meta
-                        data.to_pickle(cache_file, compression="gzip")
+                        # 有异常行被清除 → 回写数据 + 更新 meta（原子写入）
+                        _tmp = cache_file + '.tmp'
+                        data.to_pickle(_tmp, compression="gzip")
+                        os.replace(_tmp, cache_file)
                     # 无论是否有异常行，都更新 meta 版本号（标记已检查）
                     last_date = _to_date_str(data['date'].max())
                     _write_cache_meta(code, last_date, 'qfq', filtered_version=_FILTER_VERSION)
