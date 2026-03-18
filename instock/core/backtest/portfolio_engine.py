@@ -614,6 +614,7 @@ class PortfolioBacktestEngine:
 
             pos = self.context.portfolio._get_or_create_position(code)
             pos._on_buy(amount, actual_price, commission)
+            pos._update_price(exec_price)  # 用市场收盘价估值，而非含滑点的成交价
             self.context.portfolio.available_cash -= (total_cost + commission)
             self.context.portfolio._update_value()
 
@@ -639,7 +640,7 @@ class PortfolioBacktestEngine:
             commission = max(total_income * self.context.commission_rate, 5.0)
             tax = total_income * self.context.stamp_tax_rate
 
-            pos._on_sell(sell_amount, actual_price)
+            pos._on_sell(sell_amount, exec_price)  # 剩余持仓以市场收盘价估值
             self.context.portfolio.available_cash += (total_income - commission - tax)
             self.context.portfolio._update_value()
 
@@ -742,6 +743,7 @@ class PortfolioBacktestEngine:
                 # 执行买入
                 pos = self.context.portfolio._get_or_create_position(code)
                 pos._on_buy(amount, actual_price, commission)
+                pos._update_price(exec_price)  # 用市场收盘价估值，而非含滑点的成交价
                 self.context.portfolio.available_cash -= (total_cost + commission)
 
                 trade = TradeRecord(date, code, pos.name, 'buy', exec_price, amount)
@@ -768,7 +770,7 @@ class PortfolioBacktestEngine:
                 tax = total_income * self.context.stamp_tax_rate
 
                 # 执行卖出
-                pos._on_sell(sell_amount, actual_price)
+                pos._on_sell(sell_amount, exec_price)  # 剩余持仓以市场收盘价估值
                 self.context.portfolio.available_cash += (total_income - commission - tax)
 
                 trade = TradeRecord(date, code, pos.name, 'sell', exec_price, sell_amount)
