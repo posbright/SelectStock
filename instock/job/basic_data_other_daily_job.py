@@ -245,17 +245,24 @@ def stock_sector_fund_flow_data(date, index_sector):
 
 def run_check_stock_sector_fund_flow(index_sector, times):
     data = {}
+    indicator_names = {0: '今日', 1: '3日', 2: '5日'}
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(times)) as executor:
-            future_to_data = {executor.submit(stf.fetch_stocks_sector_fund_flow, index_sector, k): k for k in times}
-            for future in concurrent.futures.as_completed(future_to_data):
-                _time = future_to_data[future]
-                try:
-                    _data_ = future.result()
-                    if _data_ is not None:
-                        data[_time] = _data_
-                except Exception as e:
-                    logging.error(f"basic_data_other_daily_job.run_check_stock_sector_fund_flow处理异常：代码", exc_info=True)
+        # 顺序执行（与 run_check_stock_fund_flow 对齐）：
+        # 1. 避免 ThreadPoolExecutor 在 API 超时时无限阻塞（无法被 Ctrl+C 中断）
+        # 2. 减少对 EastMoney API 的并发压力，降低 500/限流概率
+        for k in times:
+            try:
+                _data = _fetch_with_retry(
+                    lambda _k=k: stf.fetch_stocks_sector_fund_flow(index_sector, _k),
+                    f"板块资金流向 sector={index_sector} t={k}({indicator_names.get(k, '?')})"
+                )
+                if _data is not None and len(_data) > 0:
+                    data[k] = _data
+                    logging.info(f"板块资金流向 sector={index_sector} t={k}({indicator_names.get(k, '?')}) 获取成功：{len(_data)} 条")
+                else:
+                    logging.warning(f"板块资金流向 sector={index_sector} t={k}({indicator_names.get(k, '?')}) 返回空数据")
+            except Exception as e:
+                logging.error(f"板块资金流向 sector={index_sector} t={k}({indicator_names.get(k, '?')}) 获取异常", exc_info=True)
     except Exception as e:
         logging.error(f"basic_data_other_daily_job.run_check_stock_sector_fund_flow处理异常", exc_info=True)
     if not data:

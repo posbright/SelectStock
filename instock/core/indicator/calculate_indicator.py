@@ -24,7 +24,7 @@ def get_indicators(data, end_date=None, threshold=120, calc_threshold=None):
     try:
         # 防御：调用方可能误传 tuple/list 而非 DataFrame
         if not isinstance(data, pd.DataFrame):
-            logging.error(f"get_indicators: 期望 DataFrame，实际收到 {type(data).__name__}")
+            logging.error(f"get_indicators: 期望 DataFrame，实际收到 {type(data).__name__}", stack_info=True)
             return None
         if end_date is not None:
             # 统一 date 类型：缓存数据的 date 列可能是 datetime64/Timestamp/datetime.date，

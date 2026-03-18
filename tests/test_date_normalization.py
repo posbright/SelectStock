@@ -141,7 +141,8 @@ class TestCoreModules:
         from instock.core.indicator.calculate_indicator import get_indicators
         data = make_test_data()
         try:
-            result = get_indicators(CODE_NAME, data)
+            # get_indicators(data, end_date=...) — 第一参数是 DataFrame，不是 code_name
+            result = get_indicators(data, end_date=CODE_NAME[0])
         except TypeError as e:
             if ">=" in str(e) or "<=" in str(e):
                 pytest.fail(f"Date comparison TypeError: {e}")
