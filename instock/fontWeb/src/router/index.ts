@@ -312,6 +312,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '回测详情', hidden: true }
       },
       {
+        path: 'backtest-compare',
+        name: 'BacktestCompare',
+        component: () => import('@/views/algo/backtest-compare.vue'),
+        meta: { title: '回测对比', hidden: true }
+      },
+      {
         path: 'paper',
         name: 'PaperTrading',
         component: () => import('@/views/paper-trading/index.vue'),

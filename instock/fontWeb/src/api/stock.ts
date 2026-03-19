@@ -281,6 +281,11 @@ export function getPortfolioBacktestDetail(id: number) {
   return request({ url: '/api/backtest/portfolio/detail', method: 'get', params: { id } })
 }
 
+/** 获取回测对比数据（多个ID） */
+export function getBacktestCompare(ids: number[]) {
+  return request({ url: '/api/backtest/portfolio/compare', method: 'get', params: { ids: ids.join(',') } })
+}
+
 // ============= 模拟交易 API =============
 
 /** 创建模拟盘 */

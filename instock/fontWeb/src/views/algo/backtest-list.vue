@@ -1,15 +1,29 @@
 <template>
   <div class="bt-history">
     <div class="page-header">
-      <h2>回测列表</h2>
-      <el-select v-model="filterStrategyId" placeholder="筛选策略" clearable style="width: 200px;"
-                 @change="loadData">
-        <el-option label="全部策略" :value="0" />
-        <el-option v-for="s in strategies" :key="s.id" :label="s.name" :value="s.id" />
-      </el-select>
+      <div class="header-left">
+        <h2>回测列表</h2>
+        <el-tag type="info" size="small" class="count-tag">
+          共 {{ list.length }} 条回测
+        </el-tag>
+      </div>
+      <div class="header-right">
+        <el-button type="primary" :disabled="selectedRows.length < 2" @click="goCompare">
+          <el-icon><DataAnalysis /></el-icon>
+          对比 ({{ selectedRows.length }})
+        </el-button>
+        <el-select v-model="filterStrategyId" placeholder="筛选策略" clearable style="width: 200px;"
+                   @change="loadData">
+          <el-option label="全部策略" :value="0" />
+          <el-option v-for="s in strategies" :key="s.id" :label="s.name" :value="s.id" />
+        </el-select>
+      </div>
     </div>
 
-    <el-table :data="list" v-loading="loading" stripe style="width: 100%;" :default-sort="{ prop: 'id', order: 'descending' }">
+    <el-table :data="list" v-loading="loading" stripe style="width: 100%;"
+              :default-sort="{ prop: 'id', order: 'descending' }"
+              @selection-change="onSelectionChange" ref="tableRef">
+      <el-table-column type="selection" width="45" />
       <el-table-column prop="id" label="ID" width="60" sortable />
       <el-table-column prop="strategy_name" label="策略名称" width="150" show-overflow-tooltip>
         <template #default="{ row }">
@@ -79,6 +93,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { DataAnalysis } from '@element-plus/icons-vue'
 import { getPortfolioBacktestList, getStrategyCodeList } from '@/api/stock'
 
 const router = useRouter()
@@ -86,6 +101,8 @@ const list = ref<any[]>([])
 const strategies = ref<any[]>([])
 const loading = ref(false)
 const filterStrategyId = ref(0)
+const selectedRows = ref<any[]>([])
+const tableRef = ref()
 
 const N = Number
 function formatCash(v: number) {
@@ -98,6 +115,16 @@ function fmtRet(v: number | undefined) {
 function retCls(v: number | undefined) {
   if (v == null || v === 0) return ''
   return v > 0 ? 'val-red' : 'val-green'
+}
+
+function onSelectionChange(rows: any[]) {
+  selectedRows.value = rows
+}
+
+function goCompare() {
+  if (selectedRows.value.length < 2) return
+  const ids = selectedRows.value.map((r: any) => r.id).join(',')
+  router.push({ path: '/algo/backtest-compare', query: { ids } })
 }
 
 function viewDetail(id: number) {
@@ -129,7 +156,10 @@ onMounted(() => { loadData(); loadStrategies() })
 <style scoped>
 .bt-history { padding: 20px; }
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-.page-header h2 { margin: 0; }
+.header-left { display: flex; align-items: center; gap: 12px; }
+.header-left h2 { margin: 0; }
+.header-right { display: flex; align-items: center; gap: 12px; }
+.count-tag { font-variant-numeric: tabular-nums; }
 .val-red { color: #f56c6c; font-weight: 600; }
 .val-green { color: #67c23a; font-weight: 600; }
 </style>

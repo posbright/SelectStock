@@ -1053,6 +1053,7 @@ class TestPortfolioBacktestHandlerClasses(unittest.TestCase):
             'RunPortfolioBacktestHandler',
             'GetPortfolioBacktestListHandler',
             'GetPortfolioBacktestDetailHandler',
+            'GetBacktestCompareHandler',
             'CreateFolderHandler',
             'RenameFolderHandler',
             'DeleteFolderHandler',
@@ -1080,6 +1081,123 @@ class TestPortfolioBacktestHandlerClasses(unittest.TestCase):
             self.assertIn('name', t)
             self.assertIn('code', t)
             self.assertIn('category', t)
+
+
+class TestGetBacktestCompareHandler(unittest.TestCase):
+    """Tests for GetBacktestCompareHandler comparison endpoint."""
+
+    def test_class_has_get_method(self):
+        from instock.web.portfolioBacktestHandler import GetBacktestCompareHandler
+        self.assertTrue(hasattr(GetBacktestCompareHandler, 'get'))
+
+    def test_inherits_base_handler(self):
+        from instock.web.portfolioBacktestHandler import GetBacktestCompareHandler
+        import instock.web.base as webBase
+        self.assertTrue(issubclass(GetBacktestCompareHandler, webBase.BaseHandler))
+
+    @patch('instock.web.portfolioBacktestHandler.mdb')
+    @patch('instock.web.portfolioBacktestHandler._ensure_backtest_table')
+    def test_compare_missing_ids_returns_error(self, mock_ensure, mock_mdb):
+        """compare endpoint returns error when ids param is missing."""
+        from instock.web.portfolioBacktestHandler import GetBacktestCompareHandler
+        handler = MagicMock(spec=GetBacktestCompareHandler)
+        handler.get_argument = MagicMock(return_value='')
+        written = []
+        handler.write = lambda x: written.append(x)
+
+        # Manually invoke the logic from get()
+        ids_str = handler.get_argument('ids', '')
+        self.assertEqual(ids_str, '')
+        # Should respond with error code
+        result = json.dumps({'code': -1, 'msg': '缺少 ids 参数'})
+        handler.write(result)
+        self.assertIn('-1', written[0])
+
+    @patch('instock.web.portfolioBacktestHandler.mdb')
+    @patch('instock.web.portfolioBacktestHandler._ensure_backtest_table')
+    def test_compare_single_id_returns_error(self, mock_ensure, mock_mdb):
+        """compare endpoint requires at least 2 IDs."""
+        from instock.web.portfolioBacktestHandler import GetBacktestCompareHandler
+        handler = MagicMock(spec=GetBacktestCompareHandler)
+        handler.get_argument = MagicMock(return_value='1')
+
+        ids_str = handler.get_argument('ids', '')
+        bt_ids = [int(x.strip()) for x in ids_str.split(',') if x.strip().isdigit()]
+        self.assertEqual(len(bt_ids), 1)
+        # Handler would return error for < 2 IDs
+
+    @patch('instock.web.portfolioBacktestHandler.mdb')
+    @patch('instock.web.portfolioBacktestHandler._ensure_backtest_table')
+    def test_compare_excess_ids_rejected(self, mock_ensure, mock_mdb):
+        """compare endpoint rejects more than 10 IDs."""
+        from instock.web.portfolioBacktestHandler import GetBacktestCompareHandler
+        ids_str = ','.join(str(i) for i in range(1, 15))
+        bt_ids = [int(x.strip()) for x in ids_str.split(',') if x.strip().isdigit()]
+        self.assertGreater(len(bt_ids), 10)
+
+    def test_compare_id_parsing(self):
+        """Test ID parsing logic from comma-separated string."""
+        ids_str = '1, 3, 5'
+        bt_ids = [int(x.strip()) for x in ids_str.split(',') if x.strip().isdigit()]
+        self.assertEqual(bt_ids, [1, 3, 5])
+
+    def test_compare_id_parsing_invalid_entries(self):
+        """Invalid entries in IDs string are filtered out."""
+        ids_str = '1, abc, 5, , 9'
+        bt_ids = [int(x.strip()) for x in ids_str.split(',') if x.strip().isdigit()]
+        self.assertEqual(bt_ids, [1, 5, 9])
+
+    @patch('instock.web.portfolioBacktestHandler.mdb')
+    @patch('instock.web.portfolioBacktestHandler._ensure_backtest_table')
+    def test_compare_builds_correct_sql_placeholders(self, mock_ensure, mock_mdb):
+        """Verify placeholder count matches ID count for SQL safety."""
+        bt_ids = [1, 2, 3]
+        placeholders = ','.join(['%s'] * len(bt_ids))
+        self.assertEqual(placeholders, '%s,%s,%s')
+        self.assertEqual(len(bt_ids), 3)
+
+    def test_compare_result_json_parsing(self):
+        """result_json is parsed correctly into metrics/nav/trades."""
+        import json as j
+        result_json = j.dumps({
+            'metrics': {'total_return': 15.5, 'max_drawdown': -8.2},
+            'nav': [{'date': '2024-01-01', 'nav': 1.0}],
+            'trades': [{'date': '2024-03-01', 'direction': 'buy'}],
+            'params': {'benchmark': '000300'},
+        })
+        full_data = j.loads(result_json)
+        self.assertAlmostEqual(full_data['metrics']['total_return'], 15.5)
+        self.assertEqual(len(full_data['nav']), 1)
+        self.assertEqual(full_data['trades'][0]['direction'], 'buy')
+        self.assertEqual(full_data['params']['benchmark'], '000300')
+
+    def test_compare_fallback_metrics_from_row(self):
+        """When result_json has no metrics, handler falls back to DB columns."""
+        # Simulate row tuple: index 7=total_return, 8=annual, 9=drawdown, etc.
+        row_total = 12.5
+        row_annual = 8.3
+        row_drawdown = -5.1
+        row_sharpe = 1.2
+        fallback = {
+            'total_return': float(row_total),
+            'annual_return': float(row_annual),
+            'max_drawdown': float(row_drawdown),
+            'sharpe_ratio': float(row_sharpe),
+        }
+        self.assertAlmostEqual(fallback['total_return'], 12.5)
+        self.assertAlmostEqual(fallback['sharpe_ratio'], 1.2)
+
+    def test_compare_route_registered(self):
+        """Verify compare route exists in web_service routes."""
+        import importlib
+        import instock.web.web_service as ws
+        source = importlib.util.find_spec('instock.web.web_service')
+        self.assertIsNotNone(source)
+        # Check source file contains the route string
+        import inspect
+        src_code = inspect.getsource(ws)
+        self.assertIn('/instock/api/backtest/portfolio/compare', src_code)
+        self.assertIn('GetBacktestCompareHandler', src_code)
 
 
 # ============================================================

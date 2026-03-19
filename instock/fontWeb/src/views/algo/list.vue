@@ -92,7 +92,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick, type ComponentPublicInstance } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Folder, FolderAdd, Document, Delete, ArrowLeft } from '@element-plus/icons-vue'
@@ -152,7 +152,7 @@ function onSelectionChange(rows: any[]) { selectedRows.value = rows }
 // 单击/双击 区分：使用延迟模式
 let clickTimer: ReturnType<typeof setTimeout> | null = null
 
-function onTableRowClick(row: any, column: any, event: Event) {
+function onTableRowClick(row: any, column: any, _event: Event) {
   if (column?.type === 'selection') return
   if (editingRowId.value) return
   // 延迟200ms执行单击，给双击留时间
@@ -163,7 +163,7 @@ function onTableRowClick(row: any, column: any, event: Event) {
   }, 200)
 }
 
-function onTableRowDblClick(row: any, column: any, event: Event) {
+function onTableRowDblClick(row: any, column: any, _event: Event) {
   if (column?.type === 'selection') return
   // 取消延迟的单击
   if (clickTimer) { clearTimeout(clickTimer); clickTimer = null }

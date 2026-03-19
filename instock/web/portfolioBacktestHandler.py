@@ -684,6 +684,88 @@ class GetPortfolioBacktestDetailHandler(webBase.BaseHandler, ABC):
             self.write(json.dumps({'code': -1, 'msg': str(e)}))
 
 
+class GetBacktestCompareHandler(webBase.BaseHandler, ABC):
+    """回测对比：接收多个回测ID，返回对比数据（指标+曲线+策略代码）"""
+
+    @gen.coroutine
+    def get(self):
+        try:
+            ids_str = self.get_argument('ids', '')
+            if not ids_str:
+                self.write(json.dumps({'code': -1, 'msg': '缺少 ids 参数'}))
+                return
+
+            bt_ids = [int(x.strip()) for x in ids_str.split(',') if x.strip().isdigit()]
+            if len(bt_ids) < 2:
+                self.write(json.dumps({'code': -1, 'msg': '至少选择2个回测进行对比'}))
+                return
+            if len(bt_ids) > 10:
+                self.write(json.dumps({'code': -1, 'msg': '最多支持10个回测对比'}))
+                return
+
+            _ensure_backtest_table()
+            placeholders = ','.join(['%s'] * len(bt_ids))
+            rows = mdb.executeSqlFetch(
+                f'SELECT bp.id, bp.strategy_id, sc.name, bp.start_date, bp.end_date, '
+                f'bp.initial_cash, bp.status, bp.total_return, bp.annual_return, '
+                f'bp.max_drawdown, bp.sharpe_ratio, bp.alpha, bp.beta, bp.win_rate, '
+                f'bp.trade_count, bp.completed_at, bp.result_json, sc.code as strategy_code '
+                f'FROM cn_stock_backtest_portfolio bp '
+                f'LEFT JOIN cn_stock_strategy_code sc ON bp.strategy_id = sc.id '
+                f'WHERE bp.id IN ({placeholders}) ORDER BY bp.id',
+                tuple(bt_ids))
+
+            if not rows or len(rows) < 2:
+                self.write(json.dumps({'code': -1, 'msg': '回测记录不足，无法对比'}))
+                return
+
+            backtests = []
+            for r in rows:
+                full_data = {}
+                result_json = r[16]
+                if result_json:
+                    try:
+                        full_data = json.loads(result_json) if isinstance(result_json, str) else result_json
+                    except Exception:
+                        pass
+
+                metrics = full_data.get('metrics', {})
+                if not metrics:
+                    metrics = {
+                        'total_return': float(r[7]) if r[7] else 0,
+                        'annual_return': float(r[8]) if r[8] else 0,
+                        'max_drawdown': float(r[9]) if r[9] else 0,
+                        'sharpe_ratio': float(r[10]) if r[10] else 0,
+                        'alpha': float(r[11]) if r[11] else 0,
+                        'beta': float(r[12]) if r[12] else 0,
+                        'daily_win_rate': float(r[13]) if r[13] else 0,
+                        'trade_count': r[14] or 0,
+                    }
+
+                bt_item = {
+                    'id': r[0],
+                    'strategy_id': r[1],
+                    'strategy_name': r[2] or '临时策略',
+                    'start_date': str(r[3]) if r[3] else '',
+                    'end_date': str(r[4]) if r[4] else '',
+                    'initial_cash': float(r[5]) if r[5] else 0,
+                    'status': r[6] or 'unknown',
+                    'metrics': metrics,
+                    'nav': full_data.get('nav', []),
+                    'trades': full_data.get('trades', []),
+                    'strategy_code': r[17] or '',
+                    'completed_at': r[15].strftime('%Y-%m-%d %H:%M:%S') if r[15] else '',
+                    'params': full_data.get('params', {}),
+                }
+                backtests.append(bt_item)
+
+            self.write(json.dumps({'code': 0, 'data': {'backtests': backtests}},
+                                  ensure_ascii=False, default=str))
+        except Exception as e:
+            logging.error("GetBacktestCompare异常", exc_info=True)
+            self.write(json.dumps({'code': -1, 'msg': str(e)}))
+
+
 # ── 辅助函数 ──
 
 def _insert_and_get_id(sql, params=()):
