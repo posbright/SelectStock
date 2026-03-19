@@ -150,8 +150,8 @@ def _create_safe_namespace():
             # 安全的内置函数（移除 type 防止类层次遍历攻击）
             'abs': abs, 'all': all, 'any': any, 'bool': bool,
             'dict': dict, 'enumerate': enumerate, 'filter': filter,
-            'float': float, 'frozenset': frozenset, 'int': int,
-            'isinstance': isinstance, 'len': len, 'list': list,
+            'float': float, 'frozenset': frozenset, 'hasattr': hasattr,
+            'int': int, 'isinstance': isinstance, 'len': len, 'list': list,
             'map': map, 'max': max, 'min': min, 'print': print,
             'range': range, 'reversed': reversed, 'round': round,
             'set': set, 'slice': slice, 'sorted': sorted, 'str': str,

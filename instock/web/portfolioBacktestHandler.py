@@ -128,42 +128,40 @@ def initialize(context):
         close_today_commission=0,
         min_commission=5
     ), type='stock')
+    run_weekly(check_stocks, weekday=1, time='before_open')
+    run_weekly(trade, weekday=1, time='open')
+
+def check_stocks(context):
     g.stocks = get_index_stocks('399951.XSHE')
-    run_weekly(weekly_adjustment, weekday=1, time='open')
+    if len(g.stocks) > 0:
+        g.df = get_fundamentals(
+            query(
+                valuation.code,
+                valuation.pb_ratio
+            ).filter(
+                valuation.code.in_(g.stocks)
+            ).order_by(
+                valuation.pb_ratio.asc()
+            )
+        )
+        if len(g.df) > 0:
+            g.code = g.df["code"].iloc[0]
+            log.info("选股: " + g.code + " PB=" + str(round(g.df["pb_ratio"].iloc[0], 3)))
 
-def weekly_adjustment(context):
-    # 查询银行股基本面：PB最低的1只
-    q = query(
-        valuation.code,
-        valuation.pb_ratio
-    ).filter(
-        valuation.code.in_(g.stocks)
-    ).order_by(
-        valuation.pb_ratio.asc()
-    ).limit(1)
-    df = get_fundamentals(q)
-    if len(df) == 0:
-        log.warn("未查到银行股基本面数据")
+def trade(context):
+    if not hasattr(g, "code") or not hasattr(g, "stocks"):
         return
-
-    target_code = df['code'].iloc[0]
-    target_pb = df['pb_ratio'].iloc[0]
-    log.info("本周目标: " + target_code + " PB=" + str(round(target_pb, 3)))
-
-    # 卖出非目标持仓
-    for code in list(context.portfolio.positions.keys()):
-        if code != target_code:
-            order_target(code, 0)
-            log.info("轮出 " + code)
-
-    # 全仓买入目标
-    if target_code not in context.portfolio.positions:
-        cash = context.portfolio.available_cash
-        if cash > 1000:
-            order_value(target_code, cash * 0.98)
-            log.info("买入 " + target_code + " 金额=" + str(round(cash * 0.98)))
-    else:
-        log.info("继续持有 " + target_code)
+    if len(g.stocks) > 0:
+        code = g.code
+        for stock in list(context.portfolio.positions.keys()):
+            if stock != code:
+                order_target(stock, 0)
+                log.info("轮出 " + stock)
+        if len(context.portfolio.positions) > 0:
+            return
+        else:
+            order_value(code, context.portfolio.cash)
+            log.info("买入 " + code + " 金额=" + str(round(context.portfolio.cash)))
 ''',
     },
     {

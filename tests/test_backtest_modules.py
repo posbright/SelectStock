@@ -516,6 +516,7 @@ class TestCreateSafeNamespace(unittest.TestCase):
         self.assertIn('len', builtins)
         self.assertIn('range', builtins)
         self.assertIn('print', builtins)
+        self.assertIn('hasattr', builtins)  # 聚宽策略常用
 
     def test_no_dangerous_builtins(self):
         ns = _create_safe_namespace()
