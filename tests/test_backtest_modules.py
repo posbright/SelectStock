@@ -339,6 +339,54 @@ class TestTradeRecord(unittest.TestCase):
         d = tr.to_dict()
         self.assertEqual(d['date'], '2025-03-01')
 
+    def test_close_profit_and_return_rate_default_zero(self):
+        """买入交易的平仓盈亏和收益率默认为0"""
+        tr = TradeRecord(datetime.date(2025, 1, 2), '000001', '平安银行', 'buy', 10.0, 1000)
+        self.assertAlmostEqual(tr.close_profit, 0.0)
+        self.assertAlmostEqual(tr.return_rate, 0.0)
+        d = tr.to_dict()
+        self.assertEqual(d['close_profit'], 0.0)
+        self.assertEqual(d['return_rate'], 0.0)
+
+    def test_close_profit_sell_positive(self):
+        """卖出盈利时平仓盈亏为正"""
+        tr = TradeRecord(datetime.date(2025, 3, 1), '600036', '招商银行', 'sell', 45.0, 1000)
+        # 假设持仓均价40，卖出价45，1000股
+        tr.close_profit = round((45.0 - 40.0) * 1000, 2)  # 5000
+        tr.return_rate = round((45.0 - 40.0) / 40.0 * 100, 2)  # 12.5%
+        self.assertAlmostEqual(tr.close_profit, 5000.0)
+        self.assertAlmostEqual(tr.return_rate, 12.5)
+        d = tr.to_dict()
+        self.assertAlmostEqual(d['close_profit'], 5000.0)
+        self.assertAlmostEqual(d['return_rate'], 12.5)
+
+    def test_close_profit_sell_negative(self):
+        """卖出亏损时平仓盈亏为负"""
+        tr = TradeRecord(datetime.date(2025, 3, 1), '600036', '招商银行', 'sell', 35.0, 1000)
+        # 假设持仓均价40，卖出价35，1000股
+        tr.close_profit = round((35.0 - 40.0) * 1000, 2)  # -5000
+        tr.return_rate = round((35.0 - 40.0) / 40.0 * 100, 2)  # -12.5%
+        self.assertAlmostEqual(tr.close_profit, -5000.0)
+        self.assertAlmostEqual(tr.return_rate, -12.5)
+
+    def test_to_dict_includes_close_profit_and_return_rate(self):
+        """to_dict() 输出包含 close_profit 和 return_rate 字段"""
+        tr = TradeRecord(datetime.date(2025, 6, 15), '600036', '招商银行', 'sell', 42.5, 500)
+        tr.close_profit = 1250.0
+        tr.return_rate = 6.25
+        d = tr.to_dict()
+        self.assertIn('close_profit', d)
+        self.assertIn('return_rate', d)
+        self.assertAlmostEqual(d['close_profit'], 1250.0)
+        self.assertAlmostEqual(d['return_rate'], 6.25)
+
+    def test_name_field_in_trade_record(self):
+        """TradeRecord 的 name 字段正确保存"""
+        tr = TradeRecord(datetime.date(2025, 1, 2), '000001', '平安银行', 'buy', 10.0, 100)
+        self.assertEqual(tr.name, '平安银行')
+        d = tr.to_dict()
+        self.assertEqual(d['name'], '平安银行')
+
 
 class TestNavRecord(unittest.TestCase):
     def test_to_dict_rounding(self):
@@ -1448,6 +1496,224 @@ class TestPortfolioEngineEdgeCases(unittest.TestCase):
         prices = engine._load_day_prices(datetime.date(2025, 1, 2))
         self.assertIn('000001', prices)
         self.assertAlmostEqual(prices['000001'], 10.5)
+
+    def test_resolve_stock_name_cached(self):
+        """_resolve_stock_name 使用缓存"""
+        engine = PortfolioBacktestEngine()
+        engine._stock_names = {'000001': '平安银行', '600036': '招商银行'}
+        self.assertEqual(engine._resolve_stock_name('000001'), '平安银行')
+        self.assertEqual(engine._resolve_stock_name('600036'), '招商银行')
+
+    def test_resolve_stock_name_fallback_empty(self):
+        """_resolve_stock_name 查不到时返回空字符串"""
+        engine = PortfolioBacktestEngine()
+        engine._stock_names = {}
+        # mock _query_stock_name to avoid DB access
+        original = PortfolioBacktestEngine._query_stock_name
+        PortfolioBacktestEngine._query_stock_name = staticmethod(lambda code: '')
+        try:
+            name = engine._resolve_stock_name('999999')
+            self.assertEqual(name, '')
+            # 应入缓存
+            self.assertIn('999999', engine._stock_names)
+        finally:
+            PortfolioBacktestEngine._query_stock_name = original
+
+    def test_stock_names_cache_initialization(self):
+        """引擎初始化时 _stock_names 为空字典"""
+        engine = PortfolioBacktestEngine()
+        self.assertIsInstance(engine._stock_names, dict)
+        self.assertEqual(len(engine._stock_names), 0)
+
+
+class TestTradeRecordPnlInEngine(unittest.TestCase):
+    """测试引擎在卖出时正确计算平仓盈亏和收益率"""
+
+    def _make_engine_with_position(self, code='000001', name='平安银行',
+                                    amount=1000, avg_cost=10.0):
+        """创建一个包含指定持仓的引擎实例"""
+        engine = PortfolioBacktestEngine()
+        engine.context = Context(initial_cash=100000)
+        engine.context.commission_rate = 0.0003
+        engine.context.stamp_tax_rate = 0.001
+        engine.context.slippage_rate = 0.002
+        engine.data_proxy = DataProxy()
+        engine._stock_names = {code: name}
+        engine._trade_records = []
+        engine._log_messages = []
+        engine._pending_orders = []
+
+        # 建仓
+        pos = engine.context.portfolio._get_or_create_position(code, name)
+        pos.amount = amount
+        pos.closeable_amount = amount
+        pos.avg_cost = avg_cost
+        pos.price = avg_cost
+        pos.value = amount * avg_cost
+        engine.context.portfolio.available_cash = 100000 - pos.value
+        engine.context.portfolio._update_value()
+
+        return engine
+
+    def _setup_day_price(self, engine, code, date, close_price):
+        """设置引擎的当日价格"""
+        engine.context.current_dt = date
+        engine._current_day_prices = {code: close_price}
+        df = pd.DataFrame({
+            'date': pd.to_datetime([date]),
+            'open': [close_price],
+            'high': [close_price],
+            'low': [close_price],
+            'close': [close_price],
+            'volume': [100000],
+            'pre_close': [close_price * 0.98],
+        })
+        engine._stock_data = {code: df}
+        engine.data_proxy._set_current(code, {
+            'open': close_price, 'high': close_price,
+            'low': close_price, 'close': close_price,
+            'volume': 100000, 'pre_close': close_price * 0.98,
+        })
+
+    def test_sell_profit_positive(self):
+        """卖出盈利：close_profit > 0, return_rate > 0"""
+        engine = self._make_engine_with_position(
+            code='000001', name='平安银行', amount=1000, avg_cost=10.0)
+        date = datetime.date(2025, 3, 1)
+        self._setup_day_price(engine, '000001', date, 12.0)
+
+        engine._execute_single_order({'code': '000001', 'amount': -1000, 'value': None}, date)
+
+        self.assertEqual(len(engine._trade_records), 1)
+        trade = engine._trade_records[0]
+        self.assertEqual(trade.direction, 'sell')
+        self.assertEqual(trade.name, '平安银行')
+        self.assertEqual(trade.code, '000001')
+        # close_profit = (12.0 - 10.0) * 1000 = 2000
+        self.assertAlmostEqual(trade.close_profit, 2000.0)
+        # return_rate = (12.0 - 10.0) / 10.0 * 100 = 20.0%
+        self.assertAlmostEqual(trade.return_rate, 20.0)
+
+    def test_sell_profit_negative(self):
+        """卖出亏损：close_profit < 0, return_rate < 0"""
+        engine = self._make_engine_with_position(
+            code='600036', name='招商银行', amount=1000, avg_cost=40.0)
+        date = datetime.date(2025, 3, 1)
+        self._setup_day_price(engine, '600036', date, 35.0)
+
+        engine._execute_single_order({'code': '600036', 'amount': -1000, 'value': None}, date)
+
+        self.assertEqual(len(engine._trade_records), 1)
+        trade = engine._trade_records[0]
+        self.assertEqual(trade.direction, 'sell')
+        self.assertEqual(trade.name, '招商银行')
+        # close_profit = (35.0 - 40.0) * 1000 = -5000
+        self.assertAlmostEqual(trade.close_profit, -5000.0)
+        # return_rate = (35.0 - 40.0) / 40.0 * 100 = -12.5%
+        self.assertAlmostEqual(trade.return_rate, -12.5)
+
+    def test_buy_has_stock_name(self):
+        """买入交易记录包含股票名称"""
+        engine = PortfolioBacktestEngine()
+        engine.context = Context(initial_cash=100000)
+        engine.context.commission_rate = 0.0003
+        engine.context.stamp_tax_rate = 0.001
+        engine.context.slippage_rate = 0.002
+        engine.context.current_dt = datetime.date(2025, 3, 1)
+        engine.data_proxy = DataProxy()
+        engine._stock_names = {'000001': '平安银行'}
+        engine._trade_records = []
+        engine._log_messages = []
+        engine._pending_orders = []
+        engine._current_day_prices = {'000001': 10.0}
+        engine._all_codes = {'000001'}
+
+        df = pd.DataFrame({
+            'date': pd.to_datetime(['2025-03-01']),
+            'open': [10.0], 'high': [10.0], 'low': [10.0],
+            'close': [10.0], 'volume': [100000], 'pre_close': [9.8],
+        })
+        engine._stock_data = {'000001': df}
+        engine.data_proxy._set_current('000001', {
+            'open': 10.0, 'high': 10.0, 'low': 10.0,
+            'close': 10.0, 'volume': 100000, 'pre_close': 9.8,
+        })
+
+        engine._execute_single_order(
+            {'code': '000001', 'amount': 100, 'value': None},
+            datetime.date(2025, 3, 1))
+
+        self.assertEqual(len(engine._trade_records), 1)
+        trade = engine._trade_records[0]
+        self.assertEqual(trade.direction, 'buy')
+        self.assertEqual(trade.name, '平安银行')
+        # 买入时 close_profit 和 return_rate 都为 0
+        self.assertAlmostEqual(trade.close_profit, 0.0)
+        self.assertAlmostEqual(trade.return_rate, 0.0)
+
+    def test_buy_name_empty_when_unknown(self):
+        """未知股票买入时 name 为空字符串"""
+        engine = PortfolioBacktestEngine()
+        engine.context = Context(initial_cash=100000)
+        engine.context.commission_rate = 0.0003
+        engine.context.stamp_tax_rate = 0.001
+        engine.context.slippage_rate = 0.002
+        engine.context.current_dt = datetime.date(2025, 3, 1)
+        engine.data_proxy = DataProxy()
+        engine._stock_names = {}
+        engine._trade_records = []
+        engine._log_messages = []
+        engine._pending_orders = []
+        engine._current_day_prices = {'999999': 10.0}
+        engine._all_codes = {'999999'}
+
+        df = pd.DataFrame({
+            'date': pd.to_datetime(['2025-03-01']),
+            'open': [10.0], 'high': [10.0], 'low': [10.0],
+            'close': [10.0], 'volume': [100000], 'pre_close': [9.8],
+        })
+        engine._stock_data = {'999999': df}
+        engine.data_proxy._set_current('999999', {
+            'open': 10.0, 'high': 10.0, 'low': 10.0,
+            'close': 10.0, 'volume': 100000, 'pre_close': 9.8,
+        })
+
+        # mock _query_stock_name to avoid DB
+        original = PortfolioBacktestEngine._query_stock_name
+        PortfolioBacktestEngine._query_stock_name = staticmethod(lambda code: '')
+        try:
+            engine._execute_single_order(
+                {'code': '999999', 'amount': 100, 'value': None},
+                datetime.date(2025, 3, 1))
+        finally:
+            PortfolioBacktestEngine._query_stock_name = original
+
+        self.assertEqual(len(engine._trade_records), 1)
+        self.assertEqual(engine._trade_records[0].name, '')
+
+    def test_to_dict_roundtrip(self):
+        """完整的买卖流程 to_dict 包含所有字段"""
+        engine = self._make_engine_with_position(
+            code='000001', name='平安银行', amount=1000, avg_cost=10.0)
+        date = datetime.date(2025, 3, 1)
+        self._setup_day_price(engine, '000001', date, 11.0)
+
+        engine._execute_single_order({'code': '000001', 'amount': -1000, 'value': None}, date)
+
+        trade = engine._trade_records[0]
+        d = trade.to_dict()
+
+        # 验证所有字段存在
+        required_fields = ['date', 'code', 'name', 'direction', 'price',
+                          'amount', 'value', 'commission', 'tax',
+                          'slippage_cost', 'close_profit', 'return_rate']
+        for field in required_fields:
+            self.assertIn(field, d, f"to_dict() 缺少字段: {field}")
+
+        self.assertEqual(d['name'], '平安银行')
+        self.assertEqual(d['direction'], 'sell')
+        self.assertGreater(d['close_profit'], 0)
+        self.assertGreater(d['return_rate'], 0)
 
 
 # ═══════════════════════════════════════════════════════════════════════

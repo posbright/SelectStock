@@ -154,6 +154,22 @@
           <el-table-column label="滑点" width="75" align="right">
             <template #default="{ row }">{{ N(row.slippage_cost || 0).toFixed(2) }}</template>
           </el-table-column>
+          <el-table-column label="平仓盈亏" width="110" align="right">
+            <template #default="{ row }">
+              <span v-if="row.direction === 'sell'" :class="pctCls(row.close_profit)">
+                {{ row.close_profit >= 0 ? '+' : '' }}{{ N(row.close_profit || 0).toFixed(2) }}
+              </span>
+              <span v-else>-</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="收益率" width="85" align="right">
+            <template #default="{ row }">
+              <span v-if="row.direction === 'sell'" :class="pctCls(row.return_rate)">
+                {{ row.return_rate >= 0 ? '+' : '' }}{{ N(row.return_rate || 0).toFixed(2) }}%
+              </span>
+              <span v-else>-</span>
+            </template>
+          </el-table-column>
         </el-table>
       </el-tab-pane>
 

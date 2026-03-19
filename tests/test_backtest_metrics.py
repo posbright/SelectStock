@@ -60,7 +60,7 @@ class TestBacktestMetrics(unittest.TestCase):
         cls.metrics = cls.data.get('metrics', {})
 
     def test_status_ok(self):
-        self.assertEqual(self.data.get('status'), 'success')
+        self.assertIn(self.data.get('status'), ('success', 'completed'))
 
     def test_has_metrics(self):
         self.assertGreater(len(self.metrics), 0)

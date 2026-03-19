@@ -234,7 +234,8 @@ class StockData:
 class TradeRecord:
     """交易记录"""
     __slots__ = ('date', 'code', 'name', 'direction', 'price',
-                 'amount', 'value', 'commission', 'tax', 'slippage_cost')
+                 'amount', 'value', 'commission', 'tax', 'slippage_cost',
+                 'close_profit', 'return_rate')
 
     def __init__(self, date, code, name, direction, price, amount):
         self.date = date
@@ -247,6 +248,8 @@ class TradeRecord:
         self.commission = 0.0
         self.tax = 0.0
         self.slippage_cost = 0.0
+        self.close_profit = 0.0    # 平仓盈亏（卖出时有效）
+        self.return_rate = 0.0     # 收益率 %（卖出时有效）
 
     @property
     def total_cost(self):
@@ -264,6 +267,8 @@ class TradeRecord:
             'commission': self.commission,
             'tax': self.tax,
             'slippage_cost': self.slippage_cost,
+            'close_profit': round(self.close_profit, 2),
+            'return_rate': round(self.return_rate, 2),
         }
 
 

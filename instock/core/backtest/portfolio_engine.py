@@ -73,6 +73,7 @@ class PortfolioBacktestEngine:
         self._weekly_callbacks = []    # run_weekly() 注册的周级回调 [(func, weekday, time)]
         self._current_day_prices = {}  # 当日价格 {code: close_price}
         self._fundamental_provider = None  # 基本面数据提供器
+        self._stock_names = {}         # 股票名称缓存 {code: name}
 
     def run(self, strategy_code, start_date, end_date,
             initial_cash=1000000.0, benchmark='000300',
@@ -490,6 +491,57 @@ class PortfolioBacktestEngine:
         func.__globals__.update(api_ns)
         func(*args)
 
+    # ── 股票名称解析 ──
+
+    def _resolve_stock_name(self, code):
+        """获取股票名称，优先缓存，降级查询数据库"""
+        if code in self._stock_names:
+            return self._stock_names[code]
+        name = self._query_stock_name(code)
+        self._stock_names[code] = name
+        return name
+
+    @staticmethod
+    def _query_stock_name(code):
+        """从数据库查询单只股票名称"""
+        try:
+            import instock.core.tablestructure as tbs
+            import instock.lib.database as mdb
+            table = tbs.TABLE_CN_STOCK_SPOT['name']
+            if mdb.checkTableIsExist(table):
+                sql = f"SELECT `name` FROM `{table}` WHERE `code` = %s LIMIT 1"
+                result = pd.read_sql(sql, mdb.engine(), params=(code,))
+                if result is not None and len(result) > 0:
+                    return result.iloc[0]['name']
+        except Exception:
+            logging.debug(f"查询股票名称异常: {code}", exc_info=True)
+        return ''
+
+    def _load_stock_names_batch(self, codes):
+        """批量加载股票名称到缓存"""
+        if not codes:
+            return
+        uncached = [c for c in codes if c not in self._stock_names]
+        if not uncached:
+            return
+        try:
+            import instock.core.tablestructure as tbs
+            import instock.lib.database as mdb
+            table = tbs.TABLE_CN_STOCK_SPOT['name']
+            if mdb.checkTableIsExist(table):
+                placeholders = ','.join(['%s'] * len(uncached))
+                sql = f"SELECT `code`, `name` FROM `{table}` WHERE `code` IN ({placeholders})"
+                result = pd.read_sql(sql, mdb.engine(), params=tuple(uncached))
+                if result is not None and len(result) > 0:
+                    for _, row in result.iterrows():
+                        self._stock_names[row['code']] = row['name']
+        except Exception:
+            logging.debug("批量查询股票名称异常", exc_info=True)
+        # 未查到的标记为空字符串
+        for c in uncached:
+            if c not in self._stock_names:
+                self._stock_names[c] = ''
+
     # ── 订单管理 ──
 
     def _submit_order(self, code, amount=None, value=None):
@@ -612,13 +664,14 @@ class PortfolioBacktestEngine:
                 if total_cost + commission > self.context.portfolio.available_cash:
                     return
 
-            pos = self.context.portfolio._get_or_create_position(code)
+            stock_name = self._resolve_stock_name(code)
+            pos = self.context.portfolio._get_or_create_position(code, stock_name)
             pos._on_buy(amount, actual_price, commission)
             pos._update_price(exec_price)  # 用市场收盘价估值，而非含滑点的成交价
             self.context.portfolio.available_cash -= (total_cost + commission)
             self.context.portfolio._update_value()
 
-            trade = TradeRecord(date, code, pos.name, 'buy', exec_price, amount)
+            trade = TradeRecord(date, code, stock_name, 'buy', exec_price, amount)
             trade.commission = round(commission, 2)
             trade.slippage_cost = round(exec_price * self.context.slippage_rate * amount, 2)
             self._trade_records.append(trade)
@@ -635,6 +688,9 @@ class PortfolioBacktestEngine:
             if sell_amount <= 0:
                 sell_amount = pos.closeable_amount
 
+            # 卖出前记录持仓均价，用于计算平仓盈亏
+            avg_cost_before_sell = pos.avg_cost
+
             actual_price = exec_price * (1 - self.context.slippage_rate)
             total_income = actual_price * sell_amount
             commission = max(total_income * self.context.commission_rate, 5.0)
@@ -648,10 +704,16 @@ class PortfolioBacktestEngine:
             if pos.amount == 0 and code in self.context.portfolio.positions:
                 del self.context.portfolio.positions[code]
 
-            trade = TradeRecord(date, code, pos.name, 'sell', exec_price, sell_amount)
+            stock_name = self._resolve_stock_name(code)
+            trade = TradeRecord(date, code, stock_name, 'sell', exec_price, sell_amount)
             trade.commission = round(commission, 2)
             trade.tax = round(tax, 2)
             trade.slippage_cost = round(exec_price * self.context.slippage_rate * sell_amount, 2)
+            # 平仓盈亏 = (卖出价 - 持仓均价) × 卖出数量
+            trade.close_profit = round((exec_price - avg_cost_before_sell) * sell_amount, 2)
+            # 收益率 = (卖出价 - 持仓均价) / 持仓均价 × 100
+            if avg_cost_before_sell > 0:
+                trade.return_rate = round((exec_price - avg_cost_before_sell) / avg_cost_before_sell * 100, 2)
             self._trade_records.append(trade)
 
     def _execute_pending_orders(self, date, prices):
@@ -741,12 +803,13 @@ class PortfolioBacktestEngine:
                         continue
 
                 # 执行买入
-                pos = self.context.portfolio._get_or_create_position(code)
+                stock_name = self._resolve_stock_name(code)
+                pos = self.context.portfolio._get_or_create_position(code, stock_name)
                 pos._on_buy(amount, actual_price, commission)
                 pos._update_price(exec_price)  # 用市场收盘价估值，而非含滑点的成交价
                 self.context.portfolio.available_cash -= (total_cost + commission)
 
-                trade = TradeRecord(date, code, pos.name, 'buy', exec_price, amount)
+                trade = TradeRecord(date, code, stock_name, 'buy', exec_price, amount)
                 trade.commission = round(commission, 2)
                 trade.slippage_cost = round(exec_price * self.context.slippage_rate * amount, 2)
                 self._trade_records.append(trade)
@@ -764,6 +827,9 @@ class PortfolioBacktestEngine:
                     # 可能不足100股但有余股，允许卖出
                     sell_amount = pos.closeable_amount
 
+                # 卖出前记录持仓均价，用于计算平仓盈亏
+                avg_cost_before_sell = pos.avg_cost
+
                 actual_price = exec_price * (1 - self.context.slippage_rate)
                 total_income = actual_price * sell_amount
                 commission = max(total_income * self.context.commission_rate, 5.0)
@@ -773,10 +839,16 @@ class PortfolioBacktestEngine:
                 pos._on_sell(sell_amount, exec_price)  # 剩余持仓以市场收盘价估值
                 self.context.portfolio.available_cash += (total_income - commission - tax)
 
-                trade = TradeRecord(date, code, pos.name, 'sell', exec_price, sell_amount)
+                stock_name = self._resolve_stock_name(code)
+                trade = TradeRecord(date, code, stock_name, 'sell', exec_price, sell_amount)
                 trade.commission = round(commission, 2)
                 trade.tax = round(tax, 2)
                 trade.slippage_cost = round(exec_price * self.context.slippage_rate * sell_amount, 2)
+                # 平仓盈亏 = (卖出价 - 持仓均价) × 卖出数量
+                trade.close_profit = round((exec_price - avg_cost_before_sell) * sell_amount, 2)
+                # 收益率 = (卖出价 - 持仓均价) / 持仓均价 × 100
+                if avg_cost_before_sell > 0:
+                    trade.return_rate = round((exec_price - avg_cost_before_sell) / avg_cost_before_sell * 100, 2)
                 self._trade_records.append(trade)
 
         self._pending_orders.clear()
@@ -815,6 +887,9 @@ class PortfolioBacktestEngine:
             logging.info(f"[回测引擎] 预加载 {len(codes)} 只股票数据")
             self._stock_data = load_multiple_stocks(codes, pre_start, end_date)
             self._all_codes = codes
+
+            # 批量加载股票名称
+            self._load_stock_names_batch(codes)
 
             # 设置历史数据到 data_proxy
             for code, df in self._stock_data.items():
