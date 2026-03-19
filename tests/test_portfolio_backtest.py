@@ -135,11 +135,18 @@ def handle_data(context, data):
         ok, _ = validate_code("def initialize(c): eval('1+1')\ndef handle_data(c,d): pass")
         self.assertFalse(ok)
 
-    def test_missing_functions(self):
+    def test_missing_initialize(self):
+        """缺少 initialize 函数时应拒绝"""
+        from instock.core.backtest.strategy_sandbox import validate_code
+        ok, err = validate_code("def handle_data(c, d): pass")
+        self.assertFalse(ok)
+        self.assertIn('initialize', err)
+
+    def test_only_initialize_is_valid(self):
+        """仅有 initialize 应通过（handle_data 可选，可用 run_daily 替代）"""
         from instock.core.backtest.strategy_sandbox import validate_code
         ok, err = validate_code("def initialize(c): pass")
-        self.assertFalse(ok)
-        self.assertIn('handle_data', err)
+        self.assertTrue(ok, err)
 
 
 class TestRiskMetrics(unittest.TestCase):
