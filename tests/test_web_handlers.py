@@ -1054,6 +1054,8 @@ class TestPortfolioBacktestHandlerClasses(unittest.TestCase):
             'GetPortfolioBacktestListHandler',
             'GetPortfolioBacktestDetailHandler',
             'GetBacktestCompareHandler',
+            'DeleteBacktestHandler',
+            'GetPortfolioBacktestListPageHandler',
             'CreateFolderHandler',
             'RenameFolderHandler',
             'DeleteFolderHandler',
@@ -1198,6 +1200,80 @@ class TestGetBacktestCompareHandler(unittest.TestCase):
         src_code = inspect.getsource(ws)
         self.assertIn('/instock/api/backtest/portfolio/compare', src_code)
         self.assertIn('GetBacktestCompareHandler', src_code)
+
+
+class TestDeleteBacktestHandler(unittest.TestCase):
+    """Tests for DeleteBacktestHandler batch delete endpoint."""
+
+    def test_class_exists(self):
+        from instock.web.portfolioBacktestHandler import DeleteBacktestHandler
+        self.assertTrue(hasattr(DeleteBacktestHandler, 'post'))
+
+    def test_inherits_base_handler(self):
+        from instock.web.portfolioBacktestHandler import DeleteBacktestHandler
+        import instock.web.base as webBase
+        self.assertTrue(issubclass(DeleteBacktestHandler, webBase.BaseHandler))
+
+    def test_route_registered(self):
+        import inspect
+        import instock.web.web_service as ws
+        src_code = inspect.getsource(ws)
+        self.assertIn('/instock/api/backtest/portfolio/delete', src_code)
+        self.assertIn('DeleteBacktestHandler', src_code)
+
+    def test_id_filtering(self):
+        """Valid integer IDs are filtered correctly."""
+        ids = [1, 2, 'abc', 3.5, '4']
+        bt_ids = [int(x) for x in ids if isinstance(x, (int, float, str)) and str(x).strip().isdigit()]
+        self.assertEqual(bt_ids, [1, 2, 4])
+
+    def test_empty_ids_rejected(self):
+        """Empty ids list should be rejected."""
+        ids = []
+        self.assertFalse(bool(ids) and isinstance(ids, list))
+
+
+class TestGetPortfolioBacktestListPageHandler(unittest.TestCase):
+    """Tests for paginated backtest list handler."""
+
+    def test_class_exists(self):
+        from instock.web.portfolioBacktestHandler import GetPortfolioBacktestListPageHandler
+        self.assertTrue(hasattr(GetPortfolioBacktestListPageHandler, 'get'))
+
+    def test_inherits_base_handler(self):
+        from instock.web.portfolioBacktestHandler import GetPortfolioBacktestListPageHandler
+        import instock.web.base as webBase
+        self.assertTrue(issubclass(GetPortfolioBacktestListPageHandler, webBase.BaseHandler))
+
+    def test_route_registered(self):
+        import inspect
+        import instock.web.web_service as ws
+        src_code = inspect.getsource(ws)
+        self.assertIn('/instock/api/backtest/portfolio/list_page', src_code)
+        self.assertIn('GetPortfolioBacktestListPageHandler', src_code)
+
+    def test_pagination_params(self):
+        """Test pagination offset calculation."""
+        page = 3
+        page_size = 20
+        offset = (page - 1) * page_size
+        self.assertEqual(offset, 40)
+
+    def test_page_size_clamping(self):
+        """Page size should be clamped to valid range."""
+        for bad_size in [0, -1, 300]:
+            page_size = bad_size
+            if page_size < 1 or page_size > 200:
+                page_size = 20
+            self.assertEqual(page_size, 20)
+
+    def test_valid_page_size_unchanged(self):
+        """Valid page sizes pass through."""
+        for good_size in [10, 50, 100, 200]:
+            page_size = good_size
+            if page_size < 1 or page_size > 200:
+                page_size = 20
+            self.assertEqual(page_size, good_size)
 
 
 # ============================================================

@@ -286,6 +286,16 @@ export function getBacktestCompare(ids: number[]) {
   return request({ url: '/api/backtest/portfolio/compare', method: 'get', params: { ids: ids.join(',') } })
 }
 
+/** 批量删除回测记录 */
+export function deleteBacktests(ids: number[]) {
+  return request({ url: '/api/backtest/portfolio/delete', method: 'post', data: { ids } })
+}
+
+/** 获取回测历史列表（分页） */
+export function getPortfolioBacktestListPage(params?: { strategy_id?: number; page?: number; page_size?: number }) {
+  return request({ url: '/api/backtest/portfolio/list_page', method: 'get', params })
+}
+
 // ============= 模拟交易 API =============
 
 /** 创建模拟盘 */

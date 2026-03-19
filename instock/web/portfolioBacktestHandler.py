@@ -766,6 +766,123 @@ class GetBacktestCompareHandler(webBase.BaseHandler, ABC):
             self.write(json.dumps({'code': -1, 'msg': str(e)}))
 
 
+class DeleteBacktestHandler(webBase.BaseHandler, ABC):
+    """批量删除回测记录"""
+
+    @gen.coroutine
+    def post(self):
+        try:
+            body = json.loads(self.request.body)
+            ids = body.get('ids', [])
+            if not ids or not isinstance(ids, list):
+                self.write(json.dumps({'code': -1, 'msg': '缺少 ids 参数'}))
+                return
+            # 过滤合法整数
+            bt_ids = [int(x) for x in ids if isinstance(x, (int, float, str)) and str(x).strip().isdigit()]
+            if not bt_ids:
+                self.write(json.dumps({'code': -1, 'msg': 'ids 参数无效'}))
+                return
+
+            _ensure_backtest_table()
+            placeholders = ','.join(['%s'] * len(bt_ids))
+            mdb.executeSql(
+                f'DELETE FROM cn_stock_backtest_portfolio WHERE id IN ({placeholders})',
+                tuple(bt_ids))
+            self.write(json.dumps({'code': 0, 'data': {'deleted': len(bt_ids)}}))
+        except Exception as e:
+            logging.error("DeleteBacktest异常", exc_info=True)
+            self.write(json.dumps({'code': -1, 'msg': str(e)}))
+
+
+class GetPortfolioBacktestListPageHandler(webBase.BaseHandler, ABC):
+    """获取历史回测列表（分页版本）"""
+
+    @gen.coroutine
+    def get(self):
+        try:
+            _ensure_backtest_table()
+            strategy_id = self.get_argument('strategy_id', None)
+            page = int(self.get_argument('page', '1'))
+            page_size = int(self.get_argument('page_size', '20'))
+            if page < 1:
+                page = 1
+            if page_size < 1 or page_size > 200:
+                page_size = 20
+            offset = (page - 1) * page_size
+
+            where = ''
+            params = []
+            if strategy_id:
+                where = 'WHERE bp.strategy_id = %s'
+                params.append(int(strategy_id))
+
+            # 总数
+            count_row = mdb.executeSqlFetch(
+                f'SELECT COUNT(*) FROM cn_stock_backtest_portfolio bp {where}',
+                tuple(params) if params else None)
+            total = count_row[0][0] if count_row else 0
+
+            rows = mdb.executeSqlFetch(
+                f'SELECT bp.id, bp.strategy_id, sc.name as strategy_name, '
+                f'bp.start_date, bp.end_date, bp.initial_cash, bp.status, '
+                f'bp.total_return, bp.annual_return, bp.max_drawdown, '
+                f'bp.sharpe_ratio, bp.alpha, bp.beta, bp.win_rate, '
+                f'bp.trade_count, bp.completed_at, bp.result_json '
+                f'FROM cn_stock_backtest_portfolio bp '
+                f'LEFT JOIN cn_stock_strategy_code sc ON bp.strategy_id = sc.id '
+                f'{where} ORDER BY bp.id DESC LIMIT %s OFFSET %s',
+                tuple(params + [page_size, offset]) if params else (page_size, offset))
+            data = []
+            if rows:
+                for r in rows:
+                    extra_metrics = {}
+                    elapsed = ''
+                    if r[16]:
+                        try:
+                            rj = json.loads(r[16]) if isinstance(r[16], str) else r[16]
+                            m = rj.get('metrics', {})
+                            extra_metrics = {
+                                'benchmark_return': float(m.get('benchmark_return', 0)),
+                                'excess_return': float(m.get('excess_return', 0)),
+                                'excess_max_drawdown': float(m.get('excess_max_drawdown', 0)),
+                                'excess_sharpe_ratio': float(m.get('excess_sharpe_ratio', 0)),
+                                'benchmark_annual_return': float(m.get('benchmark_annual_return', 0)),
+                            }
+                            elapsed = rj.get('elapsed', '')
+                        except Exception as e:
+                            logging.debug(f"result_json 解析异常（回测列表分页）: id={r[0]} - {e}")
+                    item = {
+                        'id': r[0],
+                        'strategy_id': r[1],
+                        'strategy_name': r[2] or '临时策略',
+                        'start_date': str(r[3]) if r[3] else '',
+                        'end_date': str(r[4]) if r[4] else '',
+                        'initial_cash': float(r[5]) if r[5] else 0,
+                        'status': r[6] or 'unknown',
+                        'total_return': float(r[7]) if r[7] else 0,
+                        'annual_return': float(r[8]) if r[8] else 0,
+                        'max_drawdown': float(r[9]) if r[9] else 0,
+                        'sharpe_ratio': float(r[10]) if r[10] else 0,
+                        'alpha': float(r[11]) if r[11] else 0,
+                        'beta': float(r[12]) if r[12] else 0,
+                        'win_rate': float(r[13]) if r[13] else 0,
+                        'trade_count': r[14] or 0,
+                        'completed_at': r[15].strftime('%Y-%m-%d %H:%M:%S') if r[15] else '',
+                        'elapsed': elapsed,
+                    }
+                    item.update(extra_metrics)
+                    data.append(item)
+            self.write(json.dumps({
+                'code': 0,
+                'data': data,
+                'total': total,
+                'page': page,
+                'page_size': page_size,
+            }, ensure_ascii=False))
+        except Exception as e:
+            self.write(json.dumps({'code': -1, 'msg': str(e)}))
+
+
 # ── 辅助函数 ──
 
 def _insert_and_get_id(sql, params=()):

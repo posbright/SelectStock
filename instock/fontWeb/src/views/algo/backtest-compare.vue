@@ -11,125 +11,147 @@
       </span>
     </div>
 
-    <el-tabs v-model="activeTab">
-      <!-- Tab 1: 收益走势对比 -->
-      <el-tab-pane label="收益走势" name="chart">
-        <div ref="chartEl" class="chart-box"></div>
-      </el-tab-pane>
+    <template v-if="!loading && backtests.length > 0">
+      <el-tabs v-model="activeTab" @tab-click="onTabClick">
+        <!-- Tab 1: 收益走势对比 -->
+        <el-tab-pane label="收益走势" name="chart">
+          <div ref="chartEl" class="chart-box"></div>
+        </el-tab-pane>
 
-      <!-- Tab 2: 指标对比表 -->
-      <el-tab-pane label="指标对比" name="metrics">
-        <div class="metrics-compare" v-if="backtests.length">
-          <table class="cmp-table">
-            <thead>
-              <tr>
-                <th class="cmp-lbl">指标</th>
-                <th v-for="bt in backtests" :key="bt.id" class="cmp-val">
-                  <div class="cmp-hdr">
+        <!-- Tab 2: 指标对比表 -->
+        <el-tab-pane label="指标对比" name="metrics">
+          <div class="metrics-compare">
+            <table class="cmp-table">
+              <thead>
+                <tr>
+                  <th class="cmp-lbl">指标</th>
+                  <th v-for="bt in backtests" :key="bt.id" class="cmp-val">
+                    <div class="cmp-hdr">
+                      <span class="cmp-name">{{ bt.strategy_name }}</span>
+                      <span class="cmp-id">#{{ bt.id }}</span>
+                    </div>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in metricRows" :key="row.key">
+                  <td class="cmp-lbl">{{ row.label }}</td>
+                  <td v-for="bt in backtests" :key="bt.id" class="cmp-val"
+                      :class="{ 'is-best': row.bestId === bt.id }">
+                    <span :class="row.colorFn ? row.colorFn(row.getValue(bt)) : ''">
+                      {{ row.format(row.getValue(bt)) }}
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </el-tab-pane>
+
+        <!-- Tab 3: 交易统计对比 -->
+        <el-tab-pane label="交易统计" name="trades">
+          <div class="metrics-compare">
+            <table class="cmp-table">
+              <thead>
+                <tr>
+                  <th class="cmp-lbl">统计项</th>
+                  <th v-for="bt in backtests" :key="bt.id" class="cmp-val">
                     <span class="cmp-name">{{ bt.strategy_name }}</span>
                     <span class="cmp-id">#{{ bt.id }}</span>
-                  </div>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in metricRows" :key="row.key">
-                <td class="cmp-lbl">{{ row.label }}</td>
-                <td v-for="bt in backtests" :key="bt.id" class="cmp-val"
-                    :class="{ 'is-best': row.bestId === bt.id }">
-                  <span :class="row.colorFn ? row.colorFn(row.getValue(bt)) : ''">
-                    {{ row.format(row.getValue(bt)) }}
-                  </span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </el-tab-pane>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="cmp-lbl">总交易次数</td>
+                  <td v-for="bt in backtests" :key="bt.id" class="cmp-val">{{ bt.trades?.length || 0 }}</td>
+                </tr>
+                <tr>
+                  <td class="cmp-lbl">买入次数</td>
+                  <td v-for="bt in backtests" :key="bt.id" class="cmp-val">{{ countTrades(bt, 'buy') }}</td>
+                </tr>
+                <tr>
+                  <td class="cmp-lbl">卖出次数</td>
+                  <td v-for="bt in backtests" :key="bt.id" class="cmp-val">{{ countTrades(bt, 'sell') }}</td>
+                </tr>
+                <tr>
+                  <td class="cmp-lbl">首次交易</td>
+                  <td v-for="bt in backtests" :key="bt.id" class="cmp-val">{{ firstTradeDate(bt) }}</td>
+                </tr>
+                <tr>
+                  <td class="cmp-lbl">末次交易</td>
+                  <td v-for="bt in backtests" :key="bt.id" class="cmp-val">{{ lastTradeDate(bt) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </el-tab-pane>
 
-      <!-- Tab 3: 交易统计对比 -->
-      <el-tab-pane label="交易统计" name="trades">
-        <div class="metrics-compare" v-if="backtests.length">
-          <table class="cmp-table">
-            <thead>
-              <tr>
-                <th class="cmp-lbl">统计项</th>
-                <th v-for="bt in backtests" :key="bt.id" class="cmp-val">
-                  <span class="cmp-name">{{ bt.strategy_name }}</span>
-                  <span class="cmp-id">#{{ bt.id }}</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td class="cmp-lbl">总交易次数</td>
-                <td v-for="bt in backtests" :key="bt.id" class="cmp-val">{{ bt.trades?.length || 0 }}</td>
-              </tr>
-              <tr>
-                <td class="cmp-lbl">买入次数</td>
-                <td v-for="bt in backtests" :key="bt.id" class="cmp-val">{{ countTrades(bt, 'buy') }}</td>
-              </tr>
-              <tr>
-                <td class="cmp-lbl">卖出次数</td>
-                <td v-for="bt in backtests" :key="bt.id" class="cmp-val">{{ countTrades(bt, 'sell') }}</td>
-              </tr>
-              <tr>
-                <td class="cmp-lbl">首次交易</td>
-                <td v-for="bt in backtests" :key="bt.id" class="cmp-val">{{ firstTradeDate(bt) }}</td>
-              </tr>
-              <tr>
-                <td class="cmp-lbl">末次交易</td>
-                <td v-for="bt in backtests" :key="bt.id" class="cmp-val">{{ lastTradeDate(bt) }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </el-tab-pane>
-
-      <!-- Tab 4: 策略代码对比 & 调参回测 -->
-      <el-tab-pane label="代码对比" name="code">
-        <div class="code-compare" v-if="backtests.length">
-          <div class="code-panels">
-            <div v-for="(bt, idx) in backtests" :key="bt.id" class="code-panel">
-              <div class="code-panel-header">
-                <span class="cmp-name">{{ bt.strategy_name }} #{{ bt.id }}</span>
-                <el-tag size="small" :type="idx === editingIdx ? 'warning' : 'info'">
-                  {{ idx === editingIdx ? '编辑中' : '原始' }}
-                </el-tag>
-              </div>
-              <el-input v-model="codeEditors[idx]" type="textarea" :rows="18"
-                        :readonly="idx !== editingIdx"
-                        @focus="editingIdx = idx"
-                        class="code-editor" />
-              <div class="code-panel-actions">
-                <el-button size="small" type="primary" @click="runModifiedBacktest(idx)" :loading="runningIdx === idx">
-                  运行回测
-                </el-button>
+        <!-- Tab 4: 策略代码对比 & 调参回测 -->
+        <el-tab-pane label="代码对比" name="code">
+          <div class="code-compare">
+            <div class="code-panels">
+              <div v-for="(bt, idx) in backtests" :key="bt.id" class="code-panel">
+                <div class="code-panel-header">
+                  <span class="cmp-name">{{ bt.strategy_name }} #{{ bt.id }}</span>
+                  <el-tag size="small" :type="idx === editingIdx ? 'warning' : 'info'">
+                    {{ idx === editingIdx ? '编辑中' : '原始' }}
+                  </el-tag>
+                </div>
+                <div class="code-params">
+                  <el-form :inline="true" size="small">
+                    <el-form-item label="开始">
+                      <el-date-picker v-model="paramEditors[idx].start_date" type="date"
+                                      value-format="YYYY-MM-DD" style="width: 130px;" />
+                    </el-form-item>
+                    <el-form-item label="结束">
+                      <el-date-picker v-model="paramEditors[idx].end_date" type="date"
+                                      value-format="YYYY-MM-DD" style="width: 130px;" />
+                    </el-form-item>
+                    <el-form-item label="资金">
+                      <el-input-number v-model="paramEditors[idx].initial_cash" :min="10000" :step="100000" style="width: 130px;" />
+                    </el-form-item>
+                    <el-form-item label="基准">
+                      <el-input v-model="paramEditors[idx].benchmark" style="width: 100px;" />
+                    </el-form-item>
+                  </el-form>
+                </div>
+                <el-input v-model="codeEditors[idx]" type="textarea" :rows="18"
+                          @focus="editingIdx = idx"
+                          class="code-editor" />
+                <div class="code-panel-actions">
+                  <el-button size="small" @click="resetCode(idx)">重置</el-button>
+                  <el-button size="small" type="primary" @click="runModifiedBacktest(idx)" :loading="runningIdx === idx">
+                    运行回测
+                  </el-button>
+                </div>
               </div>
             </div>
+            <!-- 新回测结果 -->
+            <div v-if="newBacktestResult" class="new-result-card">
+              <el-alert title="新回测完成" type="success" :closable="false" style="margin-bottom: 12px">
+                <template #default>
+                  策略收益: <b :class="pctCls(newBacktestResult.metrics?.total_return)">{{ fmtPct(newBacktestResult.metrics?.total_return) }}</b>
+                  &nbsp;|&nbsp; 年化: <b>{{ fmtPct(newBacktestResult.metrics?.annual_return) }}</b>
+                  &nbsp;|&nbsp; 最大回撤: <b class="val-green">{{ fmtPct(newBacktestResult.metrics?.max_drawdown) }}</b>
+                  &nbsp;|&nbsp; 夏普: <b>{{ fmtNum(newBacktestResult.metrics?.sharpe_ratio) }}</b>
+                  <span v-if="newBacktestResult.backtest_id">
+                    &nbsp;|&nbsp; <el-link type="primary" @click="viewNewBacktest">查看详情 #{{ newBacktestResult.backtest_id }}</el-link>
+                  </span>
+                </template>
+              </el-alert>
+            </div>
           </div>
-          <!-- 新回测结果 -->
-          <div v-if="newBacktestResult" class="new-result-card">
-            <el-alert title="新回测完成" type="success" :closable="false" style="margin-bottom: 12px">
-              <template #default>
-                策略收益: <b :class="pctCls(newBacktestResult.metrics?.total_return)">{{ fmtPct(newBacktestResult.metrics?.total_return) }}</b>
-                &nbsp;|&nbsp; 年化: <b>{{ fmtPct(newBacktestResult.metrics?.annual_return) }}</b>
-                &nbsp;|&nbsp; 最大回撤: <b class="val-green">{{ fmtPct(newBacktestResult.metrics?.max_drawdown) }}</b>
-                &nbsp;|&nbsp; 夏普: <b>{{ fmtNum(newBacktestResult.metrics?.sharpe_ratio) }}</b>
-                <span v-if="newBacktestResult.backtest_id">
-                  &nbsp;|&nbsp; <el-link type="primary" @click="viewNewBacktest">查看详情 #{{ newBacktestResult.backtest_id }}</el-link>
-                </span>
-              </template>
-            </el-alert>
-          </div>
-        </div>
-      </el-tab-pane>
-    </el-tabs>
+        </el-tab-pane>
+      </el-tabs>
+    </template>
+
+    <el-empty v-if="!loading && backtests.length === 0" description="未加载到对比数据" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { getBacktestCompare, runPortfolioBacktest } from '@/api/stock'
@@ -142,6 +164,7 @@ const loading = ref(false)
 const activeTab = ref('chart')
 const backtests = ref<any[]>([])
 const codeEditors = ref<string[]>([])
+const paramEditors = ref<any[]>([])
 const editingIdx = ref(0)
 const runningIdx = ref(-1)
 const newBacktestResult = ref<any>(null)
@@ -149,18 +172,17 @@ const newBacktestResult = ref<any>(null)
 const chartEl = ref<HTMLElement>()
 let chart: echarts.ECharts | null = null
 
-const N = Number
-function fmtPct(v: number | undefined, d = 2) {
+function fmtPct(v: number | undefined | null, d = 2) {
   if (v == null) return '--'
-  return `${v >= 0 ? '+' : ''}${N(v).toFixed(d)}%`
+  return `${Number(v) >= 0 ? '+' : ''}${Number(v).toFixed(d)}%`
 }
-function fmtNum(v: number | undefined, d = 3) {
+function fmtNum(v: number | undefined | null, d = 3) {
   if (v == null) return '--'
-  return N(v).toFixed(d)
+  return Number(v).toFixed(d)
 }
-function pctCls(v: number | undefined) {
+function pctCls(v: number | undefined | null) {
   if (v == null || v === 0) return ''
-  return v > 0 ? 'val-red' : 'val-green'
+  return Number(v) > 0 ? 'val-red' : 'val-green'
 }
 
 // ── 指标对比行定义 ──
@@ -168,8 +190,8 @@ type MetricRow = {
   key: string; label: string
   getValue: (bt: any) => number
   format: (v: number) => string
-  higher?: boolean // true=越高越好 (用于标记最佳)
-  lower?: boolean  // true=越低越好
+  higher?: boolean
+  lower?: boolean
   colorFn?: (v: number) => string
   bestId?: number
 }
@@ -191,7 +213,6 @@ const metricRows = computed<MetricRow[]>(() => {
     { key: 'profit_loss_ratio', label: '盈亏比', getValue: bt => bt.metrics?.profit_loss_ratio ?? 0, format: v => fmtNum(v), higher: true },
     { key: 'trade_count', label: '交易次数', getValue: bt => bt.metrics?.trade_count ?? 0, format: v => String(Math.round(v)) },
   ]
-  // 标记每行最优
   for (const row of rows) {
     if (row.higher || row.lower) {
       let bestVal = row.higher ? -Infinity : Infinity
@@ -219,10 +240,23 @@ function lastTradeDate(bt: any) {
   return t && t.length > 0 ? t[t.length - 1].date : '-'
 }
 
+// ── 重置代码 ──
+function resetCode(idx: number) {
+  const bt = backtests.value[idx]
+  codeEditors.value[idx] = bt.strategy_code || ''
+  paramEditors.value[idx] = {
+    start_date: bt.start_date,
+    end_date: bt.end_date,
+    initial_cash: bt.initial_cash || 1000000,
+    benchmark: bt.params?.benchmark || '000300',
+  }
+}
+
 // ── 运行修改后的回测 ──
 async function runModifiedBacktest(idx: number) {
   const bt = backtests.value[idx]
   const code = codeEditors.value[idx]
+  const params = paramEditors.value[idx]
   if (!code?.trim()) { ElMessage.warning('策略代码不能为空'); return }
 
   runningIdx.value = idx
@@ -231,17 +265,17 @@ async function runModifiedBacktest(idx: number) {
     const res = await runPortfolioBacktest({
       code,
       strategy_id: bt.strategy_id,
-      start_date: bt.start_date,
-      end_date: bt.end_date,
-      initial_cash: bt.initial_cash,
-      benchmark: bt.params?.benchmark || '000300',
+      start_date: params.start_date || bt.start_date,
+      end_date: params.end_date || bt.end_date,
+      initial_cash: params.initial_cash || bt.initial_cash,
+      benchmark: params.benchmark || '000300',
     }) as any
-    const data = res?.data || res
+    const data = res?.code === 0 ? res.data : (res?.data || res)
     if (data?.status === 'completed') {
       newBacktestResult.value = data
       ElMessage.success('回测完成')
     } else {
-      ElMessage.error(data?.message || '回测失败')
+      ElMessage.error(data?.message || data?.msg || '回测失败')
     }
   } catch (e: any) {
     ElMessage.error(e?.message || '回测运行异常')
@@ -262,16 +296,24 @@ const COLORS = ['#e6a23c', '#409eff', '#67c23a', '#f56c6c', '#909399', '#ff6b81'
 function renderChart() {
   const el = chartEl.value
   if (!el || backtests.value.length === 0) return
-  if (el.clientWidth === 0) { setTimeout(renderChart, 120); return }
-  if (chart) chart.dispose()
+  // 等待 DOM 可见
+  if (el.clientWidth === 0 || el.clientHeight === 0) {
+    setTimeout(renderChart, 150)
+    return
+  }
+  if (chart) { chart.dispose(); chart = null }
   chart = echarts.init(el)
 
-  // 合并所有日期
   const allDates = new Set<string>()
   backtests.value.forEach(bt => {
     (bt.nav || []).forEach((r: any) => allDates.add(r.date))
   })
   const dates = Array.from(allDates).sort()
+
+  if (dates.length === 0) {
+    chart.setOption({ title: { text: '无净值数据', left: 'center', top: 'center', textStyle: { color: '#909399', fontSize: 14 } } })
+    return
+  }
 
   const legend: string[] = []
   const series: any[] = []
@@ -288,6 +330,7 @@ function renderChart() {
     series.push({
       name, type: 'line', data, symbol: 'none', connectNulls: true,
       lineStyle: { width: 2, color: COLORS[i % COLORS.length] },
+      itemStyle: { color: COLORS[i % COLORS.length] },
     })
   })
 
@@ -295,6 +338,7 @@ function renderChart() {
     tooltip: {
       trigger: 'axis',
       formatter(p: any) {
+        if (!p || !p.length) return ''
         let h = `<b>${p[0].axisValue}</b>`
         p.forEach((s: any) => {
           if (s.value != null) h += `<br/>${s.marker} ${s.seriesName}: ${s.value >= 0 ? '+' : ''}${s.value}%`
@@ -311,33 +355,57 @@ function renderChart() {
   })
 }
 
+function onTabClick() {
+  if (activeTab.value === 'chart') {
+    nextTick(() => setTimeout(renderChart, 100))
+  }
+}
+
 // ── lifecycle ──
-onMounted(async () => {
+async function loadCompareData() {
   const idsParam = route.query.ids as string
   if (!idsParam) { ElMessage.error('缺少回测ID参数'); return }
 
   loading.value = true
   try {
     const res = await getBacktestCompare(idsParam.split(',').map(Number)) as any
-    const data = res?.data || res
-    backtests.value = data?.backtests || []
-    codeEditors.value = backtests.value.map((bt: any) => bt.strategy_code || '')
-    await nextTick()
-    renderChart()
+    // res is {code: 0, data: {backtests: [...]}} (axios interceptor unwraps response.data)
+    let data: any
+    if (res?.code === 0) {
+      data = res.data
+    } else {
+      data = res?.data || res
+    }
+    const btList = data?.backtests || []
+    backtests.value = btList
+    codeEditors.value = btList.map((bt: any) => bt.strategy_code || '')
+    paramEditors.value = btList.map((bt: any) => ({
+      start_date: bt.start_date,
+      end_date: bt.end_date,
+      initial_cash: bt.initial_cash || 1000000,
+      benchmark: bt.params?.benchmark || '000300',
+    }))
+
+    if (btList.length === 0) {
+      ElMessage.warning('未找到回测数据')
+    } else {
+      // 等待 DOM 渲染完成后再画图表
+      await nextTick()
+      setTimeout(renderChart, 200)
+    }
   } catch (e: any) {
+    console.error('加载对比数据失败', e)
     ElMessage.error(e?.message || '加载对比数据失败')
   } finally {
     loading.value = false
   }
-})
+}
+
+onMounted(() => loadCompareData())
 
 const onResize = () => chart?.resize()
 window.addEventListener('resize', onResize)
 onUnmounted(() => { window.removeEventListener('resize', onResize); chart?.dispose() })
-
-watch(activeTab, async (tab) => {
-  if (tab === 'chart') { await nextTick(); setTimeout(renderChart, 80) }
-})
 </script>
 
 <style scoped>
@@ -346,7 +414,7 @@ watch(activeTab, async (tab) => {
 .compare-header h3 { margin: 0; font-size: 16px; }
 .header-sub { color: #909399; font-size: 13px; }
 
-.chart-box { width: 100%; height: 420px; }
+.chart-box { width: 100%; height: 420px; min-height: 300px; }
 
 /* ── 指标对比表格（聚宽风格） ── */
 .metrics-compare { overflow-x: auto; }
@@ -364,10 +432,13 @@ watch(activeTab, async (tab) => {
 
 /* ── 代码对比面板 ── */
 .code-compare { margin-top: 8px; }
-.code-panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }
+.code-panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(480px, 1fr)); gap: 16px; }
 .code-panel { border: 1px solid #ebeef5; border-radius: 6px; overflow: hidden; }
 .code-panel-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #fafafa; border-bottom: 1px solid #ebeef5; }
-.code-editor :deep(.el-textarea__inner) { font-family: 'Consolas', 'Monaco', monospace; font-size: 12px; line-height: 1.5; }
-.code-panel-actions { padding: 8px 12px; text-align: right; border-top: 1px solid #ebeef5; }
+.code-params { padding: 8px 12px; background: #fafcff; border-bottom: 1px solid #ebeef5; }
+.code-params :deep(.el-form-item) { margin-bottom: 0; margin-right: 12px; }
+.code-params :deep(.el-form-item__label) { font-size: 12px; }
+.code-editor :deep(.el-textarea__inner) { font-family: 'Consolas', 'Monaco', 'Courier New', monospace; font-size: 12px; line-height: 1.6; border: none; border-radius: 0; }
+.code-panel-actions { padding: 8px 12px; text-align: right; border-top: 1px solid #ebeef5; display: flex; justify-content: flex-end; gap: 8px; }
 .new-result-card { margin-top: 16px; }
 </style>

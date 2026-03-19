@@ -93,6 +93,8 @@ class Application(tornado.web.Application):
             (r"/instock/api/backtest/portfolio/list", portfolioBacktestHandler.GetPortfolioBacktestListHandler),
             (r"/instock/api/backtest/portfolio/detail", portfolioBacktestHandler.GetPortfolioBacktestDetailHandler),
             (r"/instock/api/backtest/portfolio/compare", portfolioBacktestHandler.GetBacktestCompareHandler),
+            (r"/instock/api/backtest/portfolio/delete", portfolioBacktestHandler.DeleteBacktestHandler),
+            (r"/instock/api/backtest/portfolio/list_page", portfolioBacktestHandler.GetPortfolioBacktestListPageHandler),
             # 策略文件夹管理
             (r"/instock/api/strategy/folder/create", portfolioBacktestHandler.CreateFolderHandler),
             (r"/instock/api/strategy/folder/rename", portfolioBacktestHandler.RenameFolderHandler),

@@ -4,16 +4,20 @@
       <div class="header-left">
         <h2>回测列表</h2>
         <el-tag type="info" size="small" class="count-tag">
-          共 {{ list.length }} 条回测
+          共 {{ total }} 条回测
         </el-tag>
       </div>
       <div class="header-right">
+        <el-button type="danger" :disabled="selectedRows.length === 0" @click="batchDelete">
+          <el-icon><Delete /></el-icon>
+          删除 ({{ selectedRows.length }})
+        </el-button>
         <el-button type="primary" :disabled="selectedRows.length < 2" @click="goCompare">
           <el-icon><DataAnalysis /></el-icon>
           对比 ({{ selectedRows.length }})
         </el-button>
         <el-select v-model="filterStrategyId" placeholder="筛选策略" clearable style="width: 200px;"
-                   @change="loadData">
+                   @change="onFilterChange">
           <el-option label="全部策略" :value="0" />
           <el-option v-for="s in strategies" :key="s.id" :label="s.name" :value="s.id" />
         </el-select>
@@ -40,9 +44,7 @@
       </el-table-column>
       <el-table-column prop="total_return" label="策略收益" width="95" align="right" sortable>
         <template #default="{ row }">
-          <span :class="retCls(row.total_return)">
-            {{ fmtRet(row.total_return) }}
-          </span>
+          <span :class="retCls(row.total_return)">{{ fmtRet(row.total_return) }}</span>
         </template>
       </el-table-column>
       <el-table-column prop="annual_return" label="年化收益" width="95" align="right" sortable>
@@ -79,12 +81,25 @@
       <el-table-column prop="trade_count" label="交易数" width="70" align="right" sortable />
       <el-table-column prop="elapsed" label="回测耗时" width="90" align="right" show-overflow-tooltip />
       <el-table-column prop="completed_at" label="完成时间" width="160" sortable />
-      <el-table-column label="操作" width="80" fixed="right">
+      <el-table-column label="操作" width="120" fixed="right">
         <template #default="{ row }">
           <el-button size="small" type="primary" text @click="viewDetail(row.id)">详情</el-button>
+          <el-button size="small" type="danger" text @click="deleteSingle(row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
+
+    <div class="pagination-wrap" v-if="total > 0">
+      <el-pagination
+        v-model:current-page="currentPage"
+        v-model:page-size="pageSize"
+        :page-sizes="[10, 20, 50, 100]"
+        :total="total"
+        layout="total, sizes, prev, pager, next, jumper"
+        @size-change="loadData"
+        @current-change="loadData"
+      />
+    </div>
 
     <el-empty v-if="!loading && list.length === 0" description="暂无回测记录" />
   </div>
@@ -93,8 +108,9 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { DataAnalysis } from '@element-plus/icons-vue'
-import { getPortfolioBacktestList, getStrategyCodeList } from '@/api/stock'
+import { DataAnalysis, Delete } from '@element-plus/icons-vue'
+import { getPortfolioBacktestListPage, getStrategyCodeList, deleteBacktests } from '@/api/stock'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const router = useRouter()
 const list = ref<any[]>([])
@@ -103,6 +119,9 @@ const loading = ref(false)
 const filterStrategyId = ref(0)
 const selectedRows = ref<any[]>([])
 const tableRef = ref()
+const total = ref(0)
+const currentPage = ref(1)
+const pageSize = ref(20)
 
 const N = Number
 function formatCash(v: number) {
@@ -121,6 +140,11 @@ function onSelectionChange(rows: any[]) {
   selectedRows.value = rows
 }
 
+function onFilterChange() {
+  currentPage.value = 1
+  loadData()
+}
+
 function goCompare() {
   if (selectedRows.value.length < 2) return
   const ids = selectedRows.value.map((r: any) => r.id).join(',')
@@ -131,12 +155,64 @@ function viewDetail(id: number) {
   router.push('/algo/backtest-detail/' + id)
 }
 
+async function batchDelete() {
+  if (selectedRows.value.length === 0) return
+  try {
+    await ElMessageBox.confirm(
+      `确定删除选中的 ${selectedRows.value.length} 条回测记录？此操作不可恢复。`,
+      '批量删除',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch { return }
+  const ids = selectedRows.value.map((r: any) => r.id)
+  try {
+    const res = await deleteBacktests(ids) as any
+    if (res?.code === 0) {
+      ElMessage.success(`已删除 ${res.data?.deleted || ids.length} 条记录`)
+      selectedRows.value = []
+      loadData()
+    } else {
+      ElMessage.error(res?.msg || '删除失败')
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '删除异常')
+  }
+}
+
+async function deleteSingle(row: any) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除回测 #${row.id}（${row.strategy_name}）？`,
+      '删除回测',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch { return }
+  try {
+    const res = await deleteBacktests([row.id]) as any
+    if (res?.code === 0) {
+      ElMessage.success('已删除')
+      loadData()
+    } else {
+      ElMessage.error(res?.msg || '删除失败')
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '删除异常')
+  }
+}
+
 async function loadData() {
   loading.value = true
   try {
-    const params = filterStrategyId.value ? { strategy_id: filterStrategyId.value } : undefined
-    const res = await getPortfolioBacktestList(params) as any
-    list.value = res?.data || res?.code === 0 ? (res.data || []) : []
+    const params: any = { page: currentPage.value, page_size: pageSize.value }
+    if (filterStrategyId.value) params.strategy_id = filterStrategyId.value
+    const res = await getPortfolioBacktestListPage(params) as any
+    if (res?.code === 0) {
+      list.value = res.data || []
+      total.value = res.total || 0
+    } else {
+      list.value = []
+      total.value = 0
+    }
   } finally {
     loading.value = false
   }
@@ -147,7 +223,7 @@ async function loadStrategies() {
     const res = await getStrategyCodeList() as any
     const d = res?.data || res
     strategies.value = d?.strategies || (Array.isArray(d) ? d : [])
-  } catch (e) { /* ignore */ }
+  } catch (_e) { /* ignore */ }
 }
 
 onMounted(() => { loadData(); loadStrategies() })
@@ -155,11 +231,12 @@ onMounted(() => { loadData(); loadStrategies() })
 
 <style scoped>
 .bt-history { padding: 20px; }
-.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
 .header-left { display: flex; align-items: center; gap: 12px; }
 .header-left h2 { margin: 0; }
 .header-right { display: flex; align-items: center; gap: 12px; }
 .count-tag { font-variant-numeric: tabular-nums; }
 .val-red { color: #f56c6c; font-weight: 600; }
 .val-green { color: #67c23a; font-weight: 600; }
+.pagination-wrap { margin-top: 16px; display: flex; justify-content: flex-end; }
 </style>

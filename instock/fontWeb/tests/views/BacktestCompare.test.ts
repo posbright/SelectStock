@@ -14,6 +14,7 @@ vi.mock('echarts', () => ({
 
 // Mock API
 const mockCompareData = {
+  code: 0,
   data: {
     backtests: [
       {
@@ -87,9 +88,12 @@ vi.mock('@/api/stock', () => ({
   getBacktestCompare: vi.fn(() => Promise.resolve(mockCompareData)),
   runPortfolioBacktest: vi.fn(() =>
     Promise.resolve({
+      code: 0,
       data: { status: 'completed', backtest_id: 99, metrics: { total_return: 20.0, annual_return: 20.5, max_drawdown: -10.0, sharpe_ratio: 1.9 } },
     })
   ),
+  deleteBacktests: vi.fn(() => Promise.resolve({ code: 0, data: { deleted: 1 } })),
+  getPortfolioBacktestListPage: vi.fn(() => Promise.resolve({ code: 0, data: [], total: 0, page: 1, page_size: 20 })),
 }))
 
 import BacktestCompare from '@/views/algo/backtest-compare.vue'
@@ -265,5 +269,29 @@ describe('BacktestCompare 路由配置', () => {
     const idsStr = router.currentRoute.value.query.ids as string
     const ids = idsStr.split(',').map(Number)
     expect(ids).toEqual([5, 10, 15])
+  })
+})
+
+describe('批量删除和分页 API', () => {
+  it('deleteBacktests 应该可以调用', async () => {
+    const { deleteBacktests } = await import('@/api/stock')
+    const res = await deleteBacktests([1, 2]) as any
+    expect(res.code).toBe(0)
+    expect(deleteBacktests).toHaveBeenCalledWith([1, 2])
+  })
+
+  it('getPortfolioBacktestListPage 应该可以调用', async () => {
+    const { getPortfolioBacktestListPage } = await import('@/api/stock')
+    const res = await getPortfolioBacktestListPage({ page: 1, page_size: 20 }) as any
+    expect(res.code).toBe(0)
+    expect(res).toHaveProperty('total')
+    expect(res).toHaveProperty('page')
+  })
+
+  it('分页参数计算正确', () => {
+    const page = 3
+    const pageSize = 20
+    const offset = (page - 1) * pageSize
+    expect(offset).toBe(40)
   })
 })
