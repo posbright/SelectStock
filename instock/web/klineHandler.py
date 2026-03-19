@@ -114,8 +114,8 @@ def _compute_macd(closes, fast=12, slow=26, signal=9):
             dif.append(None)
         else:
             dif.append(round(ef - es, 4))
-    # DEA = EMA(DIF, signal)
-    dea = _compute_ema([d if d is not None else 0 for d in dif], signal)
+    # DEA = EMA(DIF, signal) — 跳过 None 值而非用 0 填充，避免数据失真
+    dea = _compute_ema(dif, signal)
     macd_hist = []
     for d, a in zip(dif, dea):
         if d is None or a is None:

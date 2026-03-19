@@ -31,11 +31,25 @@ setup_logging('backfill')
 # ── Step 0: 停止 web 服务，释放 ~160MB ──
 logging.info("=== 安全补跑：停止 web_service 释放内存 ===")
 try:
-    result = subprocess.run(
-        ["pkill", "-f", "web_service.py"],
-        capture_output=True, timeout=10
-    )
-    logging.info(f"pkill web_service: 退出码 {result.returncode}")
+    # 使用 PID 文件精确匹配 web_service 进程，避免 pkill -f 误杀
+    _pid_file = os.path.join(cpath, 'instock', 'web', 'web_service.pid')
+    if os.path.isfile(_pid_file):
+        with open(_pid_file, 'r') as f:
+            _pid = int(f.read().strip())
+        try:
+            os.kill(_pid, signal.SIGTERM)
+            logging.info(f"已向 web_service (PID {_pid}) 发送 SIGTERM")
+        except ProcessLookupError:
+            logging.info(f"web_service (PID {_pid}) 已不存在")
+        except Exception as e:
+            logging.warning(f"停止 web_service (PID {_pid}) 异常: {e}")
+    else:
+        # PID 文件不存在时降级为 pkill，但使用更精确的匹配
+        result = subprocess.run(
+            ["pkill", "-f", "python.*web_service\\.py$"],
+            capture_output=True, timeout=10
+        )
+        logging.info(f"pkill web_service: 退出码 {result.returncode}")
     time.sleep(3)
 except Exception as e:
     logging.warning(f"停止 web_service 异常: {e}")

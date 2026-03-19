@@ -13,28 +13,10 @@ import instock.lib.run_template as runt
 import instock.core.tablestructure as tbs
 import instock.lib.database as mdb
 import instock.core.stockfetch as stf
+from instock.job.job_utils import fetch_with_retry as _fetch_with_retry
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
-
-
-def _fetch_with_retry(fetch_func, name, retries=1, delay=10):
-    """带重试的API获取包装器，降低因网络瞬断或限流导致的数据丢失"""
-    for attempt in range(1 + retries):
-        try:
-            data = fetch_func()
-            if data is not None and len(data) > 0:
-                return data
-            if attempt < retries:
-                logging.warning(f"{name}: 第{attempt+1}次获取为空，{delay}秒后重试")
-                _time.sleep(delay)
-        except Exception as e:
-            if attempt < retries:
-                logging.warning(f"{name}: 第{attempt+1}次获取异常（{e}），{delay}秒后重试")
-                _time.sleep(delay)
-            else:
-                raise
-    return None
 
 
 # 每日股票大宗交易

@@ -4,6 +4,7 @@
 
 import json
 import logging
+import re
 from abc import ABC
 from tornado import gen
 import datetime
@@ -14,6 +15,9 @@ from instock.lib.query_cache import stock_data_cache
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
+
+# 合法的 SQL 标识符：只允许字母、数字、下划线
+_SAFE_IDENTIFIER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 
 
 class MyEncoder(json.JSONEncoder):
@@ -70,6 +74,12 @@ class GetStockDataHandler(webBase.BaseHandler, ABC):
         if web_module_data is None:
             self.set_status(404)
             self.write(json.dumps({"error": f"未找到数据模块: {name}", "code": 404}))
+            return
+
+        # 白名单验证表名，防止 SQL 注入（即使配置数据源被篡改也安全）
+        if not _SAFE_IDENTIFIER_RE.match(web_module_data.table_name):
+            self.set_status(400)
+            self.write(json.dumps({"error": "非法表名", "code": 400}))
             return
 
         query_params = []

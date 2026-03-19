@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
-"""Test backtest API with all metrics"""
-import urllib.request, json, time, sys
+"""Test backtest API with all metrics
+
+NOTE: This test requires the web service to be running on localhost:9988.
+It will be automatically skipped if the service is not available.
+"""
+import urllib.request, json, time, sys, unittest
 
 strategy_code = """
 def initialize(context):
@@ -28,78 +32,64 @@ payload = json.dumps({
     'benchmark': '000300',
 }).encode()
 
-req = urllib.request.Request(
-    'http://localhost:9988/instock/api/backtest/portfolio/run',
-    data=payload, headers={'Content-Type': 'application/json'}
-)
 
-t0 = time.time()
-resp = urllib.request.urlopen(req, timeout=120)
-result = json.loads(resp.read())
-elapsed = time.time() - t0
+def _check_server_available():
+    """Check if the web service is reachable."""
+    try:
+        urllib.request.urlopen('http://localhost:9988/', timeout=3)
+        return True
+    except Exception:
+        return False
 
-data = result.get('data', {})
-m = data.get('metrics', {})
 
-print(f"Status: {data.get('status')}  Time: {elapsed:.1f}s")
-print(f"Backtest ID: {data.get('backtest_id')}")
-print()
-print("=== 收益指标 ===")
-print(f"  策略收益:     {m.get('total_return', 0):.2f}%")
-print(f"  策略年化收益: {m.get('annual_return', 0):.2f}%")
-print(f"  基准收益:     {m.get('benchmark_return', 0):.2f}%")
-print(f"  超额收益:     {m.get('excess_return', 0):.2f}%")
-print(f"  日均超额:     {m.get('avg_daily_excess', 0):.4f}%")
-print()
-print("=== 风险指标 ===")
-print(f"  最大回撤:     {m.get('max_drawdown', 0):.2f}%")
-print(f"  回撤区间:     {m.get('max_drawdown_start', '')} ~ {m.get('max_drawdown_end', '')}")
-print(f"  策略波动率:   {m.get('strategy_volatility', 0):.2f}%")
-print(f"  基准波动率:   {m.get('benchmark_volatility', 0):.2f}%")
-print(f"  超额最大回撤: {m.get('excess_max_drawdown', 0):.2f}%")
-print()
-print("=== 风险调整收益 ===")
-print(f"  Alpha:        {m.get('alpha', 0):.4f}")
-print(f"  Beta:         {m.get('beta', 0):.4f}")
-print(f"  夏普比率:     {m.get('sharpe_ratio', 0):.4f}")
-print(f"  索提诺比率:   {m.get('sortino_ratio', 0):.4f}")
-print(f"  超额夏普:     {m.get('excess_sharpe_ratio', 0):.4f}")
-print(f"  信息比率:     {m.get('information_ratio', 0):.4f}")
-print()
-print("=== 交易统计 ===")
-print(f"  日胜率:       {m.get('daily_win_rate', 0):.1f}%")
-print(f"  盈亏比:       {m.get('profit_loss_ratio', 0):.3f}")
-print(f"  交易次数:     {m.get('trade_count', 0)}")
-print(f"  盈利次数:     {m.get('win_count', 0)}")
-print(f"  亏损次数:     {m.get('loss_count', 0)}")
-print(f"  交易日数:     {m.get('trading_days', 0)}")
+@unittest.skipUnless(_check_server_available(), "Web service not running on localhost:9988")
+class TestBacktestMetrics(unittest.TestCase):
+    """Integration test for portfolio backtest API with full metrics."""
 
-# Check nav and trades data
-nav = data.get('nav', [])
-trades = data.get('trades', [])
-print(f"\n每日数据: {len(nav)} 条")
-print(f"交易记录: {len(trades)} 条")
-if nav:
-    print(f"首日: {nav[0]}")
-    print(f"末日: {nav[-1]}")
-if trades:
-    print(f"首笔交易: {trades[0]}")
+    @classmethod
+    def setUpClass(cls):
+        req = urllib.request.Request(
+            'http://localhost:9988/instock/api/backtest/portfolio/run',
+            data=payload, headers={'Content-Type': 'application/json'}
+        )
+        t0 = time.time()
+        resp = urllib.request.urlopen(req, timeout=120)
+        cls.result = json.loads(resp.read())
+        cls.elapsed = time.time() - t0
+        cls.data = cls.result.get('data', {})
+        cls.metrics = cls.data.get('metrics', {})
 
-# Verify benchmark data is non-zero
-bm_ret = m.get('benchmark_return', 0)
-if abs(bm_ret) < 0.01:
-    print("\n[FAIL] 基准收益为 0 — 基准数据加载失败!")
-    sys.exit(1)
-else:
-    print(f"\n[PASS] 基准收益 {bm_ret:.2f}% — 基准数据加载成功!")
+    def test_status_ok(self):
+        self.assertEqual(self.data.get('status'), 'success')
 
-# Check detail API
-bt_id = data.get('backtest_id')
-if bt_id:
-    detail_req = urllib.request.urlopen(
-        f'http://localhost:9988/instock/api/backtest/portfolio/detail?id={bt_id}')
-    detail = json.loads(detail_req.read())
-    dm = detail.get('data', {}).get('metrics', {})
-    print(f"\n[PASS] Detail API 返回 {len(dm)} 个指标字段:")
-    for k, v in sorted(dm.items()):
-        print(f"  {k}: {v}")
+    def test_has_metrics(self):
+        self.assertGreater(len(self.metrics), 0)
+
+    def test_benchmark_return_nonzero(self):
+        bm_ret = self.metrics.get('benchmark_return', 0)
+        self.assertNotAlmostEqual(abs(bm_ret), 0, places=1,
+                                  msg="基准收益为 0 — 基准数据加载失败!")
+
+    def test_has_nav_data(self):
+        nav = self.data.get('nav', [])
+        self.assertGreater(len(nav), 0)
+
+    def test_has_trade_records(self):
+        trades = self.data.get('trades', [])
+        self.assertGreater(len(trades), 0)
+
+    def test_detail_api(self):
+        bt_id = self.data.get('backtest_id')
+        if not bt_id:
+            self.skipTest("No backtest_id returned")
+        detail_resp = urllib.request.urlopen(
+            f'http://localhost:9988/instock/api/backtest/portfolio/detail?id={bt_id}',
+            timeout=30
+        )
+        detail = json.loads(detail_resp.read())
+        dm = detail.get('data', {}).get('metrics', {})
+        self.assertGreater(len(dm), 0)
+
+
+if __name__ == '__main__':
+    unittest.main()

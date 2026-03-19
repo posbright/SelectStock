@@ -23,6 +23,7 @@ import instock.core.pattern.pattern_recognitions as kpr
 import instock.lib.trade_time as trd
 import instock.lib.database as mdb
 from instock.core.backtest.rate_stats import ROUND_TRIP_COST_PCT
+from instock.web.utils import parse_int_list as _parse_int_list, json_default as _json_default
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
@@ -130,42 +131,7 @@ class RunBatchBacktestHandler(webBase.BaseHandler, ABC):
             self.write(json.dumps({"error": str(e)}, ensure_ascii=False))
 
 
-def _parse_int_list(csv_text, *, default=None, min_value=1, max_value=None, max_items=20):
-    if not csv_text:
-        return list(default) if default is not None else []
-    values = []
-    for part in str(csv_text).split(','):
-        part = part.strip()
-        if not part:
-            continue
-        try:
-            v = int(part)
-        except Exception:
-            continue
-        if v < min_value:
-            continue
-        if max_value is not None and v > max_value:
-            continue
-        values.append(v)
-    values = sorted(set(values))
-    if max_items is not None and len(values) > max_items:
-        values = values[:max_items]
-    return values
-
-
-def _json_default(obj):
-    """JSON 序列化辅助"""
-    if isinstance(obj, (datetime.date, datetime.datetime)):
-        return obj.strftime("%Y-%m-%d")
-    if isinstance(obj, np.integer):
-        return int(obj)
-    if isinstance(obj, np.floating):
-        return round(float(obj), 4) if not np.isnan(obj) else None
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    if pd.isna(obj):
-        return None
-    return str(obj)
+# _parse_int_list 和 _json_default 已抽取到 instock.web.utils
 
 
 def _run_backtest(code, strategy, period, start_date_str, end_date_str, checkpoints_csv=None):
@@ -546,26 +512,33 @@ def _compute_batch_backtest_onthefly(strategy_func, strategy_cn, strategy_name, 
             results.append((date_str, rates))
         return results
 
-    # 6. 并行处理所有股票
+    # 6. 并行处理所有股票（分批处理，降低内存峰值）
     logging.info(f"批量回测动态计算：{strategy_cn}，{len(stock_codes)} 只股票，{len(trade_dates)} 个交易日")
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        future_map = {executor.submit(_process_stock, code): code for code in stock_codes}
-        for future in concurrent.futures.as_completed(future_map):
-            try:
-                results = future.result()
-                for date_str, rates in results:
-                    if date_str not in date_results:
-                        continue
-                    dr = date_results[date_str]
-                    dr['stock_count'] += 1
-                    for days in horizon_list:
-                        if days in rates:
-                            dr['rates'][days].append(rates[days])
-                    if rate_days in rates and rates[rate_days] > 0:
-                        dr['success_count'] += 1
-            except Exception:
-                logging.warning(f"批量回测线程结果异常：{future_map.get(future, '?')}", exc_info=True)
-                continue
+    _BATCH_SIZE = 500  # 每批处理的股票数
+    _MAX_WORKERS = min(4, max(1, len(stock_codes) // 200))
+    for batch_start in range(0, len(stock_codes), _BATCH_SIZE):
+        batch = stock_codes[batch_start:batch_start + _BATCH_SIZE]
+        batch_idx = batch_start // _BATCH_SIZE + 1
+        total_batches = (len(stock_codes) + _BATCH_SIZE - 1) // _BATCH_SIZE
+        logging.info(f"批量回测进度：批次 {batch_idx}/{total_batches}（{len(batch)} 只股票）")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_MAX_WORKERS) as executor:
+            future_map = {executor.submit(_process_stock, code): code for code in batch}
+            for future in concurrent.futures.as_completed(future_map):
+                try:
+                    results = future.result()
+                    for date_str, rates in results:
+                        if date_str not in date_results:
+                            continue
+                        dr = date_results[date_str]
+                        dr['stock_count'] += 1
+                        for days in horizon_list:
+                            if days in rates:
+                                dr['rates'][days].append(rates[days])
+                        if rate_days in rates and rates[rate_days] > 0:
+                            dr['success_count'] += 1
+                except Exception:
+                    logging.warning(f"批量回测线程结果异常：{future_map.get(future, '?')}", exc_info=True)
+                    continue
 
     # 7. 聚合结果
     details = []

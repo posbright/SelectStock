@@ -153,10 +153,16 @@ def check_gpt_value_from_selection(stock_row, params=None):
             return False
         
         # ===== 最低数据质量要求 =====
-        # 至少要有 ROE 或 PE 中的一个有效值，否则数据太差不入选
-        has_roe = _is_valid_number(stock_row.get('roe_weight', None))
-        has_pe = _is_valid_number(stock_row.get('pe9', None))
-        if not has_roe and not has_pe:
+        # 至少要有 3 个关键财务指标有效，防止全空数据通过筛选
+        _critical_fields = [
+            'roe_weight', 'pe9', 'sale_gpr', 'sale_npr',
+            'debt_asset_ratio', 'income_growthrate_3y',
+        ]
+        _valid_count = sum(
+            1 for f in _critical_fields
+            if _is_valid_number(stock_row.get(f, None))
+        )
+        if _valid_count < 3:
             return False
         
         # 通过所有筛选

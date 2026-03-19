@@ -168,15 +168,20 @@ class TestCheckGptValue:
         assert check_gpt_value_from_selection(row, _DEFAULT_PARAMS) is True
 
     def test_none_roe_soft_pass(self):
-        """None ROE时跳过该项检查（需要PE有效才能通过最低数据质量要求）"""
+        """None ROE时跳过该项检查（其余关键字段有效即可通过最低数据质量要求）"""
         row = pd.Series(_make_stock_row(roe_weight=None))
         assert check_gpt_value_from_selection(row, _DEFAULT_PARAMS) is True
 
-    def test_both_roe_and_pe_missing_fails(self):
-        """ROE和PE都缺失时不通过（最低数据质量要求）"""
+    def test_too_many_critical_fields_missing_fails(self):
+        """关键财务字段缺失超过3个时不通过（最低数据质量要求：6个关键字段中至少3个有效）"""
         data = _make_stock_row()
+        # 6个关键字段中只保留1个有效，应被拒绝
         data['roe_weight'] = None
         data['pe9'] = None
+        data['sale_gpr'] = None
+        data['sale_npr'] = None
+        data['debt_asset_ratio'] = None
+        # income_growthrate_3y 保留有效值 → 仅1/6有效 < 3 → 不通过
         row = pd.Series(data)
         assert check_gpt_value_from_selection(row, _DEFAULT_PARAMS) is False
 

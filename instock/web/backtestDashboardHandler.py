@@ -24,6 +24,7 @@ import instock.lib.trade_time as trd
 import instock.lib.database as mdb
 import instock.web.base as webBase
 from instock.core.backtest.rate_stats import ROUND_TRIP_COST_PCT
+from instock.web.utils import parse_int_list as _parse_int_list, json_default as _json_default
 
 __author__ = 'InStock'
 __date__ = '2026/02/27'
@@ -36,39 +37,7 @@ MAX_TABLE_HORIZON = 100
 _DATE_RE = re.compile(r'^(?P<y>\d{4})[-/\.]?(?P<m>\d{1,2})[-/\.]?(?P<d>\d{1,2})$')
 
 
-def _json_default(obj):
-    if isinstance(obj, (datetime.date, datetime.datetime)):
-        return obj.strftime("%Y-%m-%d")
-    if isinstance(obj, np.integer):
-        return int(obj)
-    if isinstance(obj, np.floating):
-        return round(float(obj), 4) if not np.isnan(obj) else None
-    if pd.isna(obj):
-        return None
-    return str(obj)
-
-
-def _parse_int_list(csv_text, *, default=None, min_value=1, max_value=None, max_items=20):
-    if not csv_text:
-        return list(default) if default is not None else []
-    values = []
-    for part in str(csv_text).split(','):
-        part = part.strip()
-        if not part:
-            continue
-        try:
-            v = int(part)
-        except Exception:
-            continue
-        if v < min_value:
-            continue
-        if max_value is not None and v > max_value:
-            continue
-        values.append(v)
-    values = sorted(set(values))
-    if max_items is not None and len(values) > max_items:
-        values = values[:max_items]
-    return values
+# _json_default 和 _parse_int_list 已抽取到 instock.web.utils
 
 
 def _parse_date_ymd(text: str):

@@ -8,6 +8,7 @@ https://finance.sina.com.cn/realstock/company/klc_td_sh.txt
 """
 import datetime
 import logging
+import os
 import pandas as pd
 import requests
 from py_mini_racer import MiniRacer
@@ -356,6 +357,12 @@ def tool_trade_date_hist_sina() -> pd.DataFrame:
     :return: 交易日历
     :rtype: pandas.DataFrame
     """
+    # 备用方案：如果 Sina API 或 MiniRacer 解码失败，尝试使用本地缓存
+    _cache_file = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        'cache', 'trade_date_cache.json'
+    )
+
     url = "https://finance.sina.com.cn/realstock/company/klc_td_sh.txt"
     proxy_pool = proxys()
     current_proxy = proxy_pool.get_proxies()
@@ -363,23 +370,47 @@ def tool_trade_date_hist_sina() -> pd.DataFrame:
     try:
         r = _request_with_ssl_retry(url, proxies=current_proxy, timeout=30)
         proxy_pool.report_success(proxy_url)
+        js_code = MiniRacer()
+        js_code.eval(hk_js_decode)
+        dict_list = js_code.call(
+            "d", r.text.split("=")[1].split(";")[0].replace('"', "")
+        )  # 执行js解密代码
+        temp_df = pd.DataFrame(dict_list)
+        temp_df.columns = ["trade_date"]
+        temp_df["trade_date"] = pd.to_datetime(temp_df["trade_date"]).dt.date
+        temp_list = temp_df["trade_date"].to_list()
+        temp_list.append(datetime.date(1992, 5, 4))  # 是交易日但是交易日历缺失该日期
+        temp_list.sort()
+        temp_df = pd.DataFrame(temp_list, columns=["trade_date"])
+
+        # 成功后更新本地缓存
+        try:
+            os.makedirs(os.path.dirname(_cache_file), exist_ok=True)
+            import json as _json
+            with open(_cache_file, 'w') as f:
+                _json.dump([d.isoformat() for d in temp_list], f)
+        except Exception:
+            pass  # 缓存写入失败不影响主流程
+
+        return temp_df
     except Exception as e:
         proxy_pool.report_failure(proxy_url)
-        logging.error(f"trade_date_hist请求失败: {e}")
+        logging.warning(f"trade_date_hist Sina API 失败: {e}，尝试本地缓存")
+
+        # 降级：从本地缓存读取
+        try:
+            if os.path.isfile(_cache_file):
+                import json as _json
+                with open(_cache_file, 'r') as f:
+                    date_strs = _json.load(f)
+                temp_list = [datetime.date.fromisoformat(d) for d in date_strs]
+                logging.info(f"trade_date_hist: 从本地缓存加载 {len(temp_list)} 个交易日")
+                return pd.DataFrame(temp_list, columns=["trade_date"])
+        except Exception as cache_err:
+            logging.warning(f"trade_date_hist: 本地缓存读取失败: {cache_err}")
+
+        # 都失败则抛出原始异常
         raise
-    js_code = MiniRacer()
-    js_code.eval(hk_js_decode)
-    dict_list = js_code.call(
-        "d", r.text.split("=")[1].split(";")[0].replace('"', "")
-    )  # 执行js解密代码
-    temp_df = pd.DataFrame(dict_list)
-    temp_df.columns = ["trade_date"]
-    temp_df["trade_date"] = pd.to_datetime(temp_df["trade_date"]).dt.date
-    temp_list = temp_df["trade_date"].to_list()
-    temp_list.append(datetime.date(1992, 5, 4))  # 是交易日但是交易日历缺失该日期
-    temp_list.sort()
-    temp_df = pd.DataFrame(temp_list, columns=["trade_date"])
-    return temp_df
 
 
 if __name__ == "__main__":
