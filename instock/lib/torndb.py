@@ -61,7 +61,7 @@ class Connection(object):
     """
 
     def __init__(self, host, database, user=None, password=None,
-                 max_idle_time=7 * 3600, connect_timeout=10,
+                 max_idle_time=4 * 3600, connect_timeout=10,
                  time_zone="+0:00", charset="utf8", sql_mode="TRADITIONAL"):
         self.host = host
         self.database = database
@@ -244,9 +244,17 @@ class Connection(object):
         try:
             return cursor.execute(query, kwparameters or parameters)
         except OperationalError:
-            logging.error(f"Error connecting to MySQL on {self.host}", exc_info=True)
+            logging.warning(f"DB连接检查失败，尝试重连: {self.host}")
             self.close()
-            raise
+            # 重连一次后重试（远程 MySQL 空闲超时后连接会被断开）
+            try:
+                self.reconnect()
+                cursor = self._db.cursor()
+                return cursor.execute(query, kwparameters or parameters)
+            except Exception:
+                logging.error(f"Error connecting to MySQL on {self.host}", exc_info=True)
+                self.close()
+                raise
 
 
 class Row(dict):

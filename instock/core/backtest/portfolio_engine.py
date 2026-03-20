@@ -68,6 +68,7 @@ class PortfolioBacktestEngine:
         self._custom_records = {}      # record() 记录的自定义指标
         self._log_messages = []        # 策略日志
         self._pending_orders = []      # 待执行订单（向后兼容，即时执行模式下不使用）
+        self._deferred_position_cleanups = []  # 延迟清理的空仓代码（避免迭代中删除字典）
         self._all_codes = set()        # 策略涉及的所有股票代码
         self._daily_callbacks = []     # run_daily() 注册的日级回调
         self._weekly_callbacks = []    # run_weekly() 注册的周级回调 [(func, weekday, time)]
@@ -198,7 +199,15 @@ class PortfolioBacktestEngine:
                         except Exception as e:
                             logging.warning(f"[回测] {date} run_weekly回调异常: {e}")
 
-            # 8d. 执行待处理订单（即时执行模式下队列为空）
+            # 8d. 清理延迟标记的空仓（在所有回调完成后执行，避免迭代中删除字典）
+            if self._deferred_position_cleanups:
+                for _code in self._deferred_position_cleanups:
+                    if _code in self.context.portfolio.positions and \
+                            self.context.portfolio.positions[_code].amount == 0:
+                        del self.context.portfolio.positions[_code]
+                self._deferred_position_cleanups.clear()
+
+            # 8e. 执行待处理订单（即时执行模式下队列为空）
             self._execute_pending_orders(date, today_prices)
 
             # 8e. 更新组合价值（使用收盘价）
@@ -700,9 +709,10 @@ class PortfolioBacktestEngine:
             self.context.portfolio.available_cash += (total_income - commission - tax)
             self.context.portfolio._update_value()
 
-            # 清理空仓
+            # 延迟清理空仓（避免用户策略代码迭代 positions 时 del 导致
+            # 'dictionary changed size during iteration' 异常）
             if pos.amount == 0 and code in self.context.portfolio.positions:
-                del self.context.portfolio.positions[code]
+                self._deferred_position_cleanups.append(code)
 
             stock_name = self._resolve_stock_name(code)
             trade = TradeRecord(date, code, stock_name, 'sell', exec_price, sell_amount)

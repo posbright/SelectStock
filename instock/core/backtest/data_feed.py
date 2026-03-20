@@ -175,6 +175,18 @@ def _load_index_from_cache(code):
         return None
 
 
+def _save_index_cache(code, df):
+    """保存指数 DataFrame 到缓存文件"""
+    try:
+        index_dir = os.path.join(_CACHE_DIR, 'index')
+        os.makedirs(index_dir, exist_ok=True)
+        cache_file = os.path.join(index_dir, f"{code}.gzip.pickle")
+        df.to_pickle(cache_file, compression="gzip")
+        logging.debug(f"指数缓存已更新: {code} ({len(df)} 条)")
+    except Exception as e:
+        logging.warning(f"指数缓存保存失败 {code}: {e}")
+
+
 def _normalize_cache_df(df):
     """标准化缓存 DataFrame，确保包含必需列"""
     if df is None or len(df) == 0:
@@ -263,8 +275,9 @@ def load_benchmark_data(code='000300', start_date=None, end_date=None):
 
     优先级：
     1. 指数专用缓存（cache/hist/index/{code}.gzip.pickle）
-    2. 股票缓存（兼容旧路径，用于非指数代码）
-    3. AkShare 在线获取（最终降级）
+    2. 东方财富指数 API（stock_index_hist_em，使用正确的 secid 前缀）
+    3. 股票缓存（兼容旧路径，仅用于非指数代码）
+    4. AkShare 在线获取（最终降级）
 
     Args:
         code: 指数代码（默认沪深300 = '000300'）
@@ -274,6 +287,14 @@ def load_benchmark_data(code='000300', start_date=None, end_date=None):
     Returns:
         DataFrame: 包含 date/close 列。无数据返回 None。
     """
+    # 常见指数代码集合（用于判断是否应跳过股票 API）
+    _KNOWN_INDEX_CODES = {
+        '000001', '000002', '000003', '000016', '000300', '000688',
+        '000852', '000905', '000906', '000985',  # 上证/中证系列
+        '399001', '399006', '399300', '399905', '399951',  # 深证系列
+    }
+    is_index = code in _KNOWN_INDEX_CODES or code.startswith('399')
+
     # 1. 优先从指数缓存加载
     df = _load_index_from_cache(code)
     if df is not None:
@@ -288,12 +309,41 @@ def load_benchmark_data(code='000300', start_date=None, end_date=None):
             logging.info(f"从指数缓存加载基准 {code} 数据: {len(df)} 条")
             return df
 
-    # 2. 降级：尝试从股票缓存加载（兼容旧数据）
-    df = load_stock_data(code, start_date, end_date)
-    if df is not None:
-        return df
+    # 2. 尝试东方财富指数专用 API（使用正确的 secid 前缀，避免股票 API 500 错误）
+    if is_index:
+        try:
+            from instock.core.crawling.stock_index_em import stock_index_hist_em
+            sd = pd.Timestamp(start_date).strftime('%Y%m%d') if start_date else '19700101'
+            ed = pd.Timestamp(end_date).strftime('%Y%m%d') if end_date else '20500101'
+            raw = stock_index_hist_em(symbol=code, period='daily',
+                                      start_date=sd, end_date=ed)
+            if raw is not None and len(raw) > 0:
+                col_map = {'日期': 'date', '开盘': 'open', '收盘': 'close',
+                           '最高': 'high', '最低': 'low', '成交量': 'volume'}
+                idx_df = raw.rename(columns=col_map)
+                if 'date' in idx_df.columns and 'close' in idx_df.columns:
+                    idx_df['date'] = pd.to_datetime(idx_df['date'])
+                    for c in ['open', 'high', 'low', 'close']:
+                        if c in idx_df.columns:
+                            idx_df[c] = pd.to_numeric(idx_df[c], errors='coerce')
+                    if 'volume' in idx_df.columns:
+                        idx_df['volume'] = pd.to_numeric(idx_df['volume'], errors='coerce').fillna(0).astype(int)
+                    idx_df = idx_df.sort_values('date').reset_index(drop=True)
+                    idx_df['pre_close'] = idx_df['close'].shift(1)
+                    # 写入指数缓存供后续使用
+                    _save_index_cache(code, idx_df)
+                    logging.info(f"从 EastMoney 指数API 获取基准 {code} 数据: {len(idx_df)} 条")
+                    return idx_df
+        except Exception as e:
+            logging.debug(f"EastMoney 指数API 获取 {code} 失败: {e}")
 
-    # 3. 最终降级：尝试用 AkShare 获取指数数据
+    # 3. 降级：尝试从股票缓存加载（仅对非指数代码有效，避免对指数代码调用股票 API 产生 500 错误）
+    if not is_index:
+        df = load_stock_data(code, start_date, end_date)
+        if df is not None:
+            return df
+
+    # 4. 最终降级：尝试用 AkShare 获取指数数据
     # 主要上证/中证指数（以 0 开头但属上海交易所）
     _SH_INDICES = {'000001', '000002', '000003', '000016', '000300',
                    '000688', '000852', '000905', '000906', '000985'}

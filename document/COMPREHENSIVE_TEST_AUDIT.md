@@ -407,6 +407,9 @@ python -m pytest tests/test_web_handlers.py -v
 | `instock/job/basic_data_other_daily_job.py` | import job_utils, 删除重复函数 |
 | `instock/job/safe_backfill.py` | PID文件停止进程 + 精确正则降级 |
 | `instock/core/crawling/trade_date_hist.py` | 本地JSON缓存降级机制 |
+| `instock/core/backtest/portfolio_engine.py` | 延迟清理空仓 dict，修复迭代中修改字典 |
+| `instock/core/backtest/data_feed.py` | 指数代码优先走指数 API + 缓存 |
+| `instock/lib/torndb.py` | 连接丢失自动重连重试 + 降低 idle 时间 |
 | `tests/test_backtest_metrics.py` | 重写为 unittest + skipUnless |
 | `tests/test_crawling_modules.py` | 适配缓存降级的测试用例 |
 | `tests/test_gpt_value_pipeline.py` | 适配3/6字段规则的测试用例 |
@@ -427,10 +430,145 @@ python -m pytest tests/test_web_handlers.py -v
 - 18 个调度任务模块
 - 2 个模拟交易模块
 
-发现 **14 个问题**（3个高优先级、7个中优先级、4个低优先级）：
-- ✅ **10 个已修复**（#1-8, #10, 含测试用例适配）
+发现 **17 个问题**（4个高优先级、9个中优先级、4个低优先级）：
+- ✅ **13 个已修复**（#1-8, #10, #15-17, 含测试用例适配）
 - 📝 **1 个评估后保持现状**（#11 复杂度可控，重构风险高）
 - ⏭️ **3 个低优先级暂缓**（#12-14）
 - ⏭️ **1 个用户要求跳过**（#9 沙箱安全）
 
 修复后测试结果：**1342 passed, 1 failed（预存）, 6 skipped, 44 warnings**
+
+---
+
+## 九、第六轮日志审计（2026-03-20）
+
+**审计范围**: `instock/log/` 目录下全部 11 个日志文件  
+**日志时段**: 2026-03-19 13:48 ~ 2026-03-20 09:51
+
+### 日志文件概述
+
+| 日志文件 | 行数 | 说明 |
+|----------|------|------|
+| `stock_web.log` | 726 | **生产运行时日志**，含真实错误 |
+| `web_service.log` | 1 | Tornado 根 logger 输出 |
+| `stock_error.log` | 11,370 | 测试运行产生的错误日志 |
+| `stock_fetch.log` | 8,106 | 测试运行产生的抓取日志 |
+| `stock_test_unit.log` | 6,887 | 单元测试专用日志 |
+| `stock_execute.log` | 0 | 空 |
+| `stock_execute_job.log` | 0 | 空 |
+| `stock_fetch_job.log` | 0 | 空 |
+| `stock_kline_cache.log` | 0 | 空 |
+| `stock_analysis.log` | 0 | 空 |
+| `front_dev.log` | 0 | 空（仅空白） |
+
+### 错误分类
+
+**测试产生的错误（无需修复）:**
+- `OSError: no such file` — mock 子进程启动异常
+- `RuntimeError: 模拟失败` / `RuntimeError: db exploded` — 测试用例中故意触发
+- `Exception: boom` / `Exception: API error` — mock 异常
+- `get_indicators: 期望 DataFrame，实际收到 list/NoneType/tuple` — 类型守卫测试
+- `bokeh E-1001 (BAD_COLUMN_NAME)` — 测试图表渲染列名不匹配
+- `JSONDecodeError` in `moat_ai_service` — 空字符串输入测试
+
+**生产运行时真实错误（stock_web.log）:**
+
+### 🔴 问题 15：回测 `run_weekly` 回调崩溃 — `dictionary changed size during iteration` ✅ 已修复
+
+**位置**: `instock/core/backtest/portfolio_engine.py` → `_execute_single_order`
+
+**日志证据**:
+```
+2026-03-19 14:47:15 [WARNING] [回测] 2024-03-18 run_weekly回调异常: dictionary changed size during iteration
+2026-03-19 14:48:35 [WARNING] [回测] 2024-03-18 run_weekly回调异常: dictionary changed size during iteration
+2026-03-19 15:59:13 [WARNING] [回测] 2024-03-18 run_weekly回调异常: dictionary changed size during iteration
+（共 6 次发生）
+```
+
+**根因分析**:  
+用户策略代码在 `run_weekly` 回调中迭代 `context.portfolio.positions` 字典并调用 `order_target(code, 0)` 卖出。卖出逻辑在 `_execute_single_order` 第 705 行执行 `del self.context.portfolio.positions[code]` 清理空仓，导致正在被迭代的字典大小发生变化，触发 Python RuntimeError。
+
+虽然策略模板使用了安全的 `list(context.portfolio.positions.keys())` 写法，但用户自定义策略可能直接写 `for code in context.portfolio.positions:` 导致此问题。
+
+**修复方案**:  
+延迟清理空仓 — 在 `_execute_single_order` 中不再立即 `del`，改为将空仓代码加入 `_deferred_position_cleanups` 列表。在当日所有策略回调（`handle_data`、`run_daily`、`run_weekly`）执行完毕后，统一清理空仓字典项。
+
+**修改文件**: `instock/core/backtest/portfolio_engine.py`
+- 新增 `_deferred_position_cleanups` 列表（初始化阶段）
+- `_execute_single_order` 卖出后改为 `self._deferred_position_cleanups.append(code)`
+- 主循环步骤 8d 新增延迟清理逻辑（在回调完成后、挂单执行前）
+
+---
+
+### 🟡 问题 16：EastMoney 指数 API 500 错误（000300/399951 基准数据获取失败） ✅ 已修复
+
+**位置**: `instock/core/backtest/data_feed.py` → `load_benchmark_data`
+
+**日志证据**:
+```
+2026-03-19 16:09:46 [WARNING] EastMoney 获取 000300 数据失败: 500 Server Error
+2026-03-19 16:53:21 [WARNING] EastMoney 获取 399951 数据失败: 500 Server Error
+2026-03-19 17:04:22 [WARNING] EastMoney 获取 000300 数据失败: 500 Server Error
+（共 7+ 次发生，持续到 2026-03-20）
+```
+
+**根因分析**:  
+`load_benchmark_data` 调用 `load_stock_data(code='000300')` 降级获取基准数据，该函数最终调用 `stock_zh_a_hist(symbol='000300')`（股票 API）。股票 API 的 `_CodeIdMapProxy._get_market_id('000300')` 将 `0` 开头代码映射为深交所 `market_id=0`，生成 `secid=0.000300`。
+
+然而 000300（沪深300）是上交所指数，正确的 secid 应为 `1.000300`（由 `stock_index_em._get_index_market_id` 返回）。使用错误的 secid 调用东方财富 K 线 API 导致服务端返回 500 错误。
+
+**修复方案**:  
+在 `load_benchmark_data` 中新增步骤 2 — 对已知指数代码（000xxx/399xxx），优先调用 `stock_index_hist_em()` 指数专用 API（使用正确的 `secid=1.000300`），并将获取的数据写入指数缓存供后续快速加载。同时，对指数代码跳过 `load_stock_data()` 调用，避免触发错误的股票 API。
+
+**修改文件**: `instock/core/backtest/data_feed.py`
+- `load_benchmark_data`: 新增 `_KNOWN_INDEX_CODES` 集合和 `is_index` 判断
+- 步骤 2: 指数代码 → `stock_index_hist_em()` → 写入缓存
+- 步骤 3: 仅对非指数代码调用 `load_stock_data()`
+- 新增 `_save_index_cache()` 辅助函数
+
+---
+
+### 🟡 问题 17：MySQL 远程连接被重置 — `OperationalError(2013, 'Lost connection')` ✅ 已修复
+
+**位置**: `instock/lib/torndb.py` → `_execute`
+
+**日志证据**:
+```
+2026-03-19 13:57:09 [ERROR] Error connecting to MySQL on 115.29.213.22:3306
+  pymysql.err.OperationalError: (2013, 'Lost connection ... [WinError 10054]')
+2026-03-19 17:39:07~17:44:54 [ERROR] database.get_connection处理异常
+  pymysql.err.OperationalError: (2013, 'Lost connection ... timed out')
+（共 13+ 次发生）
+```
+
+**根因分析**:  
+远程 MySQL 服务器（115.29.213.22，阿里云 RDS）在连接空闲超过 `wait_timeout` 后主动断开。`torndb._execute` 在执行 SQL 时遇到 `OperationalError` 后直接关闭连接并抛出异常，没有尝试重连重试。而 `_ensure_connected` 使用了 `max_idle_time=7*3600`（7小时），远超服务器实际的空闲超时（通常 8-30 分钟），导致使用已被服务端断开的连接。
+
+**修复方案**:  
+1. `_execute` 方法: 捕获 `OperationalError` 后自动重连一次并重试 SQL，而非直接抛出
+2. `max_idle_time`: 从 7 小时降低到 4 小时，减少使用被服务端已断开连接的概率
+
+**修改文件**: `instock/lib/torndb.py`
+- `_execute`: 异常后 `self.reconnect()` + `cursor.execute()` 重试
+- `max_idle_time`: 7*3600 → 4*3600
+
+---
+
+### 🟢 非问题项（仅记录，无需修复）
+
+| 日志内容 | 分类 | 说明 |
+|----------|------|------|
+| `子进程启动异常: OSError no such file` | 测试 | mock 驱动的子进程测试 |
+| `RuntimeError: 模拟失败` / `db exploded` | 测试 | 测试中故意触发的异常 |
+| `get_indicators: 期望 DataFrame，实际收到 list` | 测试 | 类型守卫验证测试 |
+| `bokeh E-1001 BAD_COLUMN_NAME` | 测试 | 可视化测试中的列名警告 |
+| `JSONDecodeError` in moat_ai_service | 测试 | 空字符串解析守卫测试 |
+| `历史K线缓存更新异常: ValueError` | 测试 | mock 环境下返回值不匹配 |
+
+### 更新后修复状态总览
+
+| # | 问题 | 优先级 | 状态 | 修复方案 |
+|---|------|--------|------|----------|
+| 15 | `run_weekly` 回调 dictionary changed size | 🔴高 | ✅ 已修复 | 延迟清理空仓，回调完成后统一 del |
+| 16 | EastMoney 指数 API 500 错误 | 🟡中 | ✅ 已修复 | 指数代码使用 `stock_index_hist_em` + 缓存 |
+| 17 | MySQL 连接被重置后无重试 | 🟡中 | ✅ 已修复 | `_execute` 自动重连重试 + 降低 max_idle_time |
