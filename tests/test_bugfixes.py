@@ -806,6 +806,55 @@ def _():
 
 
 # ============================================================
+# 测试: 指数K线数据源路由修复
+# ============================================================
+print("\n🔧 测试: 指数K线数据源路由修复（type参数区分股票/指数）")
+
+@test("klineHandler 接受 type 参数并优先指数缓存")
+def _():
+    """当 type='index' 时，应优先从指数缓存读取，避免同代码股票/指数混淆"""
+    import inspect
+    from instock.web import klineHandler
+    source = inspect.getsource(klineHandler.GetKlineDataHandler.get)
+    # 必须接受 type 参数
+    assert 'data_type' in source, "handler 应读取 type 参数"
+    assert 'get_argument("type"' in source, "handler 应通过 get_argument 获取 type"
+    # 当 type='index' 时应优先读取指数缓存
+    assert "data_type == 'index'" in source, "handler 应检查 type=='index'"
+    assert 'read_index_hist_from_cache' in source, "handler 应调用指数缓存读取函数"
+
+@test("klineHandler type='index' 时指数缓存优先于股票缓存")
+def _():
+    """验证代码逻辑：type='index' 分支中 read_index_hist_from_cache 出现在 read_hist_from_cache 之前"""
+    import inspect
+    from instock.web import klineHandler
+    source = inspect.getsource(klineHandler.GetKlineDataHandler.get)
+    # 在 type=='index' 分支中，index_cache 应在 stock_cache 之前
+    idx_block_start = source.index("data_type == 'index'")
+    idx_block = source[idx_block_start:idx_block_start + 500]
+    idx_pos = idx_block.index('read_index_hist_from_cache')
+    stock_pos = idx_block.index('read_hist_from_cache')
+    assert idx_pos < stock_pos, (
+        f"type='index' 分支中指数缓存({idx_pos})应优先于股票缓存({stock_pos})"
+    )
+
+@test("stock.ts KlineParams 包含 type 字段")
+def _():
+    api_path = os.path.join(project_root, 'instock', 'fontWeb', 'src', 'api', 'stock.ts')
+    with open(api_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    assert "type?: string" in content, "KlineParams 应包含 type 可选字段"
+
+@test("indicator/index.vue 根据 strategy 传递 type 参数")
+def _():
+    vue_path = os.path.join(project_root, 'instock', 'fontWeb', 'src', 'views', 'indicator', 'index.vue')
+    with open(vue_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    assert "strategy.value.includes('index')" in content, "应根据 strategy 判断是否为指数"
+    assert "params.type = 'index'" in content, "指数时应设置 type='index'"
+
+
+# ============================================================
 # 汇总
 # ============================================================
 if __name__ == "__main__":

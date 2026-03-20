@@ -180,6 +180,7 @@ export interface KlineParams {
   period?: string   // daily / weekly / monthly / quarterly / yearly
   days?: number
   name?: string
+  type?: string     // 'index' | 'stock' — 指定数据源类型，避免同代码股票/指数混淆
 }
 
 /** 获取K线数据（含技术指标：MA/BOLL/RSI/MACD） */

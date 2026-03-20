@@ -265,6 +265,7 @@ class GetKlineDataHandler(webBase.BaseHandler, ABC):
         period = self.get_argument("period", default="daily", strip=True)
         days = self.get_argument("days", default=None, strip=True)
         name = self.get_argument("name", default="", strip=True)
+        data_type = self.get_argument("type", default=None, strip=True)  # 'index'/'stock'/None
 
         if not code:
             self.set_status(400)
@@ -275,11 +276,17 @@ class GetKlineDataHandler(webBase.BaseHandler, ABC):
             # K线图始终返回到最新可用数据，不受前端 date 参数截断
             # （前端 date 来自列表页导航上下文，可能是旧日期如3月3号）
             today = datetime.datetime.now().strftime('%Y-%m-%d')
-            stock = stf.read_hist_from_cache((today, code), years=50)
 
-            # 股票缓存未命中，尝试指数缓存
-            if stock is None or stock.empty:
+            # 根据 type 参数决定缓存查找顺序，避免同代码股票/指数混淆
+            # （如 000001 同时对应上证指数和平安银行）
+            if data_type == 'index':
                 stock = stf.read_index_hist_from_cache(code)
+                if stock is None or stock.empty:
+                    stock = stf.read_hist_from_cache((today, code), years=50)
+            else:
+                stock = stf.read_hist_from_cache((today, code), years=50)
+                if stock is None or stock.empty:
+                    stock = stf.read_index_hist_from_cache(code)
 
             if stock is None or stock.empty:
                 self.write(json.dumps({"error": "无K线数据（缓存未命中，请确认数据采集任务已运行）", "code": code}, ensure_ascii=False))

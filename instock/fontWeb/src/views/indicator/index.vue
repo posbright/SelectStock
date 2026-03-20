@@ -3,7 +3,7 @@ import { ref, onMounted, onUnmounted, onActivated, computed, watch, nextTick } f
 import { useRoute, useRouter } from 'vue-router'
 import * as echarts from 'echarts'
 import dayjs from 'dayjs'
-import { getKlineData } from '@/api/stock'
+import { getKlineData, type KlineParams } from '@/api/stock'
 import { ElMessage } from 'element-plus'
 
 const route = useRoute()
@@ -48,12 +48,19 @@ const loadKlineData = async () => {
   if (!code.value) return
   loading.value = true
   try {
-    const res = await getKlineData({
+    const params: KlineParams = {
       code: code.value,
       date: date.value,
       period: currentPeriod.value,
       name: stockName.value || '',
-    }) as any
+    }
+    // 根据来源表名判断数据类型，避免同代码股票/指数混淆（如 000001）
+    if (strategy.value.includes('index')) {
+      params.type = 'index'
+    } else if (strategy.value.includes('etf')) {
+      params.type = 'etf'
+    }
+    const res = await getKlineData(params) as any
     if (res?.error) {
       ElMessage.warning(res.error)
       klineData.value = null
