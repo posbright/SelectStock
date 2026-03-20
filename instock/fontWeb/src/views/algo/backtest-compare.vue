@@ -151,7 +151,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, onActivated, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { getBacktestCompare, runPortfolioBacktest } from '@/api/stock'
@@ -168,6 +168,7 @@ const paramEditors = ref<any[]>([])
 const editingIdx = ref(0)
 const runningIdx = ref(-1)
 const newBacktestResult = ref<any>(null)
+let lastLoadedIds = ''  // 记录上次加载的 ids 参数，用于 keep-alive 激活时判断是否重新加载
 
 const chartEl = ref<HTMLElement>()
 let chart: echarts.ECharts | null = null
@@ -366,6 +367,16 @@ async function loadCompareData() {
   const idsParam = route.query.ids as string
   if (!idsParam) { ElMessage.error('缺少回测ID参数'); return }
 
+  // 清理旧状态
+  if (chart) { chart.dispose(); chart = null }
+  backtests.value = []
+  codeEditors.value = []
+  paramEditors.value = []
+  activeTab.value = 'chart'
+  editingIdx.value = 0
+  runningIdx.value = -1
+  newBacktestResult.value = null
+
   loading.value = true
   try {
     const res = await getBacktestCompare(idsParam.split(',').map(Number)) as any
@@ -385,6 +396,7 @@ async function loadCompareData() {
       initial_cash: bt.initial_cash || 1000000,
       benchmark: bt.params?.benchmark || '000300',
     }))
+    lastLoadedIds = idsParam
 
     if (btList.length === 0) {
       ElMessage.warning('未找到回测数据')
@@ -402,6 +414,21 @@ async function loadCompareData() {
 }
 
 onMounted(() => loadCompareData())
+
+// keep-alive 激活时，检查 ids 参数是否变化，如有变化则重新加载
+onActivated(() => {
+  const idsParam = (route.query.ids as string) || ''
+  if (idsParam && idsParam !== lastLoadedIds) {
+    loadCompareData()
+  }
+})
+
+// 同一组件激活期间，路由 query.ids 变化时也重新加载
+watch(() => route.query.ids, (newIds, oldIds) => {
+  if (newIds && newIds !== oldIds && newIds !== lastLoadedIds) {
+    loadCompareData()
+  }
+})
 
 const onResize = () => chart?.resize()
 window.addEventListener('resize', onResize)

@@ -223,7 +223,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, onActivated, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { getPortfolioBacktestDetail } from '@/api/stock'
@@ -235,6 +235,7 @@ const info = ref<any>(null)
 const loading = ref(false)
 const activeTab = ref('overview')
 const selectedPosDate = ref('')
+let lastLoadedId = 0   // 记录上次加载的回测ID，用于 keep-alive 激活时判断是否需要重新加载
 
 const chartEl = ref<HTMLElement>()
 const pnlChartEl = ref<HTMLElement>()
@@ -277,18 +278,53 @@ const selectedPositions = computed(() => {
 })
 
 // ── lifecycle ──
-onMounted(async () => {
+
+/** 清理所有图表实例 */
+function disposeAllCharts() {
+  chart?.dispose(); chart = null
+  pnlChart?.dispose(); pnlChart = null
+  tradeChart?.dispose(); tradeChart = null
+}
+
+/** 加载回测详情数据 */
+async function loadDetail() {
+  const id = btId.value
+  if (!id) return
+  // 清理旧状态
+  disposeAllCharts()
+  info.value = null
+  activeTab.value = 'overview'
+  selectedPosDate.value = ''
+
   loading.value = true
   try {
-    const res = await getPortfolioBacktestDetail(btId.value) as any
+    const res = await getPortfolioBacktestDetail(id) as any
     info.value = res?.code === 0 ? res.data : res?.data
     if (info.value?.positions?.length) {
       selectedPosDate.value = info.value.positions[info.value.positions.length - 1].date
     }
+    lastLoadedId = id
     await nextTick()
     safeRender('overview')
   } finally {
     loading.value = false
+  }
+}
+
+onMounted(() => loadDetail())
+
+// keep-alive 激活时，检查路由参数是否变化，如有变化则重新加载
+onActivated(() => {
+  const id = btId.value
+  if (id && id !== lastLoadedId) {
+    loadDetail()
+  }
+})
+
+// 同一组件激活期间，路由 :id 参数发生变化时也重新加载
+watch(btId, (newId, oldId) => {
+  if (newId && newId !== oldId && newId !== lastLoadedId) {
+    loadDetail()
   }
 })
 
@@ -296,7 +332,7 @@ const onResize = () => { chart?.resize(); pnlChart?.resize(); tradeChart?.resize
 window.addEventListener('resize', onResize)
 onUnmounted(() => {
   window.removeEventListener('resize', onResize)
-  chart?.dispose(); pnlChart?.dispose(); tradeChart?.dispose()
+  disposeAllCharts()
 })
 
 watch(activeTab, async (tab) => {

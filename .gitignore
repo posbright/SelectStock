@@ -167,3 +167,8 @@ test/
 git_log.txt
 test_*.py
 !tests/test_*.py
+vitest_output.txt
+vitest_result.txt
+vitest_done.txt
+build_result.txt
+build_done.txt

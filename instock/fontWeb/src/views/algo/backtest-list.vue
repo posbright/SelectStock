@@ -106,7 +106,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onActivated } from 'vue'
 import { useRouter } from 'vue-router'
 import { DataAnalysis, Delete } from '@element-plus/icons-vue'
 import { getPortfolioBacktestListPage, getStrategyCodeList, deleteBacktests } from '@/api/stock'
@@ -227,6 +227,9 @@ async function loadStrategies() {
 }
 
 onMounted(() => { loadData(); loadStrategies() })
+
+// keep-alive 激活时刷新列表数据（从详情/对比页返回时获取最新数据）
+onActivated(() => { loadData() })
 </script>
 
 <style scoped>
