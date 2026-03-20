@@ -51,6 +51,8 @@ _ALLOWED_IMPORTS = {
     'math', 'numpy', 'np', 'pandas', 'pd',
     'talib', 'ta', 'datetime', 'collections',
     'functools', 'itertools', 'operator',
+    # 聚宽兼容：这些模块在沙箱中被 stub，不会实际导入
+    'jqdata', 'jqlib',
 }
 
 
@@ -145,6 +147,43 @@ def compile_strategy(code_str):
 def _create_safe_namespace():
     """创建安全的执行命名空间"""
     import math
+    import types
+
+    # 创建 jqdata / jqlib stub 模块
+    def _make_jq_stubs():
+        jqdata = types.ModuleType('jqdata')
+        jqdata.__all__ = []  # from jqdata import * 不导入任何内容
+
+        jqlib = types.ModuleType('jqlib')
+        jqlib_ta = types.ModuleType('jqlib.technical_analysis')
+        # ATR stub — 返回空字典，策略中有手动 fallback
+        jqlib_ta.ATR = lambda *args, **kwargs: {}
+        jqlib.technical_analysis = jqlib_ta
+
+        return {'jqdata': jqdata, 'jqlib': jqlib, 'jqlib.technical_analysis': jqlib_ta}
+
+    _jq_modules = _make_jq_stubs()
+
+    def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+        """安全的 __import__ — 仅允许白名单模块"""
+        # 处理 jqdata / jqlib stub
+        if name in _jq_modules:
+            return _jq_modules[name]
+        # 处理 jqlib.technical_analysis
+        if name.startswith('jqlib.'):
+            parts = name.split('.')
+            if name in _jq_modules:
+                return _jq_modules[name]
+            # from jqlib.technical_analysis import ATR → name='jqlib', fromlist=('...',)
+            return _jq_modules.get('jqlib', _jq_modules['jqlib'])
+
+        # 允许白名单模块的真实导入
+        base_module = name.split('.')[0]
+        if base_module in _ALLOWED_IMPORTS:
+            import builtins
+            return builtins.__import__(name, globals, locals, fromlist, level)
+        raise ImportError(f"沙箱不允许导入: {name}")
+
     ns = {
         '__builtins__': {
             # 安全的内置函数（移除 type 防止类层次遍历攻击）
@@ -160,6 +199,7 @@ def _create_safe_namespace():
             'Exception': Exception, 'ValueError': ValueError,
             'TypeError': TypeError, 'KeyError': KeyError,
             'IndexError': IndexError, 'AttributeError': AttributeError,
+            '__import__': _safe_import,
         },
         'math': math,
     }

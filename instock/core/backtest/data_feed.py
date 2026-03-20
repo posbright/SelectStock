@@ -43,7 +43,8 @@ def _fetch_stock_from_eastmoney(code, start_date=None, end_date=None, adjust='qf
 
         # 东方财富返回中文列名，需映射
         col_map = {'日期': 'date', '开盘': 'open', '收盘': 'close',
-                    '最高': 'high', '最低': 'low', '成交量': 'volume'}
+                    '最高': 'high', '最低': 'low', '成交量': 'volume',
+                    '成交额': 'amount'}
         df = raw.rename(columns=col_map)
         for c in ['date', 'open', 'high', 'low', 'close', 'volume']:
             if c not in df.columns:
@@ -53,7 +54,11 @@ def _fetch_stock_from_eastmoney(code, start_date=None, end_date=None, adjust='qf
         for c in ['open', 'high', 'low', 'close']:
             df[c] = pd.to_numeric(df[c], errors='coerce')
         df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0).astype(int)
-        df = df[['date', 'open', 'high', 'low', 'close', 'volume']]
+        if 'amount' in df.columns:
+            df['amount'] = pd.to_numeric(df['amount'], errors='coerce').fillna(0)
+            df = df[['date', 'open', 'high', 'low', 'close', 'volume', 'amount']]
+        else:
+            df = df[['date', 'open', 'high', 'low', 'close', 'volume']]
         df = df.sort_values('date').reset_index(drop=True)
         logging.info(f"从 EastMoney 获取 {code} K线数据: {len(df)} 条 "
                      f"({df['date'].iloc[0].date()} ~ {df['date'].iloc[-1].date()})")

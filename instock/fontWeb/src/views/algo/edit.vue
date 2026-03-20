@@ -39,80 +39,94 @@
         <textarea v-model="strategy.code" class="code-editor" spellcheck="false" wrap="off"
                   @input="dirty = true" @keydown.ctrl.s.prevent="doSave" />
       </div>
-      <!-- 右：结果 -->
-      <div class="result-panel" v-if="showResults">
-        <el-tabs v-model="activeTab">
-          <el-tab-pane label="概览" name="overview">
-            <div v-if="btResult?.status === 'error'" style="padding: 12px;">
-              <el-alert :title="btResult.message" type="error" show-icon :closable="false" />
-            </div>
-            <div v-if="btResult?.metrics" class="result-overview">
-              <div class="metrics-row">
-                <div class="metric" v-for="m in metricCards" :key="m.key">
-                  <div class="metric-val" :class="m.cls">{{ m.val }}</div>
-                  <div class="metric-lbl">{{ m.label }}</div>
+      <!-- 右：结果 + 日志 -->
+      <div class="right-panel">
+        <!-- 上：结果区域 -->
+        <div class="result-panel" v-if="showResults">
+          <el-tabs v-model="activeTab">
+            <el-tab-pane label="概览" name="overview">
+              <div v-if="btResult?.status === 'error'" style="padding: 12px;">
+                <el-alert :title="btResult.message" type="error" show-icon :closable="false" />
+              </div>
+              <div v-if="btResult?.metrics" class="result-overview">
+                <div class="metrics-row">
+                  <div class="metric" v-for="m in metricCards" :key="m.key">
+                    <div class="metric-val" :class="m.cls">{{ m.val }}</div>
+                    <div class="metric-lbl">{{ m.label }}</div>
+                  </div>
+                </div>
+                <div ref="chartEl" class="nav-chart"></div>
+                <div v-if="btBacktestId" style="text-align: right; padding: 4px 8px;">
+                  <el-button type="primary" link @click="$router.push('/algo/backtest-detail/' + btBacktestId)">
+                    查看完整回测详情 →
+                  </el-button>
                 </div>
               </div>
-              <div ref="chartEl" class="nav-chart"></div>
-              <div v-if="btBacktestId" style="text-align: right; padding: 4px 8px;">
-                <el-button type="primary" link @click="$router.push('/algo/backtest-detail/' + btBacktestId)">
-                  查看完整回测详情 →
-                </el-button>
-              </div>
+            </el-tab-pane>
+            <el-tab-pane :label="'交易(' + (btResult?.trades?.length || 0) + ')'" name="trades">
+              <el-table :data="btResult?.trades || []" size="small" max-height="calc(50vh - 160px)" stripe>
+                <el-table-column prop="date" label="日期" width="100" />
+                <el-table-column prop="code" label="代码" width="70" />
+                <el-table-column prop="direction" label="方向" width="55">
+                  <template #default="{ row }">
+                    <span :style="{ color: row.direction === 'buy' ? '#f56c6c' : '#67c23a', fontWeight: 600 }">
+                      {{ row.direction === 'buy' ? '买' : '卖' }}
+                    </span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="price" label="价格" width="80" align="right">
+                  <template #default="{ row }">{{ Number(row.price).toFixed(2) }}</template>
+                </el-table-column>
+                <el-table-column prop="amount" label="数量" width="80" align="right" />
+                <el-table-column prop="value" label="金额" width="100" align="right">
+                  <template #default="{ row }">{{ Number(row.value).toFixed(0) }}</template>
+                </el-table-column>
+              </el-table>
+            </el-tab-pane>
+            <el-tab-pane label="持仓" name="positions">
+              <el-table :data="lastPositions" size="small" max-height="calc(50vh - 160px)" stripe>
+                <el-table-column prop="code" label="代码" width="70" />
+                <el-table-column prop="amount" label="持仓" width="80" align="right" />
+                <el-table-column prop="avg_cost" label="成本" width="80" align="right">
+                  <template #default="{ row }">{{ Number(row.avg_cost).toFixed(2) }}</template>
+                </el-table-column>
+                <el-table-column prop="price" label="现价" width="80" align="right">
+                  <template #default="{ row }">{{ Number(row.price).toFixed(2) }}</template>
+                </el-table-column>
+                <el-table-column prop="profit_rate" label="盈亏" width="80" align="right">
+                  <template #default="{ row }">
+                    <span :style="{ color: row.profit_rate >= 0 ? '#f56c6c' : '#67c23a' }">
+                      {{ Number(row.profit_rate).toFixed(1) }}%
+                    </span>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </el-tab-pane>
+          </el-tabs>
+        </div>
+        <div class="result-panel placeholder" v-else>
+          <div class="placeholder-content">
+            <el-icon :size="48" color="#c0c4cc"><DataLine /></el-icon>
+            <p>点击「运行回测」查看结果</p>
+            <p class="tips">Ctrl+S 保存</p>
+          </div>
+        </div>
+
+        <!-- 下：实时日志面板 -->
+        <div class="log-panel" :class="{ 'log-running': running }">
+          <div class="log-panel-header">
+            <span>运行日志</span>
+            <span v-if="running" class="log-status running">● 运行中...</span>
+            <span v-if="logErrorCount > 0" class="log-error-badge">{{ logErrorCount }} 错误</span>
+            <el-button v-if="logLines.length" size="small" text @click="logLines = []; logErrorCount = 0">清空</el-button>
+          </div>
+          <div ref="logContainer" class="log-content">
+            <div v-for="(line, i) in logLines" :key="i" class="log-line-item"
+                 :class="{ 'log-error': line.type === 'error', 'log-warn': line.type === 'warn' }">
+              {{ line.msg }}
             </div>
-          </el-tab-pane>
-          <el-tab-pane :label="'交易(' + (btResult?.trades?.length || 0) + ')'" name="trades">
-            <el-table :data="btResult?.trades || []" size="small" max-height="calc(100vh - 260px)" stripe>
-              <el-table-column prop="date" label="日期" width="100" />
-              <el-table-column prop="code" label="代码" width="70" />
-              <el-table-column prop="direction" label="方向" width="55">
-                <template #default="{ row }">
-                  <span :style="{ color: row.direction === 'buy' ? '#f56c6c' : '#67c23a', fontWeight: 600 }">
-                    {{ row.direction === 'buy' ? '买' : '卖' }}
-                  </span>
-                </template>
-              </el-table-column>
-              <el-table-column prop="price" label="价格" width="80" align="right">
-                <template #default="{ row }">{{ Number(row.price).toFixed(2) }}</template>
-              </el-table-column>
-              <el-table-column prop="amount" label="数量" width="80" align="right" />
-              <el-table-column prop="value" label="金额" width="100" align="right">
-                <template #default="{ row }">{{ Number(row.value).toFixed(0) }}</template>
-              </el-table-column>
-            </el-table>
-          </el-tab-pane>
-          <el-tab-pane label="持仓" name="positions">
-            <el-table :data="lastPositions" size="small" max-height="calc(100vh - 260px)" stripe>
-              <el-table-column prop="code" label="代码" width="70" />
-              <el-table-column prop="amount" label="持仓" width="80" align="right" />
-              <el-table-column prop="avg_cost" label="成本" width="80" align="right">
-                <template #default="{ row }">{{ Number(row.avg_cost).toFixed(2) }}</template>
-              </el-table-column>
-              <el-table-column prop="price" label="现价" width="80" align="right">
-                <template #default="{ row }">{{ Number(row.price).toFixed(2) }}</template>
-              </el-table-column>
-              <el-table-column prop="profit_rate" label="盈亏" width="80" align="right">
-                <template #default="{ row }">
-                  <span :style="{ color: row.profit_rate >= 0 ? '#f56c6c' : '#67c23a' }">
-                    {{ Number(row.profit_rate).toFixed(1) }}%
-                  </span>
-                </template>
-              </el-table-column>
-            </el-table>
-          </el-tab-pane>
-          <el-tab-pane :label="'日志(' + (btResult?.logs?.length || 0) + ')'" name="logs">
-            <div class="log-box">
-              <div v-for="(l, i) in (btResult?.logs || []).slice(-200)" :key="i" class="log-line">{{ l }}</div>
-              <div v-if="!btResult?.logs?.length" class="log-empty">暂无日志</div>
-            </div>
-          </el-tab-pane>
-        </el-tabs>
-      </div>
-      <div class="result-panel placeholder" v-else>
-        <div class="placeholder-content">
-          <el-icon :size="48" color="#c0c4cc"><DataLine /></el-icon>
-          <p>点击「运行回测」查看结果</p>
-          <p class="tips">Ctrl+S 保存</p>
+            <div v-if="!logLines.length" class="log-empty">等待回测运行...</div>
+          </div>
         </div>
       </div>
     </div>
@@ -120,12 +134,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, nextTick, watch, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, DocumentChecked, CaretRight, Monitor, DataLine } from '@element-plus/icons-vue'
-import { getStrategyCodeDetail, saveStrategyCode, runPortfolioBacktest, createPaperTrading } from '@/api/stock'
+import { getStrategyCodeDetail, saveStrategyCode, startPortfolioBacktest, getBacktestTaskResult, createPaperTrading } from '@/api/stock'
 import * as echarts from 'echarts'
+
+interface LogLine { type: 'log' | 'error' | 'warn'; msg: string }
 
 const route = useRoute()
 const router = useRouter()
@@ -143,7 +159,12 @@ const editingName = ref(false)
 const activeTab = ref('overview')
 const chartEl = ref<HTMLElement>()
 const btBacktestId = ref<number | null>(null)
+const logLines = ref<LogLine[]>([])
+const logErrorCount = ref(0)
+const logContainer = ref<HTMLElement>()
 let chart: echarts.ECharts | null = null
+let eventSource: EventSource | null = null
+let currentTaskId: string | null = null
 
 const dateShortcuts = [
   { text: '近1年', value: () => { const e = new Date(); const s = new Date(); s.setFullYear(s.getFullYear()-1); return [s, e] }},
@@ -233,14 +254,88 @@ async function doRun() {
   running.value = true
   showResults.value = false
   btResult.value = null
+  logLines.value = []
+  logErrorCount.value = 0
+  addLog('log', '正在启动回测...')
+
   try {
-    const res = await runPortfolioBacktest({
+    // 使用异步启动接口，立即返回 task_id
+    const res = await startPortfolioBacktest({
       code: strategy.value.code,
       strategy_id: strategy.value.id || undefined,
       start_date: btDateRange.value[0],
       end_date: btDateRange.value[1],
       initial_cash: btCash.value,
     }) as any
+    const { ok, data } = unwrap(res)
+    if (!ok || !data?.task_id) {
+      addLog('error', '启动回测失败: ' + (data?.message || '未知错误'))
+      running.value = false
+      return
+    }
+
+    currentTaskId = data.task_id
+    addLog('log', '回测已启动 (task_id: ' + currentTaskId + ')')
+
+    // 建立 SSE 连接接收实时日志
+    closeEventSource()
+    const sseUrl = `/instock/api/backtest/portfolio/log_stream?task_id=${currentTaskId}`
+    eventSource = new EventSource(sseUrl)
+
+    eventSource.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data)
+        if (msg.type === 'log') {
+          addLog('log', msg.msg)
+        } else if (msg.type === 'error') {
+          addLog('error', msg.msg)
+        }
+      } catch {
+        addLog('log', ev.data)
+      }
+    }
+
+    eventSource.addEventListener('done', async () => {
+      closeEventSource()
+      addLog('log', '回测完成，正在获取结果...')
+      await fetchResult(currentTaskId!)
+    })
+
+    eventSource.onerror = () => {
+      closeEventSource()
+      // SSE 失败则回退到轮询
+      if (currentTaskId) {
+        addLog('warn', '日志流连接中断，切换到轮询模式...')
+        pollResult(currentTaskId)
+      }
+    }
+  } catch (e: any) {
+    addLog('error', '回测异常: ' + (e.message || '未知错误'))
+    running.value = false
+  }
+}
+
+function closeEventSource() {
+  if (eventSource) {
+    eventSource.close()
+    eventSource = null
+  }
+}
+
+function addLog(type: 'log' | 'error' | 'warn', msg: string) {
+  logLines.value.push({ type, msg })
+  if (type === 'error') logErrorCount.value++
+  // 自动滚动到底部
+  nextTick(() => {
+    if (logContainer.value) {
+      logContainer.value.scrollTop = logContainer.value.scrollHeight
+    }
+  })
+}
+
+async function fetchResult(taskId: string) {
+  try {
+    const res = await getBacktestTaskResult(taskId) as any
     const { ok, data } = unwrap(res)
     if (ok && data) {
       btResult.value = data
@@ -249,19 +344,59 @@ async function doRun() {
         ElMessage.success('回测完成 (' + data.elapsed + 's)')
         btBacktestId.value = data.backtest_id || null
         activeTab.value = 'overview'
+        addLog('log', `回测结束 | 收益: ${data.metrics?.total_return?.toFixed(2) ?? '--'}% | 交易: ${data.trades?.length ?? 0} 次`)
         await nextTick()
-        // el-tabs 需要额外一帧完成渲染后 chartEl 才可用
         setTimeout(() => renderChart(), 100)
       } else if (data.status === 'error') {
+        addLog('error', '回测出错: ' + data.message)
         ElMessage.error(data.message)
       }
     }
   } catch (e: any) {
-    ElMessage.error(e.message || '回测异常')
+    addLog('error', '获取结果失败: ' + (e.message || '未知'))
   } finally {
     running.value = false
   }
 }
+
+async function pollResult(taskId: string) {
+  const maxAttempts = 600  // 最长等待 10 分钟 (600 * 1s)
+  let attempts = 0
+  const poll = async () => {
+    attempts++
+    try {
+      const res = await getBacktestTaskResult(taskId) as any
+      const { ok, data } = unwrap(res)
+      if (ok && data && data.status !== 'running') {
+        btResult.value = data
+        showResults.value = true
+        if (data.status === 'completed') {
+          ElMessage.success('回测完成 (' + data.elapsed + 's)')
+          btBacktestId.value = data.backtest_id || null
+          activeTab.value = 'overview'
+          addLog('log', `回测结束 | 收益: ${data.metrics?.total_return?.toFixed(2) ?? '--'}% | 交易: ${data.trades?.length ?? 0} 次`)
+          await nextTick()
+          setTimeout(() => renderChart(), 100)
+        } else if (data.status === 'error') {
+          addLog('error', '回测出错: ' + data.message)
+        }
+        running.value = false
+        return
+      }
+    } catch { /* continue polling */ }
+    if (attempts < maxAttempts) {
+      setTimeout(poll, 1000)
+    } else {
+      addLog('error', '回测超时，请稍后查看回测历史')
+      running.value = false
+    }
+  }
+  poll()
+}
+
+onBeforeUnmount(() => {
+  closeEventSource()
+})
 
 async function doCreatePaper() {
   if (!strategy.value.id) { ElMessage.warning('请先保存策略'); return }
@@ -364,7 +499,8 @@ window.addEventListener('resize', () => chart?.resize())
   font-size: 13px; line-height: 1.6; padding: 12px;
   background: #1e1e1e; color: #d4d4d4; tab-size: 4;
 }
-.result-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.right-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.result-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
 .result-panel.placeholder { display: flex; align-items: center; justify-content: center; }
 .placeholder-content { text-align: center; color: #c0c4cc; }
 .placeholder-content p { margin: 8px 0; }
@@ -377,10 +513,35 @@ window.addEventListener('resize', () => chart?.resize())
 .val-red { color: #f56c6c !important; }
 .val-green { color: #67c23a !important; }
 .nav-chart { width: 100%; height: 280px; }
-.log-box {
-  height: calc(100vh - 260px); overflow-y: auto; font-family: monospace; font-size: 12px;
-  background: #1e1e1e; color: #d4d4d4; padding: 8px 12px;
+
+/* 实时日志面板 */
+.log-panel {
+  height: 200px; min-height: 120px; flex-shrink: 0;
+  border-top: 1px solid #ebeef5; display: flex; flex-direction: column;
 }
-.log-line { white-space: pre-wrap; line-height: 1.5; }
-.log-empty { text-align: center; color: #606266; padding: 40px; }
+.log-panel-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 12px; background: #1a1a2e; border-bottom: 1px solid #2a2a4a;
+  font-size: 12px; font-weight: 600; color: #a0a0c0; flex-shrink: 0;
+}
+.log-status.running { color: #67c23a; animation: pulse 1.5s infinite; }
+.log-error-badge {
+  background: #f56c6c; color: #fff; font-size: 11px; padding: 1px 8px;
+  border-radius: 10px; font-weight: 600;
+}
+.log-content {
+  flex: 1; overflow-y: auto; background: #1a1a2e; color: #c8c8e0;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 12px; line-height: 1.6; padding: 8px 12px;
+}
+.log-line-item { white-space: pre-wrap; word-break: break-all; }
+.log-line-item.log-error { color: #ff6b6b; }
+.log-line-item.log-warn { color: #ffd93d; }
+.log-empty { text-align: center; color: #606680; padding: 20px; }
+.log-panel.log-running .log-panel-header { border-bottom-color: #67c23a33; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
 </style>

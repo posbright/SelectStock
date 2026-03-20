@@ -10,13 +10,19 @@ import json
 import logging
 import datetime
 import traceback
+import uuid
+import time as _time
 from abc import ABC
-from tornado import gen
+from tornado import gen, ioloop
 import instock.web.base as webBase
 import instock.lib.database as mdb
 
 __author__ = 'InStock'
 __date__ = '2026/03/13'
+
+# ── 运行中回测任务注册表（用于日志实时流） ──
+# { task_id: { 'engine': PortfolioBacktestEngine, 'status': 'running'|'done', 'result': dict|None } }
+_running_tasks = {}
 
 # ── 内置策略模板 ──
 STRATEGY_TEMPLATES = [
@@ -494,17 +500,29 @@ class RunPortfolioBacktestHandler(webBase.BaseHandler, ABC):
                 self.write(json.dumps({'code': -1, 'msg': '缺少必填参数'}, ensure_ascii=False))
                 return
 
-            from instock.core.backtest.portfolio_engine import run_backtest
+            from instock.core.backtest.portfolio_engine import PortfolioBacktestEngine
             from tornado.ioloop import IOLoop
 
-            # 在线程池中运行回测，不阻塞 Tornado IOLoop
-            result = yield IOLoop.current().run_in_executor(
-                self._get_executor(),
-                lambda: run_backtest(
+            # 创建引擎并注册到任务表（供日志流读取）
+            task_id = str(uuid.uuid4())[:8]
+            engine = PortfolioBacktestEngine()
+            _running_tasks[task_id] = {'engine': engine, 'status': 'running', 'result': None}
+
+            def _run():
+                return engine.run(
                     strategy_code, start_date, end_date,
                     initial_cash=initial_cash, benchmark=benchmark,
                     commission=commission, tax=tax, slippage=slippage)
-            )
+
+            # 在线程池中运行回测，不阻塞 Tornado IOLoop
+            result = yield IOLoop.current().run_in_executor(
+                self._get_executor(), _run)
+
+            _running_tasks[task_id]['status'] = 'done'
+            _running_tasks[task_id]['result'] = result
+
+            # 30秒后自动清理任务引用
+            IOLoop.current().call_later(30, lambda: _running_tasks.pop(task_id, None))
 
             # 持久化到 DB
             bt_id = None
@@ -538,10 +556,191 @@ class RunPortfolioBacktestHandler(webBase.BaseHandler, ABC):
                     logging.warning(f"回测结果持久化异常: {e}")
 
             result['backtest_id'] = bt_id
+            result['task_id'] = task_id
             self.write(json.dumps({'code': 0, 'data': result}, ensure_ascii=False, default=str))
         except Exception as e:
             logging.error("RunPortfolioBacktest异常", exc_info=True)
             self.write(json.dumps({'code': -1, 'msg': str(e)}))
+
+
+class StartPortfolioBacktestHandler(webBase.BaseHandler, ABC):
+    """异步启动回测并立即返回 task_id（配合日志流使用）"""
+
+    _executor = None
+
+    @classmethod
+    def _get_executor(cls):
+        if cls._executor is None:
+            from concurrent.futures import ThreadPoolExecutor
+            cls._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='backtest-async')
+        return cls._executor
+
+    @gen.coroutine
+    def post(self):
+        try:
+            body = json.loads(self.request.body)
+            strategy_code = body.get('code', '')
+            strategy_id = body.get('strategy_id')
+            start_date = body.get('start_date', '')
+            end_date = body.get('end_date', '')
+            initial_cash = body.get('initial_cash', 1000000)
+            benchmark = body.get('benchmark', '000300')
+            commission = body.get('commission_rate', 0.0003)
+            tax = body.get('stamp_tax_rate', 0.001)
+            slippage = body.get('slippage', 0.002)
+
+            if not strategy_code or not start_date or not end_date:
+                self.write(json.dumps({'code': -1, 'msg': '缺少必填参数'}, ensure_ascii=False))
+                return
+
+            from instock.core.backtest.portfolio_engine import PortfolioBacktestEngine
+
+            task_id = str(uuid.uuid4())[:8]
+            engine = PortfolioBacktestEngine()
+            _running_tasks[task_id] = {
+                'engine': engine, 'status': 'running', 'result': None,
+                'strategy_id': strategy_id,
+            }
+
+            def _run_and_finish():
+                try:
+                    result = engine.run(
+                        strategy_code, start_date, end_date,
+                        initial_cash=initial_cash, benchmark=benchmark,
+                        commission=commission, tax=tax, slippage=slippage)
+                    task = _running_tasks.get(task_id)
+                    if task:
+                        task['status'] = 'done'
+                        task['result'] = result
+                        # 持久化（在回调线程中执行）
+                        if result.get('status') == 'completed':
+                            try:
+                                _ensure_backtest_table()
+                                m = result.get('metrics', {})
+                                now = datetime.datetime.now()
+                                bt_id = _insert_and_get_id(
+                                    'INSERT INTO cn_stock_backtest_portfolio '
+                                    '(strategy_id, start_date, end_date, initial_cash, status, '
+                                    'started_at, completed_at, total_return, annual_return, '
+                                    'max_drawdown, sharpe_ratio, alpha, beta, win_rate, trade_count, '
+                                    'result_json) '
+                                    'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                                    (strategy_id, start_date, end_date, initial_cash, 'completed',
+                                     now, now, m.get('total_return'), m.get('annual_return'),
+                                     m.get('max_drawdown'), m.get('sharpe_ratio'),
+                                     m.get('alpha'), m.get('beta'),
+                                     m.get('daily_win_rate'), m.get('trade_count'),
+                                     json.dumps(result, ensure_ascii=False, default=str)))
+                                result['backtest_id'] = bt_id
+                            except Exception as e:
+                                logging.warning(f"回测持久化异常: {e}")
+                except Exception as e:
+                    task = _running_tasks.get(task_id)
+                    if task:
+                        task['status'] = 'done'
+                        task['result'] = {'status': 'error', 'message': str(e)}
+                    logging.error(f"异步回测异常: {e}", exc_info=True)
+
+            # 提交到线程池 — 不 yield 等待
+            self._get_executor().submit(_run_and_finish)
+
+            # 立即返回 task_id
+            self.write(json.dumps({'code': 0, 'data': {'task_id': task_id}}, ensure_ascii=False))
+        except Exception as e:
+            logging.error("StartPortfolioBacktest异常", exc_info=True)
+            self.write(json.dumps({'code': -1, 'msg': str(e)}))
+
+
+class BacktestLogStreamHandler(webBase.BaseHandler, ABC):
+    """SSE 日志流 — 实时推送回测过程日志"""
+
+    @gen.coroutine
+    def get(self):
+        task_id = self.get_argument('task_id', '')
+        if not task_id or task_id not in _running_tasks:
+            self.set_status(404)
+            self.write('task not found')
+            return
+
+        self.set_header('Content-Type', 'text/event-stream; charset=utf-8')
+        self.set_header('Cache-Control', 'no-cache')
+        self.set_header('Connection', 'keep-alive')
+        self.set_header('X-Accel-Buffering', 'no')
+        self.set_header('Access-Control-Allow-Origin', '*')
+
+        sent_count = 0
+        sent_error_count = 0
+
+        while True:
+            task = _running_tasks.get(task_id)
+            if task is None:
+                self.write('event: done\ndata: {"status":"not_found"}\n\n')
+                self.flush()
+                break
+
+            engine = task['engine']
+            # 发送新的日志行
+            logs = getattr(engine, '_log_messages', [])
+            errors = getattr(engine, '_strategy_errors', [])
+
+            if len(logs) > sent_count:
+                new_logs = logs[sent_count:]
+                sent_count = len(logs)
+                for line in new_logs:
+                    data = json.dumps({'type': 'log', 'msg': line}, ensure_ascii=False)
+                    self.write(f'data: {data}\n\n')
+                try:
+                    self.flush()
+                except Exception:
+                    break
+
+            if len(errors) > sent_error_count:
+                new_errors = errors[sent_error_count:]
+                sent_error_count = len(errors)
+                for err in new_errors:
+                    data = json.dumps({'type': 'error', 'context': err.get('context', ''),
+                                       'error': err.get('error', ''), 'error_type': err.get('type', '')},
+                                      ensure_ascii=False)
+                    self.write(f'data: {data}\n\n')
+                try:
+                    self.flush()
+                except Exception:
+                    break
+
+            if task['status'] == 'done':
+                result = task.get('result', {})
+                data = json.dumps({
+                    'type': 'complete',
+                    'status': result.get('status', 'error'),
+                    'message': result.get('message', ''),
+                }, ensure_ascii=False)
+                self.write(f'event: done\ndata: {data}\n\n')
+                try:
+                    self.flush()
+                except Exception:
+                    pass
+                break
+
+            # 等待 300ms 再检查
+            yield gen.sleep(0.3)
+
+        self.finish()
+
+
+class BacktestTaskResultHandler(webBase.BaseHandler, ABC):
+    """获取已完成回测任务的完整结果"""
+
+    def get(self):
+        task_id = self.get_argument('task_id', '')
+        task = _running_tasks.get(task_id)
+        if not task:
+            self.write(json.dumps({'code': -1, 'msg': '任务不存在或已过期'}))
+            return
+        if task['status'] != 'done':
+            self.write(json.dumps({'code': 0, 'data': {'status': 'running'}}))
+            return
+        result = task.get('result', {})
+        self.write(json.dumps({'code': 0, 'data': result}, ensure_ascii=False, default=str))
 
 
 class GetPortfolioBacktestListHandler(webBase.BaseHandler, ABC):

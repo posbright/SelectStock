@@ -272,6 +272,26 @@ export function runPortfolioBacktest(data: {
   return request({ url: '/api/backtest/portfolio/run', method: 'post', data })
 }
 
+/** 异步启动回测（立即返回 task_id） */
+export function startPortfolioBacktest(data: {
+  code: string
+  strategy_id?: number
+  start_date: string
+  end_date: string
+  initial_cash?: number
+  benchmark?: string
+  commission_rate?: number
+  stamp_tax_rate?: number
+  slippage?: number
+}) {
+  return request({ url: '/api/backtest/portfolio/start', method: 'post', data })
+}
+
+/** 获取回测任务完整结果 */
+export function getBacktestTaskResult(taskId: string) {
+  return request({ url: '/api/backtest/portfolio/task_result', method: 'get', params: { task_id: taskId } })
+}
+
 /** 获取回测历史列表 */
 export function getPortfolioBacktestList(params?: { strategy_id?: number }) {
   return request({ url: '/api/backtest/portfolio/list', method: 'get', params })

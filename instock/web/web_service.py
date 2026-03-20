@@ -90,6 +90,9 @@ class Application(tornado.web.Application):
             (r"/instock/api/strategy/code/delete", portfolioBacktestHandler.DeleteStrategyCodeHandler),
             (r"/instock/api/strategy/templates", portfolioBacktestHandler.GetStrategyTemplatesHandler),
             (r"/instock/api/backtest/portfolio/run", portfolioBacktestHandler.RunPortfolioBacktestHandler),
+            (r"/instock/api/backtest/portfolio/start", portfolioBacktestHandler.StartPortfolioBacktestHandler),
+            (r"/instock/api/backtest/portfolio/log_stream", portfolioBacktestHandler.BacktestLogStreamHandler),
+            (r"/instock/api/backtest/portfolio/task_result", portfolioBacktestHandler.BacktestTaskResultHandler),
             (r"/instock/api/backtest/portfolio/list", portfolioBacktestHandler.GetPortfolioBacktestListHandler),
             (r"/instock/api/backtest/portfolio/detail", portfolioBacktestHandler.GetPortfolioBacktestDetailHandler),
             (r"/instock/api/backtest/portfolio/compare", portfolioBacktestHandler.GetBacktestCompareHandler),
@@ -125,7 +128,11 @@ class Application(tornado.web.Application):
         )
         super(Application, self).__init__(handlers, **settings)
         # Have one global connection to the blog DB across all handlers
-        self.db = torndb.Connection(**mdb.MYSQL_CONN_TORNDB)
+        try:
+            self.db = torndb.Connection(**mdb.MYSQL_CONN_TORNDB)
+        except Exception as e:
+            logging.warning(f"数据库连接失败，部分功能不可用: {e}")
+            self.db = None
 
 
 class SPAHandler(tornado.web.RequestHandler, ABC):

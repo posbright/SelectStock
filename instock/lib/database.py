@@ -19,7 +19,7 @@ __author__ = 'InStock'
 __date__ = '2026/02/14'
 
 # 数据库连接重试次数（应用于 get_connection / insert / executeSql）
-_DB_CONN_RETRIES = _cfg.get_int('INSTOCK_DB_CONN_RETRIES', 3)
+_DB_CONN_RETRIES = _cfg.get_int('INSTOCK_DB_CONN_RETRIES', 1)
 
 db_host = _cfg.get_str('db_host', '127.0.0.1')       # 数据库服务主机
 db_user = _cfg.get_str('db_user', 'root')            # 数据库访问用户
@@ -36,15 +36,16 @@ logging.info(f"数据库链接信息：mysql+pymysql://{db_user}:***@{db_host}:{
 
 # 超时配置（本地连远程时适当放宽）
 _connect_timeout = _cfg.get_int('INSTOCK_DB_CONNECT_TIMEOUT', 10)
-_read_timeout = _cfg.get_int('INSTOCK_DB_READ_TIMEOUT', 30)
-_write_timeout = _cfg.get_int('INSTOCK_DB_WRITE_TIMEOUT', 30)
+_read_timeout = _cfg.get_int('INSTOCK_DB_READ_TIMEOUT', 10)
+_write_timeout = _cfg.get_int('INSTOCK_DB_WRITE_TIMEOUT', 10)
 
 MYSQL_CONN_DBAPI = {'host': db_host, 'user': db_user, 'password': db_password, 'database': db_database,
                     'charset': db_charset, 'port': db_port, 'autocommit': True,
                     'connect_timeout': _connect_timeout, 'read_timeout': _read_timeout, 'write_timeout': _write_timeout}
 
 MYSQL_CONN_TORNDB = {'host': f'{db_host}:{str(db_port)}', 'user': db_user, 'password': db_password,
-                     'database': db_database, 'charset': db_charset, 'max_idle_time': 3600, 'connect_timeout': 1000}
+                     'database': db_database, 'charset': db_charset, 'max_idle_time': 3600,
+                     'connect_timeout': _connect_timeout, 'read_timeout': _read_timeout}
 
 
 # 通过数据库链接 engine（单例模式，避免每次调用创建新连接池）

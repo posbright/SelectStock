@@ -36,8 +36,8 @@ class Position:
         self.value = self.amount * price
 
     def _on_buy(self, amount, price, cost=0.0):
-        """买入成交更新"""
-        total_cost = self.avg_cost * self.amount + price * amount + cost
+        """买入成交更新（avg_cost 不含佣金，与聚宽一致）"""
+        total_cost = self.avg_cost * self.amount + price * amount
         self.amount += amount
         self._today_bought += amount
         if self.amount > 0:
@@ -59,6 +59,11 @@ class Position:
         """新交易日：昨日买入的股票今日可卖"""
         self.closeable_amount = self.amount
         self._today_bought = 0
+
+    @property
+    def total_amount(self):
+        """总持仓股数（聚宽兼容别名）"""
+        return self.amount
 
     @property
     def profit(self):

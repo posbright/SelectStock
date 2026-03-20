@@ -33,6 +33,8 @@ from .data_feed import load_stock_data, load_multiple_stocks, get_trading_dates,
 from .risk_metrics import calculate_metrics
 from .fundamentals import (
     FundamentalDataProvider, valuation as _valuation_obj,
+    indicator as _indicator_obj, balance as _balance_obj,
+    cash_flow as _cash_flow_obj,
     query as _query_func, OrderCost as _OrderCost,
     _CurrentDataProxy,
 )
@@ -97,6 +99,7 @@ class PortfolioBacktestEngine:
         """
         start_time = time.time()
         logging.info(f"[回测引擎] 开始回测: {start_date} ~ {end_date}, 初始资金={initial_cash}")
+        self._strategy_errors = []  # 收集策略运行时错误
 
         # 0. 参数校验
         if initial_cash is None or initial_cash <= 0:
@@ -152,7 +155,11 @@ class PortfolioBacktestEngine:
         initial_bm_price = None
 
         for i, date in enumerate(trading_dates):
-            self.context.current_dt = date
+            # 聚宽兼容：current_dt 应为 datetime.datetime（策略中调 .date()）
+            if isinstance(date, datetime.date) and not isinstance(date, datetime.datetime):
+                self.context.current_dt = datetime.datetime.combine(date, datetime.time(15, 0))
+            else:
+                self.context.current_dt = date
             self.context.previous_dt = trading_dates[i - 1] if i > 0 else None
 
             # 8a. 加载当日行情
@@ -166,7 +173,7 @@ class PortfolioBacktestEngine:
                     self._call_with_api(self._strategy_funcs['before_trading_start'],
                                         [self.context], api_ns)
                 except Exception as e:
-                    logging.warning(f"[回测] {date} before_trading_start 异常: {e}")
+                    self._record_error(f"{date} before_trading_start", e)
 
             # 8c. handle_data
             if self._strategy_funcs.get('handle_data'):
@@ -174,16 +181,9 @@ class PortfolioBacktestEngine:
                     self._call_with_api(self._strategy_funcs['handle_data'],
                                         [self.context, self.data_proxy], api_ns)
                 except Exception as e:
-                    logging.warning(f"[回测] {date} handle_data 异常: {e}")
+                    self._record_error(f"{date} handle_data", e)
 
-            # 8c-2. 执行 run_daily 注册的回调
-            for cb in self._daily_callbacks:
-                try:
-                    self._call_with_api(cb, [self.context], api_ns)
-                except Exception as e:
-                    logging.warning(f"[回测] {date} run_daily回调异常: {e}")
-
-            # 8c-3. 执行 run_weekly 注册的回调
+            # 8c-2. 执行 run_weekly 注册的回调（聚宽中周度调仓 time='10:30' 先于日度风控 time='14:30'）
             if self._weekly_callbacks:
                 # 获取当日是星期几（0=周一...6=周日）
                 if hasattr(date, 'weekday'):
@@ -197,7 +197,16 @@ class PortfolioBacktestEngine:
                         try:
                             self._call_with_api(cb, [self.context], api_ns)
                         except Exception as e:
-                            logging.warning(f"[回测] {date} run_weekly回调异常: {e}")
+                            cb_name = getattr(cb, '__name__', str(cb))
+                            self._record_error(f"{date} run_weekly({cb_name})", e)
+
+            # 8c-3. 执行 run_daily 注册的回调（日度风控 time='14:30' 在周度调仓之后）
+            for cb in self._daily_callbacks:
+                try:
+                    self._call_with_api(cb, [self.context], api_ns)
+                except Exception as e:
+                    cb_name = getattr(cb, '__name__', str(cb))
+                    self._record_error(f"{date} run_daily({cb_name})", e)
 
             # 8d. 清理延迟标记的空仓（在所有回调完成后执行，避免迭代中删除字典）
             if self._deferred_position_cleanups:
@@ -219,7 +228,7 @@ class PortfolioBacktestEngine:
                     self._call_with_api(self._strategy_funcs['after_trading_end'],
                                         [self.context], api_ns)
                 except Exception as e:
-                    logging.warning(f"[回测] {date} after_trading_end 异常: {e}")
+                    self._record_error(f"{date} after_trading_end", e)
 
             # 8g. 记录净值
             nav = self.context.portfolio.total_value / initial_cash
@@ -279,6 +288,7 @@ class PortfolioBacktestEngine:
             'trades': [t.to_dict() for t in self._trade_records],
             'positions': self._position_snapshots,
             'logs': self._log_messages[-200:],  # 最后200条日志
+            'errors': self._strategy_errors[-50:],  # 最近50条策略错误
             'elapsed': round(elapsed, 1),
             'params': {
                 'start_date': start_date,
@@ -318,9 +328,14 @@ class PortfolioBacktestEngine:
 
         def order_target_value(code, target_value):
             """调整到目标持仓金额"""
+            target_value = float(target_value)
             pos = engine.context.portfolio.positions.get(code)
+            if target_value <= 0 and pos and pos.closeable_amount > 0:
+                # 清仓：直接按股数卖出，避免金额→股数换算的舍入残留
+                engine._submit_order(code, amount=-pos.closeable_amount)
+                return
             current_value = pos.value if pos and pos.amount > 0 else 0
-            diff = float(target_value) - current_value
+            diff = target_value - current_value
             if abs(diff) > 100:  # 忽略过小的调整
                 engine._submit_order(code, value=diff)
 
@@ -336,18 +351,40 @@ class PortfolioBacktestEngine:
                 return subset[field].reset_index(drop=True)
             return pd.Series(dtype=float)
 
-        def get_price(code, start_date=None, end_date=None, fields=None):
-            """获取指定区间的历史数据"""
+        def get_price(code, start_date=None, end_date=None, count=None,
+                      frequency='daily', fields=None, fq=None, **kwargs):
+            """获取历史数据（兼容聚宽 count/end_date 模式和 start_date/end_date 模式）"""
+            # 懒加载：策略可能请求不在初始股票池的代码
+            engine._ensure_stock_loaded(code)
             df = engine._stock_data.get(code)
             if df is None:
                 return pd.DataFrame()
             result = df.copy()
-            if start_date:
-                result = result[result['date'] >= pd.Timestamp(start_date)]
             if end_date:
                 result = result[result['date'] <= pd.Timestamp(end_date)]
+            elif count:
+                # 无 end_date 时默认截到当前回测日期
+                result = result[result['date'] <= pd.Timestamp(engine.context.current_dt)]
+            if start_date:
+                result = result[result['date'] >= pd.Timestamp(start_date)]
+            if count and count > 0:
+                result = result.tail(count)
             if fields:
-                cols = ['date'] + [f for f in fields if f in result.columns]
+                # 兼容聚宽 fields 含 'money'（映射到 deal_amount 或 volume*close）
+                cols = ['date']
+                for f in fields:
+                    if f == 'money' and 'money' not in result.columns:
+                        if 'deal_amount' in result.columns:
+                            result['money'] = result['deal_amount']
+                        elif 'amount' in result.columns:
+                            result['money'] = result['amount']
+                        elif 'volume' in result.columns and 'close' in result.columns:
+                            # volume 单位是手(=100股)，需要 ×100 转为股数再乘价格
+                            result['money'] = result['volume'] * result['close'] * 100
+                    if f == 'paused' and 'paused' not in result.columns:
+                        result['paused'] = 0
+                    if f in result.columns:
+                        cols.append(f)
                 result = result[cols]
             return result.reset_index(drop=True)
 
@@ -373,7 +410,7 @@ class PortfolioBacktestEngine:
             """聚宽 set_option() — 当前回测引擎中为兼容性空操作"""
             pass
 
-        def run_daily(func, time_rule='every_bar'):
+        def run_daily(func, time_rule='every_bar', time='open', reference_security=None):
             """注册日级回调函数（兼容聚宽 run_daily）"""
             engine._daily_callbacks.append(func)
 
@@ -449,7 +486,30 @@ class PortfolioBacktestEngine:
 
         def get_current_data():
             """聚宽 get_current_data() — 获取当前股票数据（停牌等）"""
-            return _CurrentDataProxy(engine._fundamental_provider)
+            return _CurrentDataProxy(engine._fundamental_provider, engine)
+
+        def get_all_securities(types=None, date=None):
+            """聚宽 get_all_securities() — 返回全部候选股票代码"""
+            provider = engine._fundamental_provider
+            provider._init_data()
+            codes = list(provider._candidate_codes) if provider._candidate_codes else []
+            # 也包含已加载的 K 线股票
+            for code in engine._stock_data:
+                if code not in codes:
+                    codes.append(code)
+            result = pd.DataFrame({'code': codes}, index=codes)
+            result.index.name = None
+            return result
+
+        def get_security_info(code):
+            """聚宽 get_security_info() — 返回股票基本信息 stub"""
+            class _SecurityInfo:
+                def __init__(self):
+                    self.start_date = datetime.date(2010, 1, 1)  # 默认上市日期
+                    self.display_name = ''
+                    self.name = ''
+                    self.type = 'stock'
+            return _SecurityInfo()
 
         def record(**kwargs):
             """记录自定义指标"""
@@ -464,10 +524,14 @@ class PortfolioBacktestEngine:
                 engine._log_messages.append(f"[{engine.context.current_dt}] [INFO] {msg}")
             def warn(self, msg):
                 engine._log_messages.append(f"[{engine.context.current_dt}] [WARN] {msg}")
+            def warning(self, msg):
+                engine._log_messages.append(f"[{engine.context.current_dt}] [WARN] {msg}")
             def error(self, msg):
                 engine._log_messages.append(f"[{engine.context.current_dt}] [ERROR] {msg}")
             def debug(self, msg):
                 engine._log_messages.append(f"[{engine.context.current_dt}] [DEBUG] {msg}")
+            def set_level(self, *args, **kwargs):
+                pass  # 兼容聚宽 log.set_level()
 
         return {
             'order': order,
@@ -490,7 +554,13 @@ class PortfolioBacktestEngine:
             # 聚宽兼容对象
             'query': _query_func,
             'valuation': _valuation_obj,
+            'indicator': _indicator_obj,
+            'balance': _balance_obj,
+            'cash_flow': _cash_flow_obj,
             'OrderCost': _OrderCost,
+            # 聚宽兼容 shim
+            'get_all_securities': get_all_securities,
+            'get_security_info': get_security_info,
         }
 
     def _call_with_api(self, func, args, api_ns):
@@ -499,6 +569,22 @@ class PortfolioBacktestEngine:
             return
         func.__globals__.update(api_ns)
         func(*args)
+
+    def _record_error(self, context_desc, exception):
+        """记录策略运行时错误（含完整traceback）"""
+        import traceback
+        tb = traceback.format_exception(type(exception), exception, exception.__traceback__)
+        # 过滤掉引擎内部帧，只保留策略相关帧
+        strategy_tb = [line for line in tb if '<strategy>' in line or not line.startswith('  File')]
+        full_msg = ''.join(tb)
+        short_msg = f"[回测] {context_desc} 异常: {exception}"
+        logging.warning(f"{short_msg}\n{''.join(strategy_tb)}")
+        self._strategy_errors.append({
+            'context': context_desc,
+            'error': str(exception),
+            'type': type(exception).__name__,
+            'traceback': full_msg,
+        })
 
     # ── 股票名称解析 ──
 
@@ -510,9 +596,13 @@ class PortfolioBacktestEngine:
         self._stock_names[code] = name
         return name
 
+    _db_available = None  # None=unknown, True/False after first attempt
+
     @staticmethod
     def _query_stock_name(code):
         """从数据库查询单只股票名称"""
+        if PortfolioBacktestEngine._db_available is False:
+            return ''
         try:
             import instock.core.tablestructure as tbs
             import instock.lib.database as mdb
@@ -521,14 +611,20 @@ class PortfolioBacktestEngine:
                 sql = f"SELECT `name` FROM `{table}` WHERE `code` = %s LIMIT 1"
                 result = pd.read_sql(sql, mdb.engine(), params=(code,))
                 if result is not None and len(result) > 0:
+                    PortfolioBacktestEngine._db_available = True
                     return result.iloc[0]['name']
+            PortfolioBacktestEngine._db_available = True
         except Exception:
             logging.debug(f"查询股票名称异常: {code}", exc_info=True)
+            PortfolioBacktestEngine._db_available = False
         return ''
 
     def _load_stock_names_batch(self, codes):
         """批量加载股票名称到缓存"""
-        if not codes:
+        if not codes or PortfolioBacktestEngine._db_available is False:
+            for c in (codes or []):
+                if c not in self._stock_names:
+                    self._stock_names[c] = ''
             return
         uncached = [c for c in codes if c not in self._stock_names]
         if not uncached:
@@ -647,7 +743,12 @@ class PortfolioBacktestEngine:
             if value > 0:
                 amount = int(value / exec_price / 100) * 100
             else:
-                amount = -int(abs(value) / exec_price / 100) * 100
+                # 卖出：先尝试100股取整，不足100股时允许零股卖出
+                raw_amount = abs(value) / exec_price
+                amount_rounded = int(raw_amount / 100) * 100
+                if amount_rounded <= 0:
+                    amount_rounded = int(raw_amount)  # 允许零股
+                amount = -amount_rounded
 
         if amount is None or amount == 0:
             return
@@ -917,6 +1018,9 @@ class PortfolioBacktestEngine:
         if df is not None:
             self._stock_data[code] = df
             self.data_proxy._set_history(code, df)
+
+    # 聚宽兼容别名
+    _ensure_stock_loaded = _load_single_stock
 
     def _load_day_prices(self, date):
         """加载当日所有股票的收盘价，更新 data_proxy"""

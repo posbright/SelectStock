@@ -61,7 +61,7 @@ class Connection(object):
     """
 
     def __init__(self, host, database, user=None, password=None,
-                 max_idle_time=4 * 3600, connect_timeout=10,
+                 max_idle_time=4 * 3600, connect_timeout=10, read_timeout=10,
                  time_zone="+0:00", charset="utf8", sql_mode="TRADITIONAL"):
         self.host = host
         self.database = database
@@ -70,7 +70,7 @@ class Connection(object):
         #  自定义
         args = dict(conv=CONVERSIONS, charset=charset,
                     db=database, init_command=('SET time_zone = "%s"' % time_zone),
-                    connect_timeout=connect_timeout, sql_mode=sql_mode)
+                    connect_timeout=connect_timeout, read_timeout=read_timeout, sql_mode=sql_mode)
         # args = dict(conv=CONVERSIONS, use_unicode=True, charset=charset,
         #             db=database, init_command=('SET time_zone = "%s"' % time_zone),
         #             connect_timeout=connect_timeout, sql_mode=sql_mode)
