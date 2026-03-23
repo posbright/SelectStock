@@ -423,6 +423,30 @@ TABLE_CN_STOCK_INDICATORS_BUY = {'name': 'cn_stock_indicators_buy', 'cn': '股�
 TABLE_CN_STOCK_INDICATORS_SELL = {'name': 'cn_stock_indicators_sell', 'cn': '股票指标卖出',
                                   'columns': _tmp_columns}
 
+# 个股历史财务数据（东方财富，覆盖回测所需的成长、盈利、资产负债、现金流指标）
+TABLE_CN_STOCK_FINANCIAL = {'name': 'cn_stock_financial', 'cn': '个股财务数据',
+                            'columns': {'code': {'type': VARCHAR(6, _COLLATE), 'cn': '代码', 'size': 60},
+                                        'report_date': {'type': DATE, 'cn': '报告期', 'size': 100},
+                                        'report_name': {'type': VARCHAR(20, _COLLATE), 'cn': '报告期名称', 'size': 100},
+                                        'eps': {'type': FLOAT, 'cn': '每股收益', 'size': 70},
+                                        'bps': {'type': FLOAT, 'cn': '每股净资产', 'size': 70},
+                                        'ocfps': {'type': FLOAT, 'cn': '每股经营现金流', 'size': 70},
+                                        'revenue': {'type': FLOAT, 'cn': '营业总收入', 'size': 100},
+                                        'net_profit': {'type': FLOAT, 'cn': '归母净利润', 'size': 100},
+                                        'revenue_yoy': {'type': FLOAT, 'cn': '营收同比增长', 'size': 70},
+                                        'net_profit_yoy': {'type': FLOAT, 'cn': '净利润同比增长', 'size': 70},
+                                        'roe': {'type': FLOAT, 'cn': 'ROE', 'size': 70},
+                                        'roa': {'type': FLOAT, 'cn': 'ROA', 'size': 70},
+                                        'gross_margin': {'type': FLOAT, 'cn': '毛利率', 'size': 70},
+                                        'net_profit_margin': {'type': FLOAT, 'cn': '净利率', 'size': 70},
+                                        'asset_liability_ratio': {'type': FLOAT, 'cn': '资产负债率', 'size': 70},
+                                        'current_ratio': {'type': FLOAT, 'cn': '流动比率', 'size': 70},
+                                        'quick_ratio': {'type': FLOAT, 'cn': '速动比率', 'size': 70},
+                                        'total_asset_turnover': {'type': FLOAT, 'cn': '总资产周转率', 'size': 70},
+                                        'inventory_turnover': {'type': FLOAT, 'cn': '存货周转率', 'size': 70},
+                                        'receivable_turnover': {'type': FLOAT, 'cn': '应收账款周转率', 'size': 70},
+                                        'updated_at': {'type': DATETIME, 'cn': '更新时间', 'size': 0}}}
+
 TABLE_CN_STOCK_STRATEGIES = [
     {'name': 'cn_stock_strategy_enter', 'cn': '放量上涨', 'size': 70, 'func': enter.check_volume,
      'columns': _tmp_columns},

@@ -1,197 +1,105 @@
 """
-A股历史财务数据采集脚本
-数据来源：AkShare (https://akshare.akfamily.xyz)
-目标数据库：stockbasedata (MySQL)
+A股历史财务数据采集（项目集成版）
+数据来源：AkShare (https://akshare.akfamily.xyz) — 东方财富个股财务分析指标
+目标数据库：instockdb.cn_stock_financial
 
 采集内容：
-  1. stock_basic_info              - A股股票基础信息
-  2. stock_financial_indicators    - 个股财务分析指标（新浪财经，含PB相关的每股净资产等）
-  3. stock_financial_indicators_em - 个股财务分析指标（东方财富，含EPS/BPS/ROE等）
-  4. stock_market_pb_history       - 全市场历史PB（中位数/等权均值，乐咕乐股）
+  - 个股财务分析指标（东方财富），包括：
+    EPS、BPS、每股经营现金流、营业收入、净利润、
+    营收同比增长率、净利润同比增长率、ROE、ROA、
+    毛利率、净利率、资产负债率、流动比率、速动比率、
+    总资产周转率、存货周转率、应收账款周转率
+
+用途：
+  - 为《低ATR成长策略》等多因子策略回测提供真实财务数据
+  - 替换 fundamentals.py 中的合成基本面数据
 
 用法：
-  python stock_financial_data.py            # 全量采集
-  python stock_financial_data.py --test 10  # 测试模式，仅采集前10只股票
-  python stock_financial_data.py --skip-sina  # 跳过新浪接口
-  python stock_financial_data.py --skip-em    # 跳过东方财富接口
+  python stock_financial_data.py                 # 全量采集
+  python stock_financial_data.py --test 10       # 测试模式，仅采集前10只
+  python stock_financial_data.py --incremental   # 增量模式，仅采集最近报告期
 """
+
+import logging
+import time
+import argparse
+import os
+import sys
+from datetime import datetime
 
 import akshare as ak
 import pandas as pd
-import pymysql
-from sqlalchemy import create_engine, text
-from urllib.parse import quote_plus
-import logging
-import time
-import warnings
-import argparse
-from datetime import datetime
 
-warnings.filterwarnings("ignore")
+# 确保项目根目录在 sys.path 中
+cpath_current = os.path.dirname(os.path.dirname(__file__))
+cpath = os.path.abspath(os.path.join(cpath_current, os.pardir))
+sys.path.append(cpath)
 
-# ─── 配置 ────────────────────────────────────────────────────────────────────
-DB_CONFIG = {
-    "host": "127.0.0.1",
-    "port": 3306,
-    "user": "root",
-    "password": "Dzm@ming&662",
-    "database": "stockbasedata",
-    "charset": "utf8mb4",
-}
+import instock.lib.database as mdb
+import instock.lib.envconfig as _cfg
+from instock.core.tablestructure import TABLE_CN_STOCK_FINANCIAL
 
-START_YEAR = "2015"          # 新浪接口起始年份
-SLEEP_PER_STOCK = 3        # 每只股票采集间隔(秒)
-RETRY_TIMES = 2              # 接口重试次数
-RETRY_SLEEP = 5              # 重试间隔(秒)
+__author__ = 'InStock'
+__date__ = '2026/03/23'
 
-# ─── 日志 ────────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("stock_financial_data.log", encoding="utf-8"),
-    ],
-)
 log = logging.getLogger(__name__)
 
 
-# ─── 数据库工具 ───────────────────────────────────────────────────────────────
-def get_engine():
-    pw = quote_plus(DB_CONFIG["password"])
-    url = (
-        f"mysql+pymysql://{DB_CONFIG['user']}:{pw}"
-        f"@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}"
-        f"?charset={DB_CONFIG['charset']}"
-    )
-    return create_engine(url, pool_pre_ping=True)
+# ─── 配置 ────────────────────────────────────────────────────────────────────
+SLEEP_PER_STOCK = _cfg.get_float('INSTOCK_FINANCIAL_SLEEP', 2.0)
+RETRY_TIMES = _cfg.get_int('INSTOCK_FINANCIAL_RETRIES', 2)
+RETRY_SLEEP = _cfg.get_int('INSTOCK_FINANCIAL_RETRY_SLEEP', 5)
+
+# 东方财富 API 字段到数据库字段的映射
+_EM_COL_MAP = {
+    'SECURITY_CODE': 'code',
+    'REPORT_DATE': 'report_date',
+    'REPORT_DATE_NAME': 'report_name',
+    'EPSJB': 'eps',
+    'BPS': 'bps',
+    'MGJYXJJE': 'ocfps',
+    'TOTALOPERATEREVE': 'revenue',
+    'PARENTNETPROFIT': 'net_profit',
+    'TOTALOPERATEREVETZ': 'revenue_yoy',
+    'PARENTNETPROFITTZ': 'net_profit_yoy',
+    'ROEJQ': 'roe',
+    'ZZCJLL': 'roa',
+    'XSMLL': 'gross_margin',
+    'XSJLL': 'net_profit_margin',
+    'ZCFZL': 'asset_liability_ratio',
+    'LD': 'current_ratio',
+    'SD': 'quick_ratio',
+    'TOAZZL': 'total_asset_turnover',
+    'CHZZL': 'inventory_turnover',
+    'YSZKZZL': 'receivable_turnover',
+}
+
+# 数据库表中所有业务字段（用于 upsert）
+_DB_FIELDS = [
+    'code', 'report_date', 'report_name', 'eps', 'bps', 'ocfps',
+    'revenue', 'net_profit', 'revenue_yoy', 'net_profit_yoy',
+    'roe', 'roa', 'gross_margin', 'net_profit_margin',
+    'asset_liability_ratio', 'current_ratio', 'quick_ratio',
+    'total_asset_turnover', 'inventory_turnover', 'receivable_turnover',
+]
+
+_NUMERIC_FIELDS = set(_DB_FIELDS) - {'code', 'report_date', 'report_name'}
 
 
-def init_tables(engine):
-    """建表（幂等）"""
-    ddl_list = [
-        # ── 表1：股票基础信息 ─────────────────────────────────────────────────
-        """
-        CREATE TABLE IF NOT EXISTS stock_basic_info (
-            id          BIGINT AUTO_INCREMENT PRIMARY KEY,
-            stock_code  VARCHAR(10) NOT NULL COMMENT '股票代码(6位)',
-            stock_name  VARCHAR(50) COMMENT '股票简称',
-            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            UNIQUE KEY uk_code (stock_code)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='A股股票基础信息';
-        """,
-
-        # ── 表2：新浪财经个股财务分析指标 ────────────────────────────────────
-        """
-        CREATE TABLE IF NOT EXISTS stock_financial_indicators (
-            id                      BIGINT AUTO_INCREMENT PRIMARY KEY,
-            stock_code              VARCHAR(10)   NOT NULL COMMENT '股票代码',
-            report_date             DATE          NOT NULL COMMENT '报告期',
-            eps                     DECIMAL(20,4) COMMENT '摊薄每股收益(元)',
-            eps_weighted            DECIMAL(20,4) COMMENT '加权每股收益(元)',
-            eps_ex_extra            DECIMAL(20,4) COMMENT '扣非每股收益(元)',
-            bps_before              DECIMAL(20,4) COMMENT '每股净资产_调整前(元)',
-            bps_after               DECIMAL(20,4) COMMENT '每股净资产_调整后(元)',
-            ocfps                   DECIMAL(20,4) COMMENT '每股经营性现金流(元)',
-            capital_reserve_ps      DECIMAL(20,4) COMMENT '每股资本公积金(元)',
-            undistrib_profit_ps     DECIMAL(20,4) COMMENT '每股未分配利润(元)',
-            roa                     DECIMAL(20,4) COMMENT '总资产利润率(%)',
-            net_profit_margin       DECIMAL(20,4) COMMENT '销售净利率(%)',
-            gross_margin            DECIMAL(20,4) COMMENT '销售毛利率(%)',
-            roe                     DECIMAL(20,4) COMMENT '净资产收益率(%)',
-            roe_weighted            DECIMAL(20,4) COMMENT '加权净资产收益率(%)',
-            revenue_growth          DECIMAL(20,4) COMMENT '主营业务收入增长率(%)',
-            netprofit_growth        DECIMAL(20,4) COMMENT '净利润增长率(%)',
-            netasset_growth         DECIMAL(20,4) COMMENT '净资产增长率(%)',
-            totalasset_growth       DECIMAL(20,4) COMMENT '总资产增长率(%)',
-            current_ratio           DECIMAL(20,4) COMMENT '流动比率',
-            quick_ratio             DECIMAL(20,4) COMMENT '速动比率',
-            asset_liab_ratio        DECIMAL(20,4) COMMENT '资产负债率(%)',
-            total_assets            DECIMAL(30,2) COMMENT '总资产(元)',
-            inventory_turnover      DECIMAL(20,4) COMMENT '存货周转率(次)',
-            receivable_turnover     DECIMAL(20,4) COMMENT '应收账款周转率(次)',
-            total_asset_turnover    DECIMAL(20,4) COMMENT '总资产周转率(次)',
-            cashflow_to_liab        DECIMAL(20,4) COMMENT '经营现金净流量对负债比率(%)',
-            cashflow_to_revenue     DECIMAL(20,4) COMMENT '经营现金净流量对销售收入比率(%)',
-            created_at              DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at              DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            UNIQUE KEY uk_stock_date (stock_code, report_date)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-          COMMENT='个股财务分析指标-新浪财经(含每股净资产/PB基础数据)';
-        """,
-
-        # ── 表3：东方财富个股财务分析指标 ────────────────────────────────────
-        """
-        CREATE TABLE IF NOT EXISTS stock_financial_indicators_em (
-            id                   BIGINT AUTO_INCREMENT PRIMARY KEY,
-            secucode             VARCHAR(15)   NOT NULL COMMENT '完整证券代码(如000001.SZ)',
-            stock_code           VARCHAR(10)   NOT NULL COMMENT '股票代码',
-            stock_name           VARCHAR(50)   COMMENT '股票简称',
-            report_date          DATE          NOT NULL COMMENT '报告期',
-            report_type          VARCHAR(20)   COMMENT '报告类型(年报/季报等)',
-            report_date_name     VARCHAR(50)   COMMENT '报告期名称',
-            notice_date          DATE          COMMENT '公告日期',
-            currency             VARCHAR(10)   COMMENT '货币单位',
-            eps                  DECIMAL(20,4) COMMENT '每股收益-基本(元)',
-            eps_ex_extra         DECIMAL(20,4) COMMENT '每股收益-扣非(元)',
-            bps                  DECIMAL(20,4) COMMENT '每股净资产(元)',
-            capital_reserve_ps   DECIMAL(20,4) COMMENT '每股资本公积(元)',
-            undistrib_profit_ps  DECIMAL(20,4) COMMENT '每股未分配利润(元)',
-            ocfps                DECIMAL(20,4) COMMENT '每股经营现金流(元)',
-            revenue              DECIMAL(30,2) COMMENT '营业总收入(元)',
-            gross_margin         DECIMAL(20,4) COMMENT '毛利率(%)',
-            net_profit           DECIMAL(30,2) COMMENT '归母净利润(元)',
-            net_profit_ex        DECIMAL(30,2) COMMENT '扣非归母净利润(元)',
-            revenue_growth       DECIMAL(20,4) COMMENT '营收同比增长(%)',
-            netprofit_growth     DECIMAL(20,4) COMMENT '净利润同比增长(%)',
-            roe                  DECIMAL(20,4) COMMENT 'ROE净资产收益率(%)',
-            roe_ex               DECIMAL(20,4) COMMENT '扣非ROE(%)',
-            roa                  DECIMAL(20,4) COMMENT '总资产净利率(%)',
-            net_profit_margin    DECIMAL(20,4) COMMENT '净利率(%)',
-            cash_flow_ratio      DECIMAL(20,4) COMMENT '现金流量比率(%)',
-            asset_liab_ratio     DECIMAL(20,4) COMMENT '资产负债率(%)',
-            current_ratio        DECIMAL(20,4) COMMENT '流动比率',
-            quick_ratio          DECIMAL(20,4) COMMENT '速动比率',
-            interest_coverage    DECIMAL(20,4) COMMENT '利息保障倍数',
-            total_asset_turnover DECIMAL(20,4) COMMENT '总资产周转率(次)',
-            inventory_turnover   DECIMAL(20,4) COMMENT '存货周转率(次)',
-            receivable_turnover  DECIMAL(20,4) COMMENT '应收账款周转率(次)',
-            bps_growth           DECIMAL(20,4) COMMENT '每股净资产增长率(%)',
-            created_at           DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at           DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            UNIQUE KEY uk_stock_date (secucode, report_date)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-          COMMENT='个股财务分析指标-东方财富(含EPS/BPS/ROE/资产负债率等)';
-        """,
-
-        # ── 表4：全市场历史PB ─────────────────────────────────────────────────
-        """
-        CREATE TABLE IF NOT EXISTS stock_market_pb_history (
-            id                      BIGINT AUTO_INCREMENT PRIMARY KEY,
-            trade_date              DATE          NOT NULL COMMENT '交易日期',
-            middle_pb               DECIMAL(10,4) COMMENT 'PB中位数',
-            equal_weight_avg_pb     DECIMAL(10,4) COMMENT 'PB等权均值',
-            close                   DECIMAL(10,4) COMMENT '沪深全A收盘指数',
-            quantile_all_middle_pb  DECIMAL(10,6) COMMENT '历史全区间中位数PB分位',
-            quantile_10y_middle_pb  DECIMAL(10,6) COMMENT '近10年中位数PB分位',
-            quantile_all_ewavg_pb   DECIMAL(10,6) COMMENT '历史全区间等权均值PB分位',
-            quantile_10y_ewavg_pb   DECIMAL(10,6) COMMENT '近10年等权均值PB分位',
-            created_at              DATETIME DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE KEY uk_trade_date (trade_date)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-          COMMENT='全市场历史PB-乐咕乐股(2005年至今)';
-        """,
-    ]
-    with engine.connect() as conn:
-        for ddl in ddl_list:
-            conn.execute(text(ddl))
-        conn.commit()
-    log.info("所有数据表初始化完成（4张表）")
+def _code_to_secucode(code):
+    """将6位股票代码转为东方财富格式（如 000001 → 000001.SZ）"""
+    code = str(code).zfill(6)
+    if code.startswith(('6', '5')):
+        return f"{code}.SH"
+    elif code.startswith(('0', '3', '2')):
+        return f"{code}.SZ"
+    elif code.startswith(('4', '8', '9')):
+        return f"{code}.BJ"
+    return f"{code}.SZ"
 
 
-# ─── 重试装饰器 ────────────────────────────────────────────────────────────────
-def retry_call(fn, name="", retries=RETRY_TIMES, sleep=RETRY_SLEEP):
+def _retry_call(fn, name="", retries=RETRY_TIMES, sleep=RETRY_SLEEP):
+    """带重试的函数调用"""
     for i in range(retries + 1):
         try:
             return fn()
@@ -203,355 +111,6 @@ def retry_call(fn, name="", retries=RETRY_TIMES, sleep=RETRY_SLEEP):
                 raise
 
 
-# ─── 股票列表获取 ──────────────────────────────────────────────────────────────
-def fetch_stock_list():
-    """
-    获取A股完整股票列表，多数据源容错。
-    优先用深交所（稳定），补充沪市（有时不稳定），最后用内置列表兜底。
-    """
-    log.info("正在获取A股股票列表...")
-    result_frames = []
-
-    # ── 深交所 ────────────────────────────────────────────────────
-    try:
-        df_sz = ak.stock_info_sz_name_code(symbol="A股列表")
-        df_sz = df_sz[["A股代码", "A股简称"]].copy()
-        df_sz.columns = ["stock_code", "stock_name"]
-        df_sz["stock_code"] = df_sz["stock_code"].astype(str).str.zfill(6)
-        df_sz = df_sz.dropna(subset=["stock_code"])
-        result_frames.append(df_sz)
-        log.info(f"  深交所A股: {len(df_sz)} 只")
-    except Exception as e:
-        log.warning(f"  深交所接口失败: {e}")
-
-    # ── 上交所主板 ─────────────────────────────────────────────────
-    try:
-        df_sh = ak.stock_info_sh_name_code(symbol="主板A股")
-        df_sh = df_sh[["SECURITY_CODE_A", "SECURITY_ABBR_A"]].copy()
-        df_sh.columns = ["stock_code", "stock_name"]
-        df_sh["stock_code"] = df_sh["stock_code"].astype(str).str.zfill(6)
-        df_sh = df_sh[df_sh["stock_code"].str.startswith("6")].copy()
-        result_frames.append(df_sh)
-        log.info(f"  上交所主板A股: {len(df_sh)} 只")
-    except Exception as e:
-        log.warning(f"  上交所接口失败: {e}，将通过代码范围补充沪市股票")
-        # 补充：通过代码规律生成6字头（上交所主板）和688字头（科创板）
-        sh_codes = [f"{i:06d}" for i in range(600000, 610000)] + \
-                   [f"{i:06d}" for i in range(688000, 689000)]
-        df_sh_fallback = pd.DataFrame({
-            "stock_code": sh_codes,
-            "stock_name": [""] * len(sh_codes)
-        })
-        result_frames.append(df_sh_fallback)
-        log.info(f"  上交所代码范围兜底: {len(df_sh_fallback)} 个候选")
-
-    # ── 北交所 ─────────────────────────────────────────────────────
-    try:
-        df_bj = ak.stock_info_bj_name_code()
-        df_bj = df_bj[["证券代码", "证券简称"]].copy()
-        df_bj.columns = ["stock_code", "stock_name"]
-        df_bj["stock_code"] = df_bj["stock_code"].astype(str).str.zfill(6)
-        result_frames.append(df_bj)
-        log.info(f"  北交所: {len(df_bj)} 只")
-    except Exception as e:
-        log.warning(f"  北交所接口失败: {e}")
-
-    if result_frames:
-        df_all = pd.concat(result_frames, ignore_index=True)
-        df_all = df_all.drop_duplicates(subset=["stock_code"])
-        df_all = df_all[df_all["stock_code"].str.match(r"^\d{6}$")]
-        df_all = df_all.reset_index(drop=True)
-        log.info(f"A股股票列表合计: {len(df_all)} 只")
-        return df_all
-
-    # ── 最终兜底：akshare内置 ──────────────────────────────────────
-    log.warning("所有在线接口失败，使用akshare内置股票列表")
-    df = ak.stock_info_a_code_name()
-    df.columns = ["stock_code", "stock_name"]
-    return df.reset_index(drop=True)
-
-
-# ─── 全市场PB历史数据 ──────────────────────────────────────────────────────────
-def fetch_market_pb_all(engine):
-    """采集全市场历史PB（2005年至今，乐咕乐股）"""
-    log.info("正在采集全市场历史PB数据 (stock_a_all_pb)...")
-    try:
-        df = retry_call(ak.stock_a_all_pb, "stock_a_all_pb")
-        df = df.rename(columns={
-            "date":                                        "trade_date",
-            "middlePB":                                    "middle_pb",
-            "equalWeightAveragePB":                        "equal_weight_avg_pb",
-            "close":                                       "close",
-            "quantileInAllHistoryMiddlePB":                "quantile_all_middle_pb",
-            "quantileInRecent10YearsMiddlePB":             "quantile_10y_middle_pb",
-            "quantileInAllHistoryEqualWeightAveragePB":    "quantile_all_ewavg_pb",
-            "quantileInRecent10YearsEqualWeightAveragePB": "quantile_10y_ewavg_pb",
-        })
-        df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
-        rows = _clean_nan(df.to_dict(orient="records"))
-
-        with engine.connect() as conn:
-            conn.execute(text("""
-                INSERT IGNORE INTO stock_market_pb_history
-                  (trade_date, middle_pb, equal_weight_avg_pb, close,
-                   quantile_all_middle_pb, quantile_10y_middle_pb,
-                   quantile_all_ewavg_pb, quantile_10y_ewavg_pb)
-                VALUES
-                  (:trade_date, :middle_pb, :equal_weight_avg_pb, :close,
-                   :quantile_all_middle_pb, :quantile_10y_middle_pb,
-                   :quantile_all_ewavg_pb, :quantile_10y_ewavg_pb)
-            """), rows)
-            conn.commit()
-        log.info(f"全市场PB数据入库完成，共 {len(df)} 条")
-        return len(df)
-    except Exception as e:
-        log.error(f"全市场PB数据采集失败: {e}")
-        return 0
-
-
-# ─── 新浪财经财务指标 ──────────────────────────────────────────────────────────
-SINA_COL_MAP = {
-    "日期": "report_date",
-    "摊薄每股收益(元)": "eps",
-    "加权每股收益(元)": "eps_weighted",
-    "扣除非经常性损益后的每股收益(元)": "eps_ex_extra",
-    "每股净资产_调整前(元)": "bps_before",
-    "每股净资产_调整后(元)": "bps_after",
-    "每股经营性现金流(元)": "ocfps",
-    "每股资本公积金(元)": "capital_reserve_ps",
-    "每股未分配利润(元)": "undistrib_profit_ps",
-    "总资产利润率(%)": "roa",
-    "销售净利率(%)": "net_profit_margin",
-    "销售毛利率(%)": "gross_margin",
-    "净资产收益率(%)": "roe",
-    "加权净资产收益率(%)": "roe_weighted",
-    "主营业务收入增长率(%)": "revenue_growth",
-    "净利润增长率(%)": "netprofit_growth",
-    "净资产增长率(%)": "netasset_growth",
-    "总资产增长率(%)": "totalasset_growth",
-    "流动比率": "current_ratio",
-    "速动比率": "quick_ratio",
-    "资产负债率(%)": "asset_liab_ratio",
-    "总资产(元)": "total_assets",
-    "存货周转率(次)": "inventory_turnover",
-    "应收账款周转率(次)": "receivable_turnover",
-    "总资产周转率(次)": "total_asset_turnover",
-    "经营现金净流量对负债比率(%)": "cashflow_to_liab",
-    "经营现金净流量对销售收入比率(%)": "cashflow_to_revenue",
-}
-
-SINA_DB_FIELDS = [
-    "stock_code", "report_date", "eps", "eps_weighted", "eps_ex_extra",
-    "bps_before", "bps_after", "ocfps", "capital_reserve_ps", "undistrib_profit_ps",
-    "roa", "net_profit_margin", "gross_margin", "roe", "roe_weighted",
-    "revenue_growth", "netprofit_growth", "netasset_growth", "totalasset_growth",
-    "current_ratio", "quick_ratio", "asset_liab_ratio", "total_assets",
-    "inventory_turnover", "receivable_turnover", "total_asset_turnover",
-    "cashflow_to_liab", "cashflow_to_revenue",
-]
-
-
-def fetch_sina_financial_indicators(engine, stock_list_df):
-    """采集新浪财经个股财务分析指标"""
-    total = len(stock_list_df)
-    success, fail, skip = 0, 0, 0
-    log.info(f"开始采集新浪财经财务指标，共 {total} 只股票...")
-
-    for _, row in stock_list_df.iterrows():
-        code = str(row["stock_code"]).zfill(6)
-        name = row.get("stock_name", "")
-        try:
-            df = retry_call(
-                lambda c=code: ak.stock_financial_analysis_indicator(symbol=c, start_year=START_YEAR),
-                name=f"sina_{code}"
-            )
-            if df is None or df.empty:
-                skip += 1
-                continue
-
-            df = df.rename(columns=SINA_COL_MAP)
-            keep = ["report_date"] + [v for v in SINA_COL_MAP.values() if v != "report_date"]
-            df = df[[c for c in keep if c in df.columns]].copy()
-            df["stock_code"] = code
-            df["report_date"] = pd.to_datetime(df["report_date"], errors="coerce").dt.date
-            df = df.dropna(subset=["report_date"])
-            if df.empty:
-                skip += 1
-                continue
-
-            for c in df.columns:
-                if c not in ("stock_code", "report_date"):
-                    df[c] = pd.to_numeric(df[c], errors="coerce")
-
-            _upsert_sina(engine, _clean_nan(df.to_dict(orient="records")))
-            success += 1
-            if success % 100 == 0:
-                log.info(f"  新浪进度: {success}/{total} 成功, {fail} 失败, {skip} 跳过")
-
-        except Exception as e:
-            fail += 1
-            log.debug(f"  [{code}]{name} 新浪财务指标失败: {e}")
-
-        time.sleep(SLEEP_PER_STOCK)
-
-    log.info(f"新浪财务指标完成: 成功={success}, 跳过={skip}, 失败={fail}")
-    return success, fail
-
-
-def _upsert_sina(engine, rows):
-    if not rows:
-        return
-    defaults = {f: None for f in SINA_DB_FIELDS}
-    rows = [{**defaults, **r} for r in rows]
-    placeholders = ", ".join([f":{f}" for f in SINA_DB_FIELDS])
-    updates = ", ".join([f"{f}=VALUES({f})" for f in SINA_DB_FIELDS
-                         if f not in ("stock_code", "report_date")])
-    sql = text(f"""
-        INSERT INTO stock_financial_indicators ({', '.join(SINA_DB_FIELDS)})
-        VALUES ({placeholders})
-        ON DUPLICATE KEY UPDATE {updates}, updated_at=CURRENT_TIMESTAMP
-    """)
-    with engine.connect() as conn:
-        conn.execute(sql, rows)
-        conn.commit()
-
-
-# ─── 东方财富财务指标 ──────────────────────────────────────────────────────────
-EM_COL_MAP = {
-    "SECUCODE": "secucode",
-    "SECURITY_CODE": "stock_code",
-    "SECURITY_NAME_ABBR": "stock_name",
-    "REPORT_DATE": "report_date",
-    "REPORT_TYPE": "report_type",
-    "REPORT_DATE_NAME": "report_date_name",
-    "NOTICE_DATE": "notice_date",
-    "CURRENCY": "currency",
-    "EPSJB": "eps",
-    "EPSKCJB": "eps_ex_extra",
-    "BPS": "bps",
-    "MGZBGJ": "capital_reserve_ps",
-    "MGWFPLR": "undistrib_profit_ps",
-    "MGJYXJJE": "ocfps",
-    "TOTALOPERATEREVE": "revenue",
-    "XSMLL": "gross_margin",
-    "PARENTNETPROFIT": "net_profit",
-    "KCFJCXSYJLR": "net_profit_ex",
-    "TOTALOPERATEREVETZ": "revenue_growth",
-    "PARENTNETPROFITTZ": "netprofit_growth",
-    "ROEJQ": "roe",
-    "ROEKCJQ": "roe_ex",
-    "ZZCJLL": "roa",
-    "XSJLL": "net_profit_margin",
-    "XJLLB": "cash_flow_ratio",
-    "ZCFZL": "asset_liab_ratio",
-    "LD": "current_ratio",
-    "SD": "quick_ratio",
-    "INTEREST_COVERAGE_RATIO": "interest_coverage",
-    "TOAZZL": "total_asset_turnover",
-    "CHZZL": "inventory_turnover",
-    "YSZKZZL": "receivable_turnover",
-    "BPSTZ": "bps_growth",
-}
-
-EM_STR_FIELDS = {"secucode", "stock_code", "stock_name", "report_type",
-                 "report_date_name", "currency"}
-EM_DATE_FIELDS = {"report_date", "notice_date"}
-EM_DB_FIELDS = [
-    "secucode", "stock_code", "stock_name", "report_date", "report_type",
-    "report_date_name", "notice_date", "currency",
-    "eps", "eps_ex_extra", "bps", "capital_reserve_ps", "undistrib_profit_ps", "ocfps",
-    "revenue", "gross_margin", "net_profit", "net_profit_ex",
-    "revenue_growth", "netprofit_growth", "roe", "roe_ex", "roa",
-    "net_profit_margin", "cash_flow_ratio", "asset_liab_ratio",
-    "current_ratio", "quick_ratio", "interest_coverage",
-    "total_asset_turnover", "inventory_turnover", "receivable_turnover", "bps_growth",
-]
-
-
-def _code_to_secucode(code):
-    code = str(code).zfill(6)
-    if code.startswith("6") or code.startswith("5"):
-        return f"{code}.SH"
-    elif code.startswith(("0", "3", "2")):
-        return f"{code}.SZ"
-    elif code.startswith(("4", "8", "9")):
-        return f"{code}.BJ"
-    else:
-        return f"{code}.SZ"
-
-
-def fetch_em_financial_indicators(engine, stock_list_df):
-    """采集东方财富个股财务分析指标"""
-    total = len(stock_list_df)
-    success, fail, skip = 0, 0, 0
-    log.info(f"开始采集东方财富财务指标，共 {total} 只股票...")
-
-    for _, row in stock_list_df.iterrows():
-        code = str(row["stock_code"]).zfill(6)
-        secucode = _code_to_secucode(code)
-        name = row.get("stock_name", "")
-        try:
-            df = retry_call(
-                lambda s=secucode: ak.stock_financial_analysis_indicator_em(
-                    symbol=s, indicator="按报告期"),
-                name=f"em_{secucode}"
-            )
-            if df is None or df.empty:
-                skip += 1
-                continue
-
-            df = df.rename(columns=EM_COL_MAP)
-            keep = [v for v in EM_DB_FIELDS if v in df.columns]
-            df = df[keep].copy()
-
-            # 日期处理
-            for dcol in EM_DATE_FIELDS:
-                if dcol in df.columns:
-                    df[dcol] = pd.to_datetime(df[dcol], errors="coerce").dt.date
-            df = df.dropna(subset=["report_date"])
-            if df.empty:
-                skip += 1
-                continue
-
-            # 数值处理
-            for c in df.columns:
-                if c not in EM_STR_FIELDS and c not in EM_DATE_FIELDS:
-                    df[c] = pd.to_numeric(df[c], errors="coerce")
-
-            _upsert_em(engine, _clean_nan(df.to_dict(orient="records")))
-            success += 1
-            if success % 100 == 0:
-                log.info(f"  东方财富进度: {success}/{total} 成功, {fail} 失败, {skip} 跳过")
-
-        except Exception as e:
-            fail += 1
-            log.debug(f"  [{secucode}]{name} 东方财富财务指标失败: {e}")
-
-        time.sleep(SLEEP_PER_STOCK)
-
-    log.info(f"东方财富财务指标完成: 成功={success}, 跳过={skip}, 失败={fail}")
-    return success, fail
-
-
-def _upsert_em(engine, rows):
-    if not rows:
-        return
-    defaults = {f: None for f in EM_DB_FIELDS}
-    rows = [{**defaults, **r} for r in rows]
-    placeholders = ", ".join([f":{f}" for f in EM_DB_FIELDS])
-    updates = ", ".join([f"{f}=VALUES({f})" for f in EM_DB_FIELDS
-                         if f not in ("secucode", "report_date")])
-    sql = text(f"""
-        INSERT INTO stock_financial_indicators_em ({', '.join(EM_DB_FIELDS)})
-        VALUES ({placeholders})
-        ON DUPLICATE KEY UPDATE {updates}, updated_at=CURRENT_TIMESTAMP
-    """)
-    with engine.connect() as conn:
-        conn.execute(sql, rows)
-        conn.commit()
-
-
-# ─── 工具函数 ─────────────────────────────────────────────────────────────────
 def _clean_nan(rows):
     """将 dict 列表中的 float('nan') 替换为 None（MySQL 不接受 NaN）"""
     cleaned = []
@@ -561,77 +120,358 @@ def _clean_nan(rows):
     return cleaned
 
 
-def save_stock_basic(engine, stock_list_df):
-    """保存股票基础信息"""
-    rows = stock_list_df.rename(columns={"code": "stock_code", "name": "stock_name"}
-                                ).to_dict(orient="records")
-    with engine.connect() as conn:
-        conn.execute(text("""
-            INSERT INTO stock_basic_info (stock_code, stock_name)
-            VALUES (:stock_code, :stock_name)
-            ON DUPLICATE KEY UPDATE stock_name=VALUES(stock_name),
-                                    updated_at=CURRENT_TIMESTAMP
-        """), rows)
-        conn.commit()
-    log.info(f"股票基础信息入库完成，共 {len(rows)} 条")
+def create_financial_table():
+    """创建 cn_stock_financial 表（幂等）"""
+    table_name = TABLE_CN_STOCK_FINANCIAL['name']
+    if mdb.checkTableIsExist(table_name):
+        return
+
+    import pymysql
+    ddl = """
+    CREATE TABLE IF NOT EXISTS `cn_stock_financial` (
+        `code`                   VARCHAR(6)    NOT NULL COMMENT '股票代码',
+        `report_date`            DATE          NOT NULL COMMENT '报告期',
+        `report_name`            VARCHAR(20)   COMMENT '报告期名称',
+        `eps`                    FLOAT         COMMENT '基本每股收益(元)',
+        `bps`                    FLOAT         COMMENT '每股净资产(元)',
+        `ocfps`                  FLOAT         COMMENT '每股经营现金流(元)',
+        `revenue`                FLOAT         COMMENT '营业总收入(元)',
+        `net_profit`             FLOAT         COMMENT '归母净利润(元)',
+        `revenue_yoy`            FLOAT         COMMENT '营收同比增长',
+        `net_profit_yoy`         FLOAT         COMMENT '净利润同比增长',
+        `roe`                    FLOAT         COMMENT 'ROE净资产收益率',
+        `roa`                    FLOAT         COMMENT '总资产净利率',
+        `gross_margin`           FLOAT         COMMENT '毛利率',
+        `net_profit_margin`      FLOAT         COMMENT '净利率',
+        `asset_liability_ratio`  FLOAT         COMMENT '资产负债率',
+        `current_ratio`          FLOAT         COMMENT '流动比率',
+        `quick_ratio`            FLOAT         COMMENT '速动比率',
+        `total_asset_turnover`   FLOAT         COMMENT '总资产周转率(次)',
+        `inventory_turnover`     FLOAT         COMMENT '存货周转率(次)',
+        `receivable_turnover`    FLOAT         COMMENT '应收账款周转率(次)',
+        `updated_at`             DATETIME      DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (`code`, `report_date`),
+        INDEX `idx_report_date` (`report_date`),
+        INDEX `idx_code` (`code`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+      COMMENT='个股财务分析指标-东方财富(回测用)';
+    """
+    with pymysql.connect(**mdb.MYSQL_CONN_DBAPI) as conn:
+        with conn.cursor() as db:
+            db.execute(ddl)
+    log.info(f"创建 {table_name} 表完成")
 
 
-# ─── 主流程 ───────────────────────────────────────────────────────────────────
+def _upsert_batch(rows):
+    """批量 upsert 财务数据到 cn_stock_financial"""
+    if not rows:
+        return
+    from sqlalchemy import text as sa_text
+
+    defaults = {f: None for f in _DB_FIELDS}
+    rows = [{**defaults, **{k: v for k, v in r.items() if k in _DB_FIELDS}} for r in rows]
+
+    placeholders = ", ".join([f":{f}" for f in _DB_FIELDS])
+    updates = ", ".join([f"`{f}`=VALUES(`{f}`)" for f in _DB_FIELDS
+                         if f not in ('code', 'report_date')])
+    sql = sa_text(f"""
+        INSERT INTO `cn_stock_financial` ({', '.join([f'`{f}`' for f in _DB_FIELDS])})
+        VALUES ({placeholders})
+        ON DUPLICATE KEY UPDATE {updates}, `updated_at`=CURRENT_TIMESTAMP
+    """)
+    try:
+        with mdb.engine().connect() as conn:
+            conn.execute(sql, rows)
+            conn.commit()
+    except Exception as e:
+        log.error(f"批量写入财务数据失败: {e}")
+        raise
+
+
+def get_stock_list():
+    """从数据库 cn_stock_spot 获取最新的A股股票列表"""
+    try:
+        rows = mdb.executeSqlFetch(
+            "SELECT DISTINCT `code` FROM `cn_stock_spot` "
+            "WHERE `date` = (SELECT MAX(`date`) FROM `cn_stock_spot`) "
+            "AND `code` REGEXP '^[036]' "
+            "ORDER BY `code`"
+        )
+        if rows:
+            codes = [r[0] for r in rows]
+            log.info(f"从数据库获取到 {len(codes)} 只A股代码")
+            return codes
+    except Exception as e:
+        log.warning(f"从数据库获取股票列表失败: {e}")
+
+    # 降级：通过 AKShare 获取
+    log.info("降级：通过 AKShare 获取股票列表...")
+    try:
+        df = ak.stock_info_a_code_name()
+        codes = df.iloc[:, 0].astype(str).str.zfill(6).tolist()
+        # 仅保留 A 股主板+创业板+中小板
+        codes = [c for c in codes if c[0] in ('0', '3', '6')]
+        log.info(f"从 AKShare 获取到 {len(codes)} 只A股代码")
+        return codes
+    except Exception as e:
+        log.error(f"获取股票列表失败: {e}")
+        return []
+
+
+def get_existing_report_dates(code):
+    """获取指定股票已有的报告期日期集合"""
+    rows = mdb.executeSqlFetch(
+        "SELECT `report_date` FROM `cn_stock_financial` WHERE `code` = %s",
+        (code,)
+    )
+    if rows:
+        return {str(r[0]) for r in rows}
+    return set()
+
+
+def fetch_single_stock(code, incremental=False):
+    """采集单只股票的财务数据
+
+    Args:
+        code: 6位股票代码
+        incremental: 增量模式，跳过已有报告期
+
+    Returns:
+        int: 入库记录数，-1 表示失败
+    """
+    secucode = _code_to_secucode(code)
+    try:
+        df = _retry_call(
+            lambda: ak.stock_financial_analysis_indicator_em(
+                symbol=secucode, indicator="按报告期"),
+            name=f"em_{secucode}"
+        )
+        if df is None or df.empty:
+            return 0
+    except Exception as e:
+        log.debug(f"[{code}] 财务数据获取失败: {e}")
+        return -1
+
+    # 仅保留需要的列
+    available_cols = {k: v for k, v in _EM_COL_MAP.items() if k in df.columns}
+    df = df[list(available_cols.keys())].copy()
+    df = df.rename(columns=available_cols)
+
+    # 处理报告期日期
+    if 'report_date' in df.columns:
+        df['report_date'] = pd.to_datetime(df['report_date'], errors='coerce').dt.date
+        df = df.dropna(subset=['report_date'])
+
+    if df.empty:
+        return 0
+
+    # 补充代码字段
+    df['code'] = code
+
+    # 数值字段处理
+    for c in df.columns:
+        if c in _NUMERIC_FIELDS:
+            df[c] = pd.to_numeric(df[c], errors='coerce')
+
+    # 增量模式：过滤掉已有报告期
+    if incremental:
+        existing = get_existing_report_dates(code)
+        if existing:
+            df = df[~df['report_date'].astype(str).isin(existing)]
+            if df.empty:
+                return 0
+
+    rows = _clean_nan(df.to_dict(orient='records'))
+    _upsert_batch(rows)
+    return len(rows)
+
+
+def fetch_all_stocks(stock_codes, incremental=False):
+    """批量采集所有股票的财务数据
+
+    Returns:
+        tuple: (成功数, 失败数, 跳过数, 入库总行数)
+    """
+    total = len(stock_codes)
+    success, fail, skip, total_rows = 0, 0, 0, 0
+
+    log.info(f"开始采集财务数据，共 {total} 只股票"
+             f"{'（增量模式）' if incremental else '（全量模式）'}")
+
+    for i, code in enumerate(stock_codes):
+        result = fetch_single_stock(code, incremental=incremental)
+        if result < 0:
+            fail += 1
+        elif result == 0:
+            skip += 1
+        else:
+            success += 1
+            total_rows += result
+
+        # 进度日志
+        done = i + 1
+        if done % 100 == 0 or done == total:
+            log.info(f"采集进度: {done}/{total} "
+                     f"(成功={success}, 跳过={skip}, 失败={fail}, 入库={total_rows}行)")
+
+        time.sleep(SLEEP_PER_STOCK)
+
+    log.info(f"财务数据采集完成: 成功={success}, 跳过={skip}, 失败={fail}, "
+             f"入库={total_rows}行")
+    return success, fail, skip, total_rows
+
+
+def get_financial_data(code, report_date=None):
+    """查询指定股票的财务数据（供回测使用）
+
+    Args:
+        code: 股票代码
+        report_date: 报告期截止日期（返回该日期及之前的最新数据）
+
+    Returns:
+        dict or None: 财务数据字典
+    """
+    if report_date:
+        rows = mdb.executeSqlFetch(
+            "SELECT * FROM `cn_stock_financial` "
+            "WHERE `code` = %s AND `report_date` <= %s "
+            "ORDER BY `report_date` DESC LIMIT 1",
+            (code, report_date)
+        )
+    else:
+        rows = mdb.executeSqlFetch(
+            "SELECT * FROM `cn_stock_financial` "
+            "WHERE `code` = %s "
+            "ORDER BY `report_date` DESC LIMIT 1",
+            (code,)
+        )
+    if not rows:
+        return None
+
+    # 获取列名
+    with mdb.get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM `cn_stock_financial` LIMIT 0")
+            col_names = [desc[0] for desc in cur.description]
+
+    return dict(zip(col_names, rows[0]))
+
+
+def get_financial_data_batch(codes, report_date=None):
+    """批量查询多只股票的最新财务数据（供回测使用）
+
+    Args:
+        codes: 股票代码列表
+        report_date: 报告期截止日期
+
+    Returns:
+        dict: {code: {field: value, ...}, ...}
+    """
+    if not codes:
+        return {}
+
+    table_name = TABLE_CN_STOCK_FINANCIAL['name']
+    if not mdb.checkTableIsExist(table_name):
+        return {}
+
+    placeholders = ','.join(['%s'] * len(codes))
+    if report_date:
+        sql = f"""
+            SELECT f.* FROM `cn_stock_financial` f
+            INNER JOIN (
+                SELECT `code`, MAX(`report_date`) as max_date
+                FROM `cn_stock_financial`
+                WHERE `code` IN ({placeholders}) AND `report_date` <= %s
+                GROUP BY `code`
+            ) latest ON f.`code` = latest.`code` AND f.`report_date` = latest.max_date
+        """
+        params = tuple(codes) + (report_date,)
+    else:
+        sql = f"""
+            SELECT f.* FROM `cn_stock_financial` f
+            INNER JOIN (
+                SELECT `code`, MAX(`report_date`) as max_date
+                FROM `cn_stock_financial`
+                WHERE `code` IN ({placeholders})
+                GROUP BY `code`
+            ) latest ON f.`code` = latest.`code` AND f.`report_date` = latest.max_date
+        """
+        params = tuple(codes)
+
+    try:
+        rows = mdb.executeSqlFetch(sql, params)
+        if not rows:
+            return {}
+
+        # 获取列名
+        with mdb.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM `cn_stock_financial` LIMIT 0")
+                col_names = [desc[0] for desc in cur.description]
+
+        result = {}
+        for row in rows:
+            d = dict(zip(col_names, row))
+            result[d['code']] = d
+        return result
+    except Exception as e:
+        log.error(f"批量查询财务数据失败: {e}")
+        return {}
+
+
 def main():
-    parser = argparse.ArgumentParser(description="A股历史财务数据采集")
+    parser = argparse.ArgumentParser(description="A股历史财务数据采集（项目集成版）")
     parser.add_argument("--test", type=int, default=0,
                         help="测试模式：仅采集前N只股票")
-    parser.add_argument("--skip-sina", action="store_true",
-                        help="跳过新浪财经接口")
-    parser.add_argument("--skip-em", action="store_true",
-                        help="跳过东方财富接口")
-    parser.add_argument("--skip-pb", action="store_true",
-                        help="跳过全市场PB数据")
+    parser.add_argument("--incremental", action="store_true",
+                        help="增量模式：仅采集新报告期数据")
     args = parser.parse_args()
 
     log.info("=" * 60)
-    log.info("A股历史财务数据采集开始")
+    log.info("A股财务数据采集开始")
     log.info(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     if args.test:
         log.info(f"[测试模式] 仅采集前 {args.test} 只股票")
+    if args.incremental:
+        log.info("[增量模式] 仅采集新报告期数据")
     log.info("=" * 60)
 
-    # 1. 数据库初始化
-    engine = get_engine()
-    init_tables(engine)
+    # 1. 建表
+    create_financial_table()
 
     # 2. 获取股票列表
-    stock_df = fetch_stock_list()
+    stock_codes = get_stock_list()
+    if not stock_codes:
+        log.error("无法获取股票列表，退出")
+        return
+
     if args.test:
-        stock_df = stock_df.head(args.test)
+        stock_codes = stock_codes[:args.test]
 
-    # 3. 保存基础信息
-    save_stock_basic(engine, stock_df)
-
-    # 4. 全市场历史PB
-    pb_count = 0
-    if not args.skip_pb:
-        pb_count = fetch_market_pb_all(engine)
-
-    # 5. 新浪财经财务指标
-    sina_ok, sina_fail = 0, 0
-    if not args.skip_sina:
-        sina_ok, sina_fail = fetch_sina_financial_indicators(engine, stock_df)
-
-    # 6. 东方财富财务指标
-    em_ok, em_fail = 0, 0
-    if not args.skip_em:
-        em_ok, em_fail = fetch_em_financial_indicators(engine, stock_df)
+    # 3. 采集
+    success, fail, skip, total_rows = fetch_all_stocks(
+        stock_codes, incremental=args.incremental)
 
     log.info("=" * 60)
     log.info("采集完成汇总:")
-    log.info(f"  股票基础信息: {len(stock_df)} 条")
-    log.info(f"  全市场PB历史: {pb_count} 条")
-    log.info(f"  新浪财务指标: 成功={sina_ok}, 失败={sina_fail}")
-    log.info(f"  东方财富财务指标: 成功={em_ok}, 失败={em_fail}")
+    log.info(f"  股票数: {len(stock_codes)}")
+    log.info(f"  成功: {success}, 失败: {fail}, 跳过: {skip}")
+    log.info(f"  入库总行数: {total_rows}")
     log.info(f"结束时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     log.info("=" * 60)
 
 
 if __name__ == "__main__":
+    # 配置日志
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(
+                os.path.join(os.path.dirname(__file__), '..', 'log', 'stock_financial_data.log'),
+                encoding='utf-8'
+            ),
+        ],
+    )
     main()

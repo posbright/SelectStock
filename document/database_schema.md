@@ -678,7 +678,69 @@ CREATE TABLE IF NOT EXISTS `cn_stock_selection` (
 
 ---
 
-### 3.15 股票回测数据表 (cn_stock_backtest_data)
+### 3.15 个股财务分析指标表 (cn_stock_financial)
+
+存储个股历史财务分析指标数据（东方财富数据源），为回测引擎提供真实基本面数据支持。由 `stock_financial_data.py` 作业填充，月度增量更新。
+
+```sql
+CREATE TABLE IF NOT EXISTS `cn_stock_financial` (
+    `code`                   VARCHAR(6)    NOT NULL COMMENT '股票代码',
+    `report_date`            DATE          NOT NULL COMMENT '报告期',
+    `report_name`            VARCHAR(20)   COMMENT '报告期名称',
+    `eps`                    FLOAT         COMMENT '基本每股收益(元)',
+    `bps`                    FLOAT         COMMENT '每股净资产(元)',
+    `ocfps`                  FLOAT         COMMENT '每股经营现金流(元)',
+    `revenue`                FLOAT         COMMENT '营业总收入(元)',
+    `net_profit`             FLOAT         COMMENT '归母净利润(元)',
+    `revenue_yoy`            FLOAT         COMMENT '营收同比增长',
+    `net_profit_yoy`         FLOAT         COMMENT '净利润同比增长',
+    `roe`                    FLOAT         COMMENT 'ROE净资产收益率',
+    `roa`                    FLOAT         COMMENT '总资产净利率',
+    `gross_margin`           FLOAT         COMMENT '毛利率',
+    `net_profit_margin`      FLOAT         COMMENT '净利率',
+    `asset_liability_ratio`  FLOAT         COMMENT '资产负债率',
+    `current_ratio`          FLOAT         COMMENT '流动比率',
+    `quick_ratio`            FLOAT         COMMENT '速动比率',
+    `total_asset_turnover`   FLOAT         COMMENT '总资产周转率(次)',
+    `inventory_turnover`     FLOAT         COMMENT '存货周转率(次)',
+    `receivable_turnover`    FLOAT         COMMENT '应收账款周转率(次)',
+    `updated_at`             DATETIME      DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`code`, `report_date`),
+    INDEX `idx_report_date` (`report_date`),
+    INDEX `idx_code` (`code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+  COMMENT='个股财务分析指标-东方财富(回测用)';
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| code | VARCHAR(6) | 股票代码 |
+| report_date | DATE | 报告期（如 2024-12-31） |
+| report_name | VARCHAR(20) | 报告期名称（如"2024年年报"） |
+| eps | FLOAT | 基本每股收益（元） |
+| bps | FLOAT | 每股净资产（元） |
+| ocfps | FLOAT | 每股经营现金流（元） |
+| revenue | FLOAT | 营业总收入（元） |
+| net_profit | FLOAT | 归属母公司净利润（元） |
+| revenue_yoy | FLOAT | 营收同比增长率 |
+| net_profit_yoy | FLOAT | 净利润同比增长率 |
+| roe | FLOAT | 净资产收益率（ROE） |
+| roa | FLOAT | 总资产净利率（ROA） |
+| gross_margin | FLOAT | 销售毛利率 |
+| net_profit_margin | FLOAT | 销售净利率 |
+| asset_liability_ratio | FLOAT | 资产负债率 |
+| current_ratio | FLOAT | 流动比率 |
+| quick_ratio | FLOAT | 速动比率 |
+| total_asset_turnover | FLOAT | 总资产周转率（次） |
+| inventory_turnover | FLOAT | 存货周转率（次） |
+| receivable_turnover | FLOAT | 应收账款周转率（次） |
+| updated_at | DATETIME | 记录更新时间 |
+
+**数据来源**：AKShare `stock_financial_analysis_indicator_em` 接口（东方财富）
+
+---
+
+### 3.16 股票回测数据表 (cn_stock_backtest_data)
 
 存储策略回测收益率数据。
 
@@ -722,6 +784,10 @@ CREATE TABLE IF NOT EXISTS `cn_stock_backtest_data` (
 │  cn_stock_selection (综合选股)                                    │
 ├─────────────────────────────────────────────────────────────────┤
 │  cn_stock_attention (我的关注)                                    │
+├─────────────────────────────────────────────────────────────────┤
+│  cn_stock_financial (个股财务分析指标，回测用)                      │
+├─────────────────────────────────────────────────────────────────┤
+│  cn_stock_trade_date (交易日历)                                   │
 ├─────────────────────────────────────────────────────────────────┤
 │  cn_stock_fund_flow_industry (行业资金流向)                       │
 │  cn_stock_fund_flow_concept (概念资金流向)                        │
@@ -771,6 +837,8 @@ CREATE TABLE IF NOT EXISTS `cn_stock_backtest_data` (
 | 35 | cn_stock_spot_buy | 基本面选股 | 基本面选股中间结果 |
 | 36 | cn_stock_top | 股票龙虎榜(新浪) | 新浪数据源龙虎榜（未启用） |
 | 37 | cn_stock_foreign_key | 股票外键 | 股票代码→市场前缀映射 |
+| 38 | cn_stock_financial | 个股财务分析指标 | 回测用历史财务数据（东方财富） |
+| 39 | cn_stock_trade_date | 交易日历 | A股交易日历表 |
 
 ---
 

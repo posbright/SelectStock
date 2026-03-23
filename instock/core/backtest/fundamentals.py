@@ -712,7 +712,18 @@ class FundamentalDataProvider:
 
     # ── 合成基本面数据 ──
 
-    # 字段默认值范围：(mean, std) — 用正态分布 + code hash 种子生成
+    # 聚宽字段名 → cn_stock_financial 数据库字段名的映射
+    _FIELD_DB_MAP = {
+        'inc_total_revenue_year_on_year': 'revenue_yoy',
+        'inc_net_profit_year_on_year': 'net_profit_yoy',
+        'inc_revenue_year_on_year': 'revenue_yoy',
+        'roe': 'roe',
+        'eps': 'eps',
+        'net_profit_margin': 'net_profit_margin',
+        'gross_profit_margin': 'gross_margin',
+    }
+
+    # 字段默认值范围：(mean, std) — 用正态分布 + code hash 种子生成（兜底合成）
     _SYNTHETIC_FIELD_RANGES = {
         'inc_total_revenue_year_on_year': (20.0, 15.0),
         'inc_net_profit_year_on_year': (25.0, 20.0),
@@ -730,26 +741,102 @@ class FundamentalDataProvider:
         'net_finance_cash_flow': (-1e8, 2e8),
     }
 
+    def _load_real_financial_data(self, codes, date_str):
+        """从 cn_stock_financial 表加载真实财务数据
+
+        Args:
+            codes: 股票代码列表
+            date_str: 回测日期（用于查找该日期之前的最新报告期）
+
+        Returns:
+            dict: {code: {db_field: value, ...}, ...}
+        """
+        try:
+            from instock.job.stock_financial_data import get_financial_data_batch
+            return get_financial_data_batch(list(codes), report_date=date_str)
+        except Exception as e:
+            logging.debug(f"[基本面] 加载真实财务数据失败: {e}")
+            return {}
+
     def _generate_synthetic_fields(self, df, fields):
-        """为 DataFrame 中缺失的字段生成确定性合成值（含季度时变噪声）"""
-        # 获取当前回测日期的季度标识，让合成数据按季度变化
+        """为 DataFrame 中缺失的字段填充值。优先使用真实财务数据，缺失时降级为合成值。"""
+        # 获取当前回测日期
         current_dt = getattr(self._engine, 'context', None)
         quarter_key = ''
+        date_str = None
         if current_dt and hasattr(current_dt, 'current_dt'):
             dt = current_dt.current_dt
             if hasattr(dt, 'year'):
                 quarter_key = f"{dt.year}Q{(dt.month - 1) // 3 + 1}"
+                date_str = dt.strftime('%Y-%m-%d') if hasattr(dt, 'strftime') else str(dt)[:10]
+
+        # 尝试加载真实财务数据
+        real_data = {}
+        if date_str and len(df) > 0:
+            real_data = self._load_real_financial_data(df['code'].tolist(), date_str)
 
         for fname in fields:
             if fname in df.columns:
                 continue
-            mean, std = self._SYNTHETIC_FIELD_RANGES.get(fname, (50.0, 20.0))
+
+            db_field = self._FIELD_DB_MAP.get(fname)
             values = []
+
             for code in df['code']:
-                # 种子加入季度信息，使合成值按季度变化（模拟季报更新）
-                seed = hash(code + fname + quarter_key) & 0xFFFFFFFF
-                rng = np.random.RandomState(seed)
-                values.append(rng.normal(mean, std))
+                real_val = None
+                # 尝试从真实数据获取
+                if db_field and code in real_data:
+                    real_val = real_data[code].get(db_field)
+                    if real_val is not None:
+                        try:
+                            real_val = float(real_val)
+                        except (TypeError, ValueError):
+                            real_val = None
+
+                # 特殊字段：从真实数据推算
+                if real_val is None and code in real_data:
+                    rd = real_data[code]
+                    if fname == 'total_assets':
+                        # 从 ROA 和 净利润推算: 总资产 = 净利润 / ROA * 100
+                        roa = rd.get('roa')
+                        np_ = rd.get('net_profit')
+                        if roa and np_ and float(roa) != 0:
+                            try:
+                                real_val = float(np_) / (float(roa) / 100)
+                            except (TypeError, ValueError, ZeroDivisionError):
+                                pass
+                    elif fname == 'total_liability':
+                        # 从资产负债率和总资产推算
+                        alr = rd.get('asset_liability_ratio')
+                        roa_val = rd.get('roa')
+                        np_val = rd.get('net_profit')
+                        if alr and roa_val and np_val and float(roa_val) != 0:
+                            try:
+                                ta = float(np_val) / (float(roa_val) / 100)
+                                real_val = ta * (float(alr) / 100)
+                            except (TypeError, ValueError, ZeroDivisionError):
+                                pass
+                    elif fname == 'net_operate_cash_flow':
+                        # 从每股经营现金流 × 估算股本
+                        ocfps = rd.get('ocfps')
+                        if ocfps and self._stock_info is not None:
+                            match = self._stock_info.loc[
+                                self._stock_info['code'] == code, 'total_shares']
+                            if len(match) > 0 and match.iloc[0] > 0:
+                                try:
+                                    real_val = float(ocfps) * match.iloc[0]
+                                except (TypeError, ValueError):
+                                    pass
+
+                if real_val is not None:
+                    values.append(real_val)
+                else:
+                    # 降级：确定性合成值
+                    mean, std = self._SYNTHETIC_FIELD_RANGES.get(fname, (50.0, 20.0))
+                    seed = hash(code + fname + quarter_key) & 0xFFFFFFFF
+                    rng = np.random.RandomState(seed)
+                    values.append(rng.normal(mean, std))
+
             df[fname] = values
 
     def _ensure_stocks_loaded(self, codes):

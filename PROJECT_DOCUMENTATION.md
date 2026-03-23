@@ -36,6 +36,7 @@
 ### 技术特点
 
 - **多数据源支持**：东方财富 → 腾讯财经 → 新浪财经，自动容错切换
+- **AKShare财务数据**：通过AKShare获取东方财富个股财务分析指标，为回测提供真实基本面数据
 - **数据源健康度追踪**：连续失败自动降级，渐进退避（300s→3600s），恢复后自动提升
 - **增量缓存**：历史数据以天为单位增量更新，提高效率
 - **多线程处理**：采用并发处理，提高数据抓取和计算效率
@@ -259,7 +260,7 @@ SelectStock/
 │   │   └── backtest/           # 🔄 回测模块
 │   │       ├── rate_stats.py           # 收益率统计
 │   │       ├── portfolio_engine.py     # 聚宽风格组合回测引擎
-│   │       ├── fundamentals.py         # 基本面数据（市值/PB/PE）
+│   │       ├── fundamentals.py         # 基本面数据（真实财务数据优先，合成数据兜底）
 │   │       ├── strategy_sandbox.py     # 策略安全沙箱
 │   │       ├── strategy_context.py     # 回测上下文/持仓/交易
 │   │       ├── data_feed.py            # K线数据加载层
@@ -280,8 +281,8 @@ SelectStock/
 │   │   ├── backtest_data_daily_job.py # 回测数据作业
 │   │   ├── indicators_data_daily_job.py # [旧版] 指标数据作业（已被streaming替代）
 │   │   ├── klinepattern_data_daily_job.py # [旧版] K线形态作业（已被streaming替代）
-│   │   └── strategy_data_daily_job.py # [旧版] 策略选股作业（已被streaming替代）
-│   │
+│   │   ├── strategy_data_daily_job.py # [旧版] 策略选股作业（已被streaming替代）
+│   │   └── stock_financial_data.py # 个股财务数据获取（AKShare东方财富，月度增量）
 │   │   
 │   ├── web/                     # 🌐 Web服务
 │   │   ├── web_service.py      # Tornado主服务（路由注册）
@@ -339,7 +340,7 @@ SelectStock/
 ├── cron/                        # ⏲️ 定时任务配置
 │   ├── cron.hourly/            # 每小时任务
 │   ├── cron.workdayly/         # 每工作日任务
-│   └── cron.monthly/           # 每月任务
+│   └── cron.monthly/           # 每月任务（含财务数据增量更新）
 │
 ├── supervisor/                  # 🔧 进程管理
 │   └── supervisord.conf        # Supervisor配置
@@ -368,6 +369,7 @@ SelectStock/
 | 资金流向 | 东方财富 | 新浪财经 | 主力/散户资金 |
 | 龙虎榜 | 东方财富 | 新浪财经 | 机构买卖数据 |
 | 综合选股 | 东方财富 | 新浪财经 | 200+筛选条件 |
+| 个股财务指标 | AKShare(东方财富) | — | 20项财务分析指标，月度更新 |
 
 ### 2. 技术指标模块 (indicator/)
 
@@ -474,7 +476,7 @@ SelectStock/
     ↓   提取 initialize / handle_data / run_daily / run_weekly
 回测引擎 (portfolio_engine.py)
     ↓   逐交易日驱动
-    ├── 基本面数据 (fundamentals.py)  — 市值/PB/PE 查询
+    ├── 基本面数据 (fundamentals.py)  — 真实财务数据(cn_stock_financial) + 合成兜底
     ├── K线数据 (data_feed.py)        — 缓存 + EastMoney API
     ├── 策略上下文 (strategy_context.py) — Portfolio/Position/T+1
     └── 风险指标 (risk_metrics.py)     — 25项量化指标
@@ -519,6 +521,12 @@ SelectStock/
 1. **数据库** `cn_stock_spot` — 最快，含PB(pbnewmrq)
 2. **push2his API** — 东方财富实时数据(f12/f14/f2/f20/f23)，代理加速
 3. **stock_zh_a_spot_em** — AkShare全市场API，备用
+
+#### 财务数据源（回测 fundamentals.py）
+
+回测引擎中 `get_fundamentals()` 查询 indicator/balance/cash_flow 字段时，优先从 `cn_stock_financial` 表读取真实财务数据（EPS、ROE、营收增长等20项指标），无数据时自动降级为确定性合成数据（基于股票代码+字段+季度的哈希值）。
+
+财务数据由 `stock_financial_data.py` 通过 AKShare `stock_financial_analysis_indicator_em` 接口获取，月度增量更新。
 
 #### 数据缓存策略
 
@@ -657,6 +665,16 @@ python streaming_analysis_job.py
 
 # 回测数据
 python backtest_data_daily_job.py
+
+# ── 财务数据（月度运行，AKShare东方财富） ──
+# 全量获取所有A股历史财务数据（首次运行，耗时较长）
+python -m instock.job.stock_financial_data
+
+# 增量更新（仅获取最近一年数据，月度定时任务使用）
+python -m instock.job.stock_financial_data --incremental
+
+# 测试模式（仅获取前N只股票，用于验证）
+python -m instock.job.stock_financial_data --test 5
 
 # ── 旧版独立作业（仍可运行但内存较高，~1.6GB） ──
 python indicators_data_daily_job.py

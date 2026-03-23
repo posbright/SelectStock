@@ -55,6 +55,36 @@ def create_new_base_table():
                                   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;"""
             db.execute(create_trade_date_sql)
 
+            # 个股历史财务数据表（回测用，由 stock_financial_data.py 填充）
+            create_financial_sql = """CREATE TABLE IF NOT EXISTS `cn_stock_financial` (
+                                  `code`                   VARCHAR(6)    NOT NULL COMMENT '股票代码',
+                                  `report_date`            DATE          NOT NULL COMMENT '报告期',
+                                  `report_name`            VARCHAR(20)   COMMENT '报告期名称',
+                                  `eps`                    FLOAT         COMMENT '基本每股收益(元)',
+                                  `bps`                    FLOAT         COMMENT '每股净资产(元)',
+                                  `ocfps`                  FLOAT         COMMENT '每股经营现金流(元)',
+                                  `revenue`                FLOAT         COMMENT '营业总收入(元)',
+                                  `net_profit`             FLOAT         COMMENT '归母净利润(元)',
+                                  `revenue_yoy`            FLOAT         COMMENT '营收同比增长(%)',
+                                  `net_profit_yoy`         FLOAT         COMMENT '净利润同比增长(%)',
+                                  `roe`                    FLOAT         COMMENT 'ROE净资产收益率(%)',
+                                  `roa`                    FLOAT         COMMENT '总资产净利率(%)',
+                                  `gross_margin`           FLOAT         COMMENT '毛利率(%)',
+                                  `net_profit_margin`      FLOAT         COMMENT '净利率(%)',
+                                  `asset_liability_ratio`  FLOAT         COMMENT '资产负债率(%)',
+                                  `current_ratio`          FLOAT         COMMENT '流动比率',
+                                  `quick_ratio`            FLOAT         COMMENT '速动比率',
+                                  `total_asset_turnover`   FLOAT         COMMENT '总资产周转率(次)',
+                                  `inventory_turnover`     FLOAT         COMMENT '存货周转率(次)',
+                                  `receivable_turnover`    FLOAT         COMMENT '应收账款周转率(次)',
+                                  `updated_at`             DATETIME      DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                                  PRIMARY KEY (`code`, `report_date`),
+                                  INDEX `idx_report_date` (`report_date`),
+                                  INDEX `idx_code` (`code`)
+                                  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+                                    COMMENT='个股财务分析指标-东方财富(回测用)';"""
+            db.execute(create_financial_sql)
+
 
 def check_database():
     with pymysql.connect(**mdb.MYSQL_CONN_DBAPI) as conn:
