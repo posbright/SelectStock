@@ -670,11 +670,17 @@ python backtest_data_daily_job.py
 # 全量获取所有A股历史财务数据（首次运行，耗时较长）
 python -m instock.job.stock_financial_data
 
-# 增量更新（仅获取最近一年数据，月度定时任务使用）
+# 仅获取最近N年数据（推荐首次使用，减少耗时）
+python -m instock.job.stock_financial_data --years 5
+
+# 增量更新（仅获取已入库股票的新报告期，月度定时任务使用）
 python -m instock.job.stock_financial_data --incremental
 
 # 测试模式（仅获取前N只股票，用于验证）
 python -m instock.job.stock_financial_data --test 5
+
+# 组合使用（测试模式 + 年份过滤）
+python -m instock.job.stock_financial_data --test 10 --years 3
 
 # ── 旧版独立作业（仍可运行但内存较高，~1.6GB） ──
 python indicators_data_daily_job.py

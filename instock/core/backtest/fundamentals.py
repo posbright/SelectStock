@@ -713,6 +713,8 @@ class FundamentalDataProvider:
     # ── 合成基本面数据 ──
 
     # 聚宽字段名 → cn_stock_financial 数据库字段名的映射
+    # 注：inc_total_revenue_year_on_year 和 inc_revenue_year_on_year 均映射到 revenue_yoy，
+    # 因为东方财富只提供"营业总收入同比增长"一个字段，二者含义近似，作为兼容性兜底。
     _FIELD_DB_MAP = {
         'inc_total_revenue_year_on_year': 'revenue_yoy',
         'inc_net_profit_year_on_year': 'net_profit_yoy',

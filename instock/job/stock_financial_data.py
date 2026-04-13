@@ -18,6 +18,7 @@ A股历史财务数据采集（项目集成版）
   python stock_financial_data.py                 # 全量采集
   python stock_financial_data.py --test 10       # 测试模式，仅采集前10只
   python stock_financial_data.py --incremental   # 增量模式，仅采集最近报告期
+  python stock_financial_data.py --years 5       # 仅采集最近5年的数据
 """
 
 import logging
@@ -229,12 +230,13 @@ def get_existing_report_dates(code):
     return set()
 
 
-def fetch_single_stock(code, incremental=False):
+def fetch_single_stock(code, incremental=False, min_date=None):
     """采集单只股票的财务数据
 
     Args:
         code: 6位股票代码
         incremental: 增量模式，跳过已有报告期
+        min_date: 最早报告期日期（date对象），早于此日期的记录将被过滤
 
     Returns:
         int: 入库记录数，-1 表示失败
@@ -265,6 +267,12 @@ def fetch_single_stock(code, incremental=False):
     if df.empty:
         return 0
 
+    # 按年份过滤
+    if min_date is not None:
+        df = df[df['report_date'] >= min_date]
+        if df.empty:
+            return 0
+
     # 补充代码字段
     df['code'] = code
 
@@ -286,7 +294,7 @@ def fetch_single_stock(code, incremental=False):
     return len(rows)
 
 
-def fetch_all_stocks(stock_codes, incremental=False):
+def fetch_all_stocks(stock_codes, incremental=False, min_date=None):
     """批量采集所有股票的财务数据
 
     Returns:
@@ -295,11 +303,11 @@ def fetch_all_stocks(stock_codes, incremental=False):
     total = len(stock_codes)
     success, fail, skip, total_rows = 0, 0, 0, 0
 
-    log.info(f"开始采集财务数据，共 {total} 只股票"
-             f"{'（增量模式）' if incremental else '（全量模式）'}")
+    mode = '增量模式' if incremental else ('全量模式' if min_date is None else f'近{min_date}起')
+    log.info(f"开始采集财务数据，共 {total} 只股票（{mode}）")
 
     for i, code in enumerate(stock_codes):
-        result = fetch_single_stock(code, incremental=incremental)
+        result = fetch_single_stock(code, incremental=incremental, min_date=min_date)
         if result < 0:
             fail += 1
         elif result == 0:
@@ -314,6 +322,7 @@ def fetch_all_stocks(stock_codes, incremental=False):
             log.info(f"采集进度: {done}/{total} "
                      f"(成功={success}, 跳过={skip}, 失败={fail}, 入库={total_rows}行)")
 
+        # 每次API调用后休眠（即使失败/跳过，也已发起了请求）
         time.sleep(SLEEP_PER_STOCK)
 
     log.info(f"财务数据采集完成: 成功={success}, 跳过={skip}, 失败={fail}, "
@@ -332,29 +341,28 @@ def get_financial_data(code, report_date=None):
         dict or None: 财务数据字典
     """
     if report_date:
-        rows = mdb.executeSqlFetch(
-            "SELECT * FROM `cn_stock_financial` "
-            "WHERE `code` = %s AND `report_date` <= %s "
-            "ORDER BY `report_date` DESC LIMIT 1",
-            (code, report_date)
-        )
+        sql = ("SELECT * FROM `cn_stock_financial` "
+               "WHERE `code` = %s AND `report_date` <= %s "
+               "ORDER BY `report_date` DESC LIMIT 1")
+        params = (code, report_date)
     else:
-        rows = mdb.executeSqlFetch(
-            "SELECT * FROM `cn_stock_financial` "
-            "WHERE `code` = %s "
-            "ORDER BY `report_date` DESC LIMIT 1",
-            (code,)
-        )
-    if not rows:
+        sql = ("SELECT * FROM `cn_stock_financial` "
+               "WHERE `code` = %s "
+               "ORDER BY `report_date` DESC LIMIT 1")
+        params = (code,)
+
+    try:
+        with mdb.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                row = cur.fetchone()
+                if not row:
+                    return None
+                col_names = [desc[0] for desc in cur.description]
+                return dict(zip(col_names, row))
+    except Exception as e:
+        log.error(f"查询财务数据失败[{code}]: {e}")
         return None
-
-    # 获取列名
-    with mdb.get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM `cn_stock_financial` LIMIT 0")
-            col_names = [desc[0] for desc in cur.description]
-
-    return dict(zip(col_names, rows[0]))
 
 
 def get_financial_data_batch(codes, report_date=None):
@@ -399,14 +407,12 @@ def get_financial_data_batch(codes, report_date=None):
         params = tuple(codes)
 
     try:
-        rows = mdb.executeSqlFetch(sql, params)
-        if not rows:
-            return {}
-
-        # 获取列名
         with mdb.get_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT * FROM `cn_stock_financial` LIMIT 0")
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+                if not rows:
+                    return {}
                 col_names = [desc[0] for desc in cur.description]
 
         result = {}
@@ -425,7 +431,15 @@ def main():
                         help="测试模式：仅采集前N只股票")
     parser.add_argument("--incremental", action="store_true",
                         help="增量模式：仅采集新报告期数据")
+    parser.add_argument("--years", type=int, default=0,
+                        help="仅采集最近N年的数据（0=不限制）")
     args = parser.parse_args()
+
+    # 计算日期过滤
+    from datetime import date as _date
+    min_date = None
+    if args.years > 0:
+        min_date = _date(datetime.now().year - args.years, 1, 1)
 
     log.info("=" * 60)
     log.info("A股财务数据采集开始")
@@ -434,6 +448,8 @@ def main():
         log.info(f"[测试模式] 仅采集前 {args.test} 只股票")
     if args.incremental:
         log.info("[增量模式] 仅采集新报告期数据")
+    if min_date:
+        log.info(f"[年份过滤] 仅保留 {min_date} 之后的报告期")
     log.info("=" * 60)
 
     # 1. 建表
@@ -450,7 +466,7 @@ def main():
 
     # 3. 采集
     success, fail, skip, total_rows = fetch_all_stocks(
-        stock_codes, incremental=args.incremental)
+        stock_codes, incremental=args.incremental, min_date=min_date)
 
     log.info("=" * 60)
     log.info("采集完成汇总:")

@@ -337,6 +337,26 @@ class TestMainEntryPoint(unittest.TestCase):
         args, kwargs = mock_fetch.call_args
         self.assertEqual(len(args[0]), 1)  # 只取1只
 
+    @patch('instock.job.stock_financial_data.fetch_all_stocks', return_value=(2, 0, 0, 40))
+    @patch('instock.job.stock_financial_data.get_stock_list', return_value=['000001', '000002'])
+    @patch('instock.job.stock_financial_data.create_financial_table')
+    def test_main_years_mode(self, mock_create, mock_list, mock_fetch):
+        """--years 模式应传递 min_date 参数"""
+        from instock.job.stock_financial_data import main
+        from datetime import date
+        with patch('sys.argv', ['prog', '--years', '5']):
+            main()
+        mock_fetch.assert_called_once()
+        args, kwargs = mock_fetch.call_args
+        min_date = kwargs.get('min_date')
+        self.assertIsNotNone(min_date)
+        self.assertIsInstance(min_date, date)
+        # 5年前的1月1日
+        expected_year = date.today().year - 5
+        self.assertEqual(min_date.year, expected_year)
+        self.assertEqual(min_date.month, 1)
+        self.assertEqual(min_date.day, 1)
+
 
 if __name__ == '__main__':
     unittest.main()
