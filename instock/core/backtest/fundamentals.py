@@ -757,7 +757,7 @@ class FundamentalDataProvider:
             from instock.job.stock_financial_data import get_financial_data_batch
             return get_financial_data_batch(list(codes), report_date=date_str)
         except Exception as e:
-            logging.debug(f"[基本面] 加载真实财务数据失败: {e}")
+            logging.warning(f"[基本面] 加载真实财务数据失败: {e}")
             return {}
 
     def _generate_synthetic_fields(self, df, fields):
@@ -802,7 +802,7 @@ class FundamentalDataProvider:
                         # 从 ROA 和 净利润推算: 总资产 = 净利润 / ROA * 100
                         roa = rd.get('roa')
                         np_ = rd.get('net_profit')
-                        if roa and np_ and float(roa) != 0:
+                        if roa is not None and np_ is not None and float(roa) != 0:
                             try:
                                 real_val = float(np_) / (float(roa) / 100)
                             except (TypeError, ValueError, ZeroDivisionError):
@@ -812,7 +812,7 @@ class FundamentalDataProvider:
                         alr = rd.get('asset_liability_ratio')
                         roa_val = rd.get('roa')
                         np_val = rd.get('net_profit')
-                        if alr and roa_val and np_val and float(roa_val) != 0:
+                        if alr is not None and roa_val is not None and np_val is not None and float(roa_val) != 0:
                             try:
                                 ta = float(np_val) / (float(roa_val) / 100)
                                 real_val = ta * (float(alr) / 100)
@@ -821,7 +821,7 @@ class FundamentalDataProvider:
                     elif fname == 'net_operate_cash_flow':
                         # 从每股经营现金流 × 估算股本
                         ocfps = rd.get('ocfps')
-                        if ocfps and self._stock_info is not None:
+                        if ocfps is not None and self._stock_info is not None:
                             match = self._stock_info.loc[
                                 self._stock_info['code'] == code, 'total_shares']
                             if len(match) > 0 and match.iloc[0] > 0:

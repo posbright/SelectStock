@@ -321,6 +321,45 @@ class TestFundamentalsIntegration(unittest.TestCase):
         self.assertIsInstance(result, tuple)
         self.assertEqual(result[0], 'div_lt')
 
+    def test_zero_value_not_treated_as_missing(self):
+        """DB中值为0.0时应使用真实值0而非合成随机值（truthiness bug回归测试）"""
+        from instock.core.backtest.fundamentals import FundamentalDataProvider
+
+        mock_engine = MagicMock()
+        mock_engine.context = MagicMock()
+        mock_engine.context.current_dt = datetime(2024, 6, 15)
+
+        provider = FundamentalDataProvider(mock_engine)
+        provider._initialized = True
+        provider._stock_info = pd.DataFrame({
+            'code': ['000001'],
+            'total_shares': [1e10],
+            'current_mcap': [3000],
+        })
+
+        df = pd.DataFrame({'code': ['000001']})
+
+        # ocfps=0.0 → net_operate_cash_flow 应为 0，不应降级为合成值
+        # alr=0.0 → total_liability 应为 0（零负债），不应降级为合成值
+        real_data = {
+            '000001': {
+                'ocfps': 0.0,
+                'roa': 5.0,
+                'net_profit': 1e9,
+                'asset_liability_ratio': 0.0,
+            }
+        }
+
+        with patch('instock.core.backtest.fundamentals.FundamentalDataProvider._load_real_financial_data',
+                   return_value=real_data):
+            provider._generate_synthetic_fields(
+                df, {'net_operate_cash_flow', 'total_liability'})
+
+        # ocfps=0 × total_shares = 0，不是随机正数
+        self.assertEqual(df['net_operate_cash_flow'].iloc[0], 0.0)
+        # alr=0% → total_liability = total_assets × 0 = 0
+        self.assertEqual(df['total_liability'].iloc[0], 0.0)
+
 
 class TestMainEntryPoint(unittest.TestCase):
     """验证 main() 函数的参数解析和流程"""
