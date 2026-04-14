@@ -300,8 +300,9 @@ class TestFundamentalsIntegration(unittest.TestCase):
         self.assertAlmostEqual(df['inc_net_profit_year_on_year'].iloc[0], 20.3, places=1)
         self.assertAlmostEqual(df['roe'].iloc[0], 12.8, places=1)
         self.assertAlmostEqual(df['eps'].iloc[0], 2.07, places=2)
-        # gross_profit_margin 映射到 gross_margin 为 None，应降级为合成值
-        self.assertTrue(np.isfinite(df['gross_profit_margin'].iloc[0]))
+        # gross_profit_margin 映射到 gross_margin 为 None，
+        # 真实数据基础设施可用时应为 NaN（而非合成随机值）
+        self.assertTrue(np.isnan(df['gross_profit_margin'].iloc[0]))
 
     def test_query_api_objects_exist(self):
         """聚宽风格的查询 API 对象应正常导入"""
@@ -359,6 +360,73 @@ class TestFundamentalsIntegration(unittest.TestCase):
         self.assertEqual(df['net_operate_cash_flow'].iloc[0], 0.0)
         # alr=0% → total_liability = total_assets × 0 = 0
         self.assertEqual(df['total_liability'].iloc[0], 0.0)
+
+    def test_no_real_data_stock_gets_nan(self):
+        """无真实财务数据的股票应得到NaN而非合成随机值（防止污染选股）"""
+        from instock.core.backtest.fundamentals import FundamentalDataProvider
+
+        mock_engine = MagicMock()
+        mock_engine.context = MagicMock()
+        mock_engine.context.current_dt = datetime(2024, 6, 15)
+
+        provider = FundamentalDataProvider(mock_engine)
+        provider._initialized = True
+        provider._stock_info = pd.DataFrame({
+            'code': ['000001', '999999'],
+            'total_shares': [1e10, 5e9],
+            'current_mcap': [3000, 100],
+        })
+
+        df = pd.DataFrame({'code': ['000001', '999999']})
+
+        # 只有 000001 有真实数据；999999 无数据
+        real_data = {
+            '000001': {
+                'revenue_yoy': 25.0,
+                'net_profit_yoy': 30.0,
+                'roe': 15.0,
+            }
+        }
+
+        with patch('instock.core.backtest.fundamentals.FundamentalDataProvider._load_real_financial_data',
+                   return_value=real_data):
+            provider._generate_synthetic_fields(
+                df, {'inc_total_revenue_year_on_year', 'inc_net_profit_year_on_year', 'roe'})
+
+        # 000001 有真实数据，应使用真值
+        self.assertAlmostEqual(df['inc_total_revenue_year_on_year'].iloc[0], 25.0)
+        self.assertAlmostEqual(df['roe'].iloc[0], 15.0)
+        # 999999 无真实数据，所有字段应为 NaN（而非合成随机值）
+        self.assertTrue(np.isnan(df['inc_total_revenue_year_on_year'].iloc[1]))
+        self.assertTrue(np.isnan(df['inc_net_profit_year_on_year'].iloc[1]))
+        self.assertTrue(np.isnan(df['roe'].iloc[1]))
+
+    def test_synthetic_fallback_when_no_table(self):
+        """当财务数据表完全不存在时，仍保留合成值降级（向后兼容）"""
+        from instock.core.backtest.fundamentals import FundamentalDataProvider
+
+        mock_engine = MagicMock()
+        mock_engine.context = MagicMock()
+        mock_engine.context.current_dt = datetime(2024, 6, 15)
+
+        provider = FundamentalDataProvider(mock_engine)
+        provider._initialized = True
+        provider._stock_info = pd.DataFrame({
+            'code': ['000001'],
+            'total_shares': [1e10],
+            'current_mcap': [3000],
+        })
+
+        df = pd.DataFrame({'code': ['000001']})
+
+        # 模拟 cn_stock_financial 表不存在 → 返回空字典
+        with patch('instock.core.backtest.fundamentals.FundamentalDataProvider._load_real_financial_data',
+                   return_value={}):
+            provider._generate_synthetic_fields(df, {'roe', 'eps'})
+
+        # 无真实数据基础设施时应降级到合成值（有限数值，非NaN）
+        self.assertTrue(np.isfinite(df['roe'].iloc[0]))
+        self.assertTrue(np.isfinite(df['eps'].iloc[0]))
 
 
 class TestMainEntryPoint(unittest.TestCase):

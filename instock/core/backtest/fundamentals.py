@@ -761,7 +761,14 @@ class FundamentalDataProvider:
             return {}
 
     def _generate_synthetic_fields(self, df, fields):
-        """为 DataFrame 中缺失的字段填充值。优先使用真实财务数据，缺失时降级为合成值。"""
+        """为 DataFrame 中缺失的字段填充值。
+
+        优先级：
+        1. 真实财务数据（cn_stock_financial 表直查）
+        2. 从真实数据推算（如 total_assets = net_profit / roa * 100）
+        3. 若真实数据基础设施可用但该股票无记录 → NaN（排除该股票）
+        4. 若真实数据基础设施不可用（表不存在等） → 确定性合成值（兼容降级）
+        """
         # 获取当前回测日期
         current_dt = getattr(self._engine, 'context', None)
         quarter_key = ''
@@ -777,6 +784,18 @@ class FundamentalDataProvider:
         if date_str and len(df) > 0:
             real_data = self._load_real_financial_data(df['code'].tolist(), date_str)
 
+        # 判断真实财务数据基础设施是否可用：
+        # 如果成功查到了任何股票的数据，说明 cn_stock_financial 表存在且有数据；
+        # 此时没有查到数据的股票确实在表中不存在记录，应用 NaN 排除而非合成随机值。
+        # 如果一条都没查到（表不存在或为空），则降级到合成值（向后兼容）。
+        use_nan_for_missing = len(real_data) > 0
+
+        if use_nan_for_missing:
+            no_data_count = sum(1 for code in df['code'] if code not in real_data)
+            if no_data_count > 0:
+                logging.info(f"[基本面] {len(df)}只候选中{len(real_data)}只有财务数据，"
+                             f"{no_data_count}只无数据将被 NaN 标记（策略 dropna 时排除）")
+
         for fname in fields:
             if fname in df.columns:
                 continue
@@ -786,7 +805,13 @@ class FundamentalDataProvider:
 
             for code in df['code']:
                 real_val = None
-                # 尝试从真实数据获取
+
+                # 真实数据基础设施可用，但该股票无记录 → NaN 排除
+                if use_nan_for_missing and code not in real_data:
+                    values.append(np.nan)
+                    continue
+
+                # 尝试从真实数据获取（直接映射字段）
                 if db_field and code in real_data:
                     real_val = real_data[code].get(db_field)
                     if real_val is not None:
@@ -799,7 +824,6 @@ class FundamentalDataProvider:
                 if real_val is None and code in real_data:
                     rd = real_data[code]
                     if fname == 'total_assets':
-                        # 从 ROA 和 净利润推算: 总资产 = 净利润 / ROA * 100
                         roa = rd.get('roa')
                         np_ = rd.get('net_profit')
                         if roa is not None and np_ is not None and float(roa) != 0:
@@ -808,7 +832,6 @@ class FundamentalDataProvider:
                             except (TypeError, ValueError, ZeroDivisionError):
                                 pass
                     elif fname == 'total_liability':
-                        # 从资产负债率和总资产推算
                         alr = rd.get('asset_liability_ratio')
                         roa_val = rd.get('roa')
                         np_val = rd.get('net_profit')
@@ -819,7 +842,6 @@ class FundamentalDataProvider:
                             except (TypeError, ValueError, ZeroDivisionError):
                                 pass
                     elif fname == 'net_operate_cash_flow':
-                        # 从每股经营现金流 × 估算股本
                         ocfps = rd.get('ocfps')
                         if ocfps is not None and self._stock_info is not None:
                             match = self._stock_info.loc[
@@ -832,8 +854,11 @@ class FundamentalDataProvider:
 
                 if real_val is not None:
                     values.append(real_val)
+                elif use_nan_for_missing:
+                    # 有真实数据基础设施但该字段无法解析 → NaN（保持数据诚实性）
+                    values.append(np.nan)
                 else:
-                    # 降级：确定性合成值
+                    # 完全无真实数据基础设施 → 确定性合成值（向后兼容降级）
                     mean, std = self._SYNTHETIC_FIELD_RANGES.get(fname, (50.0, 20.0))
                     seed = hash(code + fname + quarter_key) & 0xFFFFFFFF
                     rng = np.random.RandomState(seed)
