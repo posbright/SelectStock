@@ -31,7 +31,7 @@ def stock_zh_a_spot_em() -> pd.DataFrame:
     :rtype: pandas.DataFrame
     """
     url = "https://push2.eastmoney.com/api/qt/clist/get"
-    page_size = 5000
+    page_size = 100  # 东方财富 API 服务端限制每页最多 100 条
     page_current = 1
     params = {
         "pn": page_current,
@@ -46,25 +46,29 @@ def stock_zh_a_spot_em() -> pd.DataFrame:
         "fields": "f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f14,f15,f16,f17,f18,f20,f21,f22,f23,f24,f25,f26,f37,f38,f39,f40,f41,f45,f46,f48,f49,f57,f61,f100,f112,f113,f114,f115,f221",
         "_": "1623833739532",
     }
-    r =  fetcher.make_request(url, params=params)
+    r = fetcher.make_request(url, params=params)
     data_json = r.json()
     data = data_json["data"]["diff"]
     if not data:
         return pd.DataFrame()
 
     data_count = data_json["data"]["total"]
-    page_count = math.ceil(data_count/page_size)
+    # 根据实际返回量确定有效页大小（防止 API 端单方面限制每页条数）
+    effective_page_size = len(data)
+    if effective_page_size < page_size:
+        page_size = effective_page_size
+    page_count = math.ceil(data_count / page_size) if page_size > 0 else 1
     while page_count > 1:
-        # 添加随机延迟，避免爬取过快
-        time.sleep(random.uniform(2, 3))
+        if _CRAWL_DELAY_ENABLED:
+            time.sleep(random.uniform(_CRAWL_DELAY_EM_MIN, _CRAWL_DELAY_EM_MAX))
         page_current = page_current + 1
         params["pn"] = page_current
-        r =  fetcher.make_request(url, params=params)
+        r = fetcher.make_request(url, params=params)
         data_json = r.json()
         _data = data_json.get("data", {}).get("diff")
         if _data:
             data.extend(_data)
-        page_count =page_count - 1
+        page_count = page_count - 1
 
     temp_df = pd.DataFrame(data)
     temp_df.columns = [

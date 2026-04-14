@@ -19,7 +19,7 @@
         <el-date-picker v-model="btDateRange" type="daterange" size="small"
                         range-separator="至" start-placeholder="开始" end-placeholder="结束"
                         value-format="YYYY-MM-DD" style="width: 240px;"
-                        :shortcuts="dateShortcuts" unlink-panels />
+                        :shortcuts="dateShortcuts" :unlink-panels="true" />
         <el-input-number v-model="btCash" :min="10000" :step="100000" size="small"
                          style="width: 130px;" :controls="false" />
         <span class="param-label">元</span>

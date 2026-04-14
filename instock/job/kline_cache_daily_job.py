@@ -116,15 +116,39 @@ def fetch_all_data(date):
         logging.info("Step 2/4: 预加载实时行情数据...")
         spot_start = time.time()
         spot = stock_data(date).get_data()
-        if spot is not None:
+        if spot is not None and len(spot) > 0:
             logging.info(f"实时行情加载成功：{len(spot)} 只股票，耗时 {time.time() - spot_start:.1f}秒")
             record_task_end(_JOB_NAME, 'load_spot', date, t2, success=True,
                             rows_affected=len(spot))
         else:
-            logging.error("实时行情加载失败：stock_data 返回 None")
-            record_task_end(_JOB_NAME, 'load_spot', date, t2, success=False,
-                            message="stock_data 返回 None")
-            return
+            # API 返回空时，尝试从数据库 cn_stock_spot 获取最近的股票列表
+            logging.warning("API 实时行情为空，尝试从数据库获取股票列表...")
+            try:
+                import instock.lib.database as mdb
+                from sqlalchemy import text
+                with mdb.engine().connect() as conn:
+                    sql = text(
+                        "SELECT date, code, name FROM cn_stock_spot "
+                        "WHERE date = (SELECT MAX(date) FROM cn_stock_spot) "
+                        "ORDER BY code"
+                    )
+                    rows = conn.execute(sql).fetchall()
+                    if rows:
+                        import pandas as _pd
+                        spot = _pd.DataFrame(rows, columns=['date', 'code', 'name'])
+                        logging.info(f"从数据库获取 {len(spot)} 只股票（DB回退）")
+                        record_task_end(_JOB_NAME, 'load_spot', date, t2, success=True,
+                                        rows_affected=len(spot), message="DB回退")
+                    else:
+                        logging.error("数据库 cn_stock_spot 也无数据，无法执行K线缓存更新")
+                        record_task_end(_JOB_NAME, 'load_spot', date, t2, success=False,
+                                        message="API 和 DB 均无数据")
+                        return
+            except Exception as db_err:
+                logging.error(f"数据库回退失败：{db_err}")
+                record_task_end(_JOB_NAME, 'load_spot', date, t2, success=False,
+                                message=f"API为空且DB回退失败: {db_err}")
+                return
     except Exception as e:
         logging.error(f"实时行情加载异常", exc_info=True)
         record_task_end(_JOB_NAME, 'load_spot', date, t2, success=False, message=str(e))
