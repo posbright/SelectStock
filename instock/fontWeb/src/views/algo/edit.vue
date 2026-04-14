@@ -19,7 +19,7 @@
         <el-date-picker v-model="btDateRange" type="daterange" size="small"
                         range-separator="至" start-placeholder="开始" end-placeholder="结束"
                         value-format="YYYY-MM-DD" style="width: 240px;"
-                        :shortcuts="dateShortcuts" />
+                        :shortcuts="dateShortcuts" unlink-panels />
         <el-input-number v-model="btCash" :min="10000" :step="100000" size="small"
                          style="width: 130px;" :controls="false" />
         <span class="param-label">元</span>
@@ -148,8 +148,55 @@ const router = useRouter()
 const strategyId = computed(() => Number(route.params.id))
 
 const strategy = ref<any>({ id: 0, name: '', code: '' })
-const btDateRange = ref(['2024-01-01', '2025-01-01'])
-const btCash = ref(1000000)
+
+// 从 localStorage 恢复回测参数（上次设置的日期和金额）
+const _STORAGE_KEY_DATE = 'bt_date_range'
+const _STORAGE_KEY_CASH = 'bt_cash'
+
+function loadSavedDateRange(): [string, string] {
+  try {
+    const saved = localStorage.getItem(_STORAGE_KEY_DATE)
+    if (saved) {
+      const arr = JSON.parse(saved)
+      if (Array.isArray(arr) && arr.length === 2 && arr[0] && arr[1]) {
+        return [arr[0], arr[1]]
+      }
+    }
+  } catch { /* ignore */ }
+  // 默认：最近1年
+  const e = new Date()
+  const s = new Date()
+  s.setFullYear(s.getFullYear() - 1)
+  const fmt = (d: Date) => d.toISOString().slice(0, 10)
+  return [fmt(s), fmt(e)]
+}
+
+function loadSavedCash(): number {
+  try {
+    const v = localStorage.getItem(_STORAGE_KEY_CASH)
+    if (v) {
+      const n = Number(v)
+      if (n >= 10000) return n
+    }
+  } catch { /* ignore */ }
+  return 1000000
+}
+
+const btDateRange = ref<[string, string]>(loadSavedDateRange())
+const btCash = ref(loadSavedCash())
+
+// 持久化回测参数
+watch(btDateRange, (val) => {
+  if (val && val[0] && val[1]) {
+    localStorage.setItem(_STORAGE_KEY_DATE, JSON.stringify(val))
+  }
+}, { deep: true })
+
+watch(btCash, (val) => {
+  if (val >= 10000) {
+    localStorage.setItem(_STORAGE_KEY_CASH, String(val))
+  }
+})
 const btResult = ref<any>(null)
 const showResults = ref(false)
 const running = ref(false)
