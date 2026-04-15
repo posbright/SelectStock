@@ -792,6 +792,53 @@ class GetStrategyTemplatesHandler(webBase.BaseHandler, ABC):
             self.write(json.dumps({'code': -1, 'msg': str(e)}))
 
 
+class SyncStrategyTemplatesHandler(webBase.BaseHandler, ABC):
+    """同步内置模板到数据库（upsert：同名更新代码，不存在则新增）"""
+
+    @gen.coroutine
+    def post(self):
+        try:
+            _ensure_strategy_table()
+            updated = 0
+            inserted = 0
+            for tpl in STRATEGY_TEMPLATES:
+                name = tpl['name']
+                code = tpl['code']
+                desc = tpl.get('description', '')
+                cat = tpl.get('category', 'stock')
+                existing = mdb.executeSql(
+                    "SELECT id FROM cn_stock_strategy_code WHERE name=%s AND status!='archived' LIMIT 1",
+                    (name,))
+                if existing and len(existing) > 0:
+                    eid = existing[0][0] if isinstance(existing[0], (list, tuple)) else existing[0].get('id', existing[0])
+                    mdb.executeSql(
+                        'UPDATE cn_stock_strategy_code SET code=%s, description=%s, category=%s WHERE id=%s',
+                        (code, desc, cat, eid))
+                    updated += 1
+                else:
+                    _insert_and_get_id(
+                        'INSERT INTO cn_stock_strategy_code '
+                        '(name, code, description, category, folder_id, initial_cash, '
+                        'benchmark, commission_rate, stamp_tax_rate, slippage, status) '
+                        'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                        (name, code, desc, cat, 0, 1000000,
+                         '000300', 0.0003, 0.001, 0.0005, 'active'))
+                    inserted += 1
+            self.write(json.dumps({
+                'code': 0,
+                'msg': f'同步完成：更新 {updated} 个，新增 {inserted} 个',
+                'data': {'updated': updated, 'inserted': inserted}
+            }, ensure_ascii=False))
+        except Exception as e:
+            logging.error("SyncStrategyTemplates异常", exc_info=True)
+            self.write(json.dumps({'code': -1, 'msg': str(e)}))
+
+    @gen.coroutine
+    def get(self):
+        """GET 方式也支持，方便浏览器直接调用"""
+        yield self.post()
+
+
 class SaveStrategyCodeHandler(webBase.BaseHandler, ABC):
     """保存/更新策略代码"""
 

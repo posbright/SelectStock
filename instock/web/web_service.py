@@ -89,6 +89,7 @@ class Application(tornado.web.Application):
             (r"/instock/api/strategy/code/detail", portfolioBacktestHandler.GetStrategyCodeDetailHandler),
             (r"/instock/api/strategy/code/delete", portfolioBacktestHandler.DeleteStrategyCodeHandler),
             (r"/instock/api/strategy/templates", portfolioBacktestHandler.GetStrategyTemplatesHandler),
+            (r"/instock/api/strategy/sync_templates", portfolioBacktestHandler.SyncStrategyTemplatesHandler),
             (r"/instock/api/backtest/portfolio/run", portfolioBacktestHandler.RunPortfolioBacktestHandler),
             (r"/instock/api/backtest/portfolio/start", portfolioBacktestHandler.StartPortfolioBacktestHandler),
             (r"/instock/api/backtest/portfolio/log_stream", portfolioBacktestHandler.BacktestLogStreamHandler),
