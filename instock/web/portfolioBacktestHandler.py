@@ -297,8 +297,14 @@ def filter_paused_stock(stock_list):
 # 卖出：收盘价跌破20日最低价（经典海龟退出）
 # 风险控制：止损-10%，单票仓位≤20%，最多持5只
 # 兼容聚宽 + 本地回测引擎
+import jqdata
 
 def initialize(context):
+    set_benchmark('000300.XSHG')
+    set_option('use_real_price', True)
+    set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
+                             open_commission=0.0003, close_commission=0.0003,
+                             close_today_commission=0, min_commission=5), type='stock')
     g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
                 '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE']
     g.entry_window = 60
@@ -358,8 +364,14 @@ def market_open(context):
 # 买入：涨幅≥2% + 阳线 + 成交额≥2亿 + 量比≥2
 # 卖出：止盈+15%，止损-7%，最长持有20日
 # 兼容聚宽 + 本地回测引擎
+import jqdata
 
 def initialize(context):
+    set_benchmark('000300.XSHG')
+    set_option('use_real_price', True)
+    set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
+                             open_commission=0.0003, close_commission=0.0003,
+                             close_today_commission=0, min_commission=5), type='stock')
     g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
                 '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
                 '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
@@ -446,8 +458,14 @@ def market_open(context):
 # 买入：MA20>MA60 + 价格在MA20±3% + RSI(14)在35~55 + 缩量
 # 卖出：止盈+15%，止损-7%，最长持有20日
 # 兼容聚宽 + 本地回测引擎
+import jqdata
 
 def initialize(context):
+    set_benchmark('000300.XSHG')
+    set_option('use_real_price', True)
+    set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
+                             open_commission=0.0003, close_commission=0.0003,
+                             close_today_commission=0, min_commission=5), type='stock')
     g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
                 '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE']
     g.max_positions = 5
@@ -545,8 +563,14 @@ def market_open(context):
 # 买入：RSI<30 + 近5日触及布林下轨 + 当日收回下轨 + 阳线 + 放量
 # 卖出：止盈+10%，止损-5%，最长持有10日
 # 兼容聚宽 + 本地回测引擎
+import jqdata
 
 def initialize(context):
+    set_benchmark('000300.XSHG')
+    set_option('use_real_price', True)
+    set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
+                             open_commission=0.0003, close_commission=0.0003,
+                             close_today_commission=0, min_commission=5), type='stock')
     g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
                 '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
                 '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
@@ -659,8 +683,14 @@ def market_open(context):
 # 买入：60日涨幅≥60% + 无单日跌>7% + 无两日累计跌>10%
 # 卖出：止盈+20%，止损-10%，最长持有20日
 # 兼容聚宽 + 本地回测引擎
+import jqdata
 
 def initialize(context):
+    set_benchmark('000300.XSHG')
+    set_option('use_real_price', True)
+    set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
+                             open_commission=0.0003, close_commission=0.0003,
+                             close_today_commission=0, min_commission=5), type='stock')
     g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
                 '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
                 '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
