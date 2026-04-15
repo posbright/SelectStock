@@ -286,6 +286,465 @@ def filter_paused_stock(stock_list):
     return [stock for stock in stock_list if not current_data[stock].paused]
 ''',
     },
+    # ── 策略选股模板（兼容聚宽 + 本地引擎，基于 document/策略选股说明.md） ──
+    {
+        'id': 'turtle_trade',
+        'name': '海龟交易法则',
+        'category': 'stock',
+        'description': '经典趋势突破策略：当日收盘价创60日新高时买入，跌破20日最低价时卖出。对应策略选股 S07。',
+        'code': '''# 海龟交易法则（策略选股模板 S07）
+# 买入：收盘价创60日新高
+# 卖出：收盘价跌破20日最低价（经典海龟退出）
+# 风险控制：止损-10%，单票仓位≤20%，最多持5只
+# 兼容聚宽 + 本地回测引擎
+
+def initialize(context):
+    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
+                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE']
+    g.entry_window = 60
+    g.exit_window = 20
+    g.max_positions = 5
+    g.stop_loss = -0.10
+    run_daily(market_open, time='every_bar')
+
+def market_open(context):
+    # ── 先检查卖出 ──
+    for code in list(context.portfolio.positions.keys()):
+        pos = context.portfolio.positions[code]
+        if pos.avg_cost <= 0:
+            continue
+        profit_rate = (pos.price - pos.avg_cost) / pos.avg_cost
+        # 止损
+        if profit_rate <= g.stop_loss:
+            order_target(code, 0)
+            log.info("止损卖出 " + code + " 盈亏:" + str(round(profit_rate * 100, 1)) + "%")
+            continue
+        # 跌破20日最低价退出
+        h = attribute_history(code, g.exit_window, '1d', ['close'])
+        if len(h) >= g.exit_window and pos.price <= h['close'].min():
+            order_target(code, 0)
+            log.info("跌破" + str(g.exit_window) + "日低点卖出 " + code)
+
+    # ── 再检查买入 ──
+    current_count = len(context.portfolio.positions)
+    if current_count >= g.max_positions:
+        return
+
+    for code in g.stocks:
+        if code in context.portfolio.positions:
+            continue
+        if current_count >= g.max_positions:
+            break
+        h = attribute_history(code, g.entry_window, '1d', ['close'])
+        if len(h) < g.entry_window:
+            continue
+        current_price = h['close'].iloc[-1]
+        if current_price <= 0:
+            continue
+        # 创60日新高
+        if current_price >= h['close'].max():
+            cash_per = context.portfolio.total_value / g.max_positions
+            order_value(code, min(cash_per, context.portfolio.available_cash * 0.95))
+            current_count += 1
+            log.info("突破" + str(g.entry_window) + "日新高买入 " + code)
+''',
+    },
+    {
+        'id': 'volume_increase',
+        'name': '放量上涨',
+        'category': 'stock',
+        'description': '量价策略：涨幅≥2%、成交额≥2亿、量比≥2时买入，止盈15%/止损7%。对应策略选股 S01。',
+        'code': '''# 放量上涨（策略选股模板 S01）
+# 买入：涨幅≥2% + 阳线 + 成交额≥2亿 + 量比≥2
+# 卖出：止盈+15%，止损-7%，最长持有20日
+# 兼容聚宽 + 本地回测引擎
+
+def initialize(context):
+    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
+                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
+                '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
+    g.max_positions = 5
+    g.take_profit = 0.15
+    g.stop_loss = -0.07
+    g.max_hold_days = 20
+    g.hold_days = {}
+    run_daily(market_open, time='every_bar')
+
+def market_open(context):
+    # ── 更新持有天数并检查卖出 ──
+    for code in list(context.portfolio.positions.keys()):
+        g.hold_days[code] = g.hold_days.get(code, 0) + 1
+        pos = context.portfolio.positions[code]
+        if pos.avg_cost <= 0:
+            continue
+        profit_rate = (pos.price - pos.avg_cost) / pos.avg_cost
+        if profit_rate >= g.take_profit:
+            order_target(code, 0)
+            log.info("止盈卖出 " + code + " +" + str(round(profit_rate * 100, 1)) + "%")
+            g.hold_days.pop(code, None)
+            continue
+        if profit_rate <= g.stop_loss:
+            order_target(code, 0)
+            log.info("止损卖出 " + code + " " + str(round(profit_rate * 100, 1)) + "%")
+            g.hold_days.pop(code, None)
+            continue
+        if g.hold_days.get(code, 0) >= g.max_hold_days:
+            order_target(code, 0)
+            log.info("超时卖出 " + code)
+            g.hold_days.pop(code, None)
+
+    # ── 检查买入信号 ──
+    current_count = len(context.portfolio.positions)
+    if current_count >= g.max_positions:
+        return
+
+    for code in g.stocks:
+        if code in context.portfolio.positions or current_count >= g.max_positions:
+            continue
+        h = attribute_history(code, 6, '1d', ['close', 'open', 'volume'])
+        if len(h) < 2:
+            continue
+        price = h['close'].iloc[-1]
+        open_p = h['open'].iloc[-1]
+        vol_today = h['volume'].iloc[-1]
+        prev_close = h['close'].iloc[-2]
+        if price <= 0 or prev_close <= 0 or open_p <= 0:
+            continue
+
+        # 条件1：涨幅≥2% 且 阳线
+        pct_change = (price - prev_close) / prev_close
+        if pct_change < 0.02 or price <= open_p:
+            continue
+
+        # 条件2：成交额≥2亿（close * volume 近似）
+        amount = price * vol_today
+        if amount < 200000000:
+            continue
+
+        # 条件3：量比≥2
+        vol_ma5 = h['volume'].iloc[:-1].mean()
+        if vol_ma5 <= 0:
+            continue
+        vol_ratio = vol_today / vol_ma5
+        if vol_ratio < 2:
+            continue
+
+        cash_per = context.portfolio.total_value / g.max_positions
+        order_value(code, min(cash_per, context.portfolio.available_cash * 0.95))
+        g.hold_days[code] = 0
+        current_count += 1
+        log.info("放量上涨买入 " + code + " 涨幅:" + str(round(pct_change * 100, 1))
+                 + "% 量比:" + str(round(vol_ratio, 1)))
+''',
+    },
+    {
+        'id': 'trend_pullback',
+        'name': '趋势回调',
+        'category': 'stock',
+        'description': '上涨趋势中的缩量回调买点：MA20>MA60，价格回踩MA20附近，RSI中性，缩量。对应策略选股 S11。',
+        'code': '''# 趋势回调（策略选股模板 S11）
+# 买入：MA20>MA60 + 价格在MA20±3% + RSI(14)在35~55 + 缩量
+# 卖出：止盈+15%，止损-7%，最长持有20日
+# 兼容聚宽 + 本地回测引擎
+
+def initialize(context):
+    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
+                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE']
+    g.max_positions = 5
+    g.take_profit = 0.15
+    g.stop_loss = -0.07
+    g.max_hold_days = 20
+    g.hold_days = {}
+    run_daily(market_open, time='every_bar')
+
+def _calc_rsi(closes, period=14):
+    if len(closes) < period + 1:
+        return 50
+    deltas = []
+    for i in range(1, len(closes)):
+        deltas.append(closes.iloc[i] - closes.iloc[i - 1])
+    gains = [d if d > 0 else 0 for d in deltas]
+    losses = [-d if d < 0 else 0 for d in deltas]
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period
+    if avg_loss == 0:
+        return 100
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+def market_open(context):
+    # ── 卖出检查 ──
+    for code in list(context.portfolio.positions.keys()):
+        g.hold_days[code] = g.hold_days.get(code, 0) + 1
+        pos = context.portfolio.positions[code]
+        if pos.avg_cost <= 0:
+            continue
+        profit_rate = (pos.price - pos.avg_cost) / pos.avg_cost
+        if profit_rate >= g.take_profit:
+            order_target(code, 0)
+            log.info("止盈 " + code + " +" + str(round(profit_rate * 100, 1)) + "%")
+            g.hold_days.pop(code, None)
+            continue
+        if profit_rate <= g.stop_loss:
+            order_target(code, 0)
+            log.info("止损 " + code + " " + str(round(profit_rate * 100, 1)) + "%")
+            g.hold_days.pop(code, None)
+            continue
+        if g.hold_days.get(code, 0) >= g.max_hold_days:
+            order_target(code, 0)
+            log.info("超时卖出 " + code)
+            g.hold_days.pop(code, None)
+
+    # ── 买入检查 ──
+    current_count = len(context.portfolio.positions)
+    if current_count >= g.max_positions:
+        return
+
+    for code in g.stocks:
+        if code in context.portfolio.positions or current_count >= g.max_positions:
+            continue
+        h = attribute_history(code, 61, '1d', ['close', 'volume'])
+        if len(h) < 61:
+            continue
+
+        price = h['close'].iloc[-1]
+        if price <= 0:
+            continue
+
+        ma20 = h['close'].iloc[-20:].mean()
+        ma60 = h['close'].mean()
+        if ma20 <= ma60:
+            continue
+        deviation = abs(price - ma20) / ma20
+        if deviation > 0.03:
+            continue
+
+        rsi = _calc_rsi(h['close'], 14)
+        if rsi < 35 or rsi > 55:
+            continue
+
+        vol_today = h['volume'].iloc[-1]
+        vol_ma5 = h['volume'].iloc[-6:-1].mean()
+        if vol_ma5 > 0 and vol_today >= vol_ma5 * 0.8:
+            continue
+
+        cash_per = context.portfolio.total_value / g.max_positions
+        order_value(code, min(cash_per, context.portfolio.available_cash * 0.95))
+        g.hold_days[code] = 0
+        current_count += 1
+        log.info("趋势回调买入 " + code + " RSI=" + str(round(rsi, 1))
+                 + " 偏离MA20:" + str(round(deviation * 100, 1)) + "%")
+''',
+    },
+    {
+        'id': 'oversold_rebound',
+        'name': '超跌反弹',
+        'category': 'stock',
+        'description': '逆向策略：RSI<30极度超卖 + 布林带下轨回升 + 阳线放量反弹时买入。对应策略选股 S12。',
+        'code': '''# 超跌反弹（策略选股模板 S12）
+# 买入：RSI<30 + 近5日触及布林下轨 + 当日收回下轨 + 阳线 + 放量
+# 卖出：止盈+10%，止损-5%，最长持有10日
+# 兼容聚宽 + 本地回测引擎
+
+def initialize(context):
+    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
+                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
+                '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
+    g.max_positions = 5
+    g.take_profit = 0.10
+    g.stop_loss = -0.05
+    g.max_hold_days = 10
+    g.hold_days = {}
+    run_daily(market_open, time='every_bar')
+
+def _calc_rsi(closes, period=14):
+    if len(closes) < period + 1:
+        return 50
+    deltas = []
+    for i in range(1, len(closes)):
+        deltas.append(closes.iloc[i] - closes.iloc[i - 1])
+    gains = [d if d > 0 else 0 for d in deltas]
+    losses = [-d if d < 0 else 0 for d in deltas]
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period
+    if avg_loss == 0:
+        return 100
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+def _calc_bollinger(closes, period=20, num_std=2):
+    if len(closes) < period:
+        return None, None, None
+    recent = closes.iloc[-period:]
+    ma = recent.mean()
+    std = recent.std()
+    return ma, ma + num_std * std, ma - num_std * std
+
+def market_open(context):
+    # ── 卖出检查 ──
+    for code in list(context.portfolio.positions.keys()):
+        g.hold_days[code] = g.hold_days.get(code, 0) + 1
+        pos = context.portfolio.positions[code]
+        if pos.avg_cost <= 0:
+            continue
+        profit_rate = (pos.price - pos.avg_cost) / pos.avg_cost
+        if profit_rate >= g.take_profit:
+            order_target(code, 0)
+            log.info("止盈 " + code + " +" + str(round(profit_rate * 100, 1)) + "%")
+            g.hold_days.pop(code, None)
+            continue
+        if profit_rate <= g.stop_loss:
+            order_target(code, 0)
+            log.info("止损 " + code + " " + str(round(profit_rate * 100, 1)) + "%")
+            g.hold_days.pop(code, None)
+            continue
+        if g.hold_days.get(code, 0) >= g.max_hold_days:
+            order_target(code, 0)
+            log.info("超时卖出 " + code)
+            g.hold_days.pop(code, None)
+
+    # ── 买入检查 ──
+    current_count = len(context.portfolio.positions)
+    if current_count >= g.max_positions:
+        return
+
+    for code in g.stocks:
+        if code in context.portfolio.positions or current_count >= g.max_positions:
+            continue
+        h = attribute_history(code, 30, '1d', ['close', 'open', 'low', 'volume'])
+        if len(h) < 21:
+            continue
+
+        price = h['close'].iloc[-1]
+        open_p = h['open'].iloc[-1]
+        vol_today = h['volume'].iloc[-1]
+        if price <= 0 or open_p <= 0:
+            continue
+
+        rsi = _calc_rsi(h['close'], 14)
+        if rsi >= 30:
+            continue
+
+        mid, upper, lower = _calc_bollinger(h['close'], 20, 2)
+        if lower is None:
+            continue
+
+        recent_lows = h['low'].iloc[-5:]
+        touched_lower = any(lo <= lower * 1.01 for lo in recent_lows)
+        if not touched_lower:
+            continue
+        if price <= lower:
+            continue
+        if price <= open_p:
+            continue
+
+        vol_ma5 = h['volume'].iloc[-6:-1].mean()
+        if vol_ma5 <= 0 or vol_today <= vol_ma5 * 1.2:
+            continue
+
+        cash_per = context.portfolio.total_value / g.max_positions
+        order_value(code, min(cash_per, context.portfolio.available_cash * 0.95))
+        g.hold_days[code] = 0
+        current_count += 1
+        log.info("超跌反弹买入 " + code + " RSI=" + str(round(rsi, 1))
+                 + " 布林下轨:" + str(round(lower, 2)))
+''',
+    },
+    {
+        'id': 'low_backtrace_increase',
+        'name': '无大幅回撤',
+        'category': 'stock',
+        'description': '趋势过滤策略：60日涨幅≥60%且无单日大跌、无连续两日大跌。止盈20%/止损10%。对应策略选股 S06。',
+        'code': '''# 无大幅回撤（策略选股模板 S06）
+# 买入：60日涨幅≥60% + 无单日跌>7% + 无两日累计跌>10%
+# 卖出：止盈+20%，止损-10%，最长持有20日
+# 兼容聚宽 + 本地回测引擎
+
+def initialize(context):
+    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
+                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
+                '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
+    g.max_positions = 5
+    g.take_profit = 0.20
+    g.stop_loss = -0.10
+    g.max_hold_days = 20
+    g.hold_days = {}
+    g.window = 60
+    run_daily(market_open, time='every_bar')
+
+def _check_low_backtrace(closes, opens, window=60):
+    if len(closes) < window:
+        return False
+    rc = closes.iloc[-window:]
+    ro = opens.iloc[-window:]
+    ratio = (rc.iloc[-1] - rc.iloc[0]) / rc.iloc[0]
+    if ratio < 0.6:
+        return False
+    prev_pct = 0.0
+    prev_open = ro.iloc[0]
+    for i in range(len(rc)):
+        c = rc.iloc[i]
+        o = ro.iloc[i]
+        pct = 0
+        if i > 0 and rc.iloc[i - 1] > 0:
+            pct = (c - rc.iloc[i - 1]) / rc.iloc[i - 1] * 100
+        if pct < -7:
+            return False
+        if o > 0 and (c - o) / o * 100 < -7:
+            return False
+        if prev_pct + pct < -10:
+            return False
+        if prev_open > 0 and (c - prev_open) / prev_open * 100 < -10:
+            return False
+        prev_pct = pct
+        prev_open = o
+    return True
+
+def market_open(context):
+    # ── 卖出检查 ──
+    for code in list(context.portfolio.positions.keys()):
+        g.hold_days[code] = g.hold_days.get(code, 0) + 1
+        pos = context.portfolio.positions[code]
+        if pos.avg_cost <= 0:
+            continue
+        profit_rate = (pos.price - pos.avg_cost) / pos.avg_cost
+        if profit_rate >= g.take_profit:
+            order_target(code, 0)
+            log.info("止盈 " + code + " +" + str(round(profit_rate * 100, 1)) + "%")
+            g.hold_days.pop(code, None)
+            continue
+        if profit_rate <= g.stop_loss:
+            order_target(code, 0)
+            log.info("止损 " + code + " " + str(round(profit_rate * 100, 1)) + "%")
+            g.hold_days.pop(code, None)
+            continue
+        if g.hold_days.get(code, 0) >= g.max_hold_days:
+            order_target(code, 0)
+            log.info("超时卖出 " + code)
+            g.hold_days.pop(code, None)
+
+    # ── 买入检查 ──
+    current_count = len(context.portfolio.positions)
+    if current_count >= g.max_positions:
+        return
+
+    for code in g.stocks:
+        if code in context.portfolio.positions or current_count >= g.max_positions:
+            continue
+        n = g.window + 1
+        h = attribute_history(code, n, '1d', ['close', 'open'])
+        if len(h) < g.window:
+            continue
+
+        if _check_low_backtrace(h['close'], h['open'], g.window):
+            cash_per = context.portfolio.total_value / g.max_positions
+            order_value(code, min(cash_per, context.portfolio.available_cash * 0.95))
+            g.hold_days[code] = 0
+            current_count += 1
+            gain = (h['close'].iloc[-1] - h['close'].iloc[-g.window]) / h['close'].iloc[-g.window]
+            log.info("无大幅回撤买入 " + code + " 60日涨幅:" + str(round(gain * 100, 1)) + "%")
+''',
+    },
 ]
 
 
@@ -348,7 +807,14 @@ class SaveStrategyCodeHandler(webBase.BaseHandler, ABC):
                      commission, tax, slippage, 'active', strategy_id))
                 result_id = strategy_id
             else:
-                # 新增
+                # 新增 —— 同名且未归档的策略视为重复，直接返回已有记录
+                existing = mdb.executeSql(
+                    "SELECT id FROM cn_stock_strategy_code WHERE name=%s AND status!='archived' LIMIT 1",
+                    (name,))
+                if existing and len(existing) > 0:
+                    result_id = existing[0][0] if isinstance(existing[0], (list, tuple)) else existing[0].get('id', existing[0])
+                    self.write(json.dumps({'code': 0, 'data': {'id': result_id, 'duplicate': True}}, ensure_ascii=False))
+                    return
                 result_id = _insert_and_get_id(
                     'INSERT INTO cn_stock_strategy_code '
                     '(name, code, description, category, folder_id, initial_cash, '

@@ -303,45 +303,55 @@ class PortfolioBacktestEngine:
 
     # ── 策略 API 函数 ──
 
+    @staticmethod
+    def _normalize_code(code):
+        """将聚宽风格股票代码（如 '000001.XSHE'）转为6位纯数字代码"""
+        if isinstance(code, str) and '.' in code:
+            return code.split('.')[0]
+        return code
+
     def _create_strategy_api(self):
         """创建策略可调用的 API 函数集（兼容聚宽风格）"""
         engine = self
+        _nc = engine._normalize_code   # 代码标准化快捷引用
 
         # ── 基本面数据提供器 ──
         engine._fundamental_provider = FundamentalDataProvider(engine)
 
         def order(code, amount):
             """按股数下单（正=买入，负=卖出）"""
-            engine._submit_order(code, amount=int(amount))
+            engine._submit_order(_nc(code), amount=int(amount))
 
         def order_target(code, target_amount):
             """调整到目标持仓股数"""
-            pos = engine.context.portfolio.positions.get(code)
+            clean = _nc(code)
+            pos = engine.context.portfolio.positions.get(clean)
             current = pos.amount if pos else 0
             diff = int(target_amount) - current
             if diff != 0:
-                engine._submit_order(code, amount=diff)
+                engine._submit_order(clean, amount=diff)
 
         def order_value(code, value):
             """按金额下单"""
-            engine._submit_order(code, value=float(value))
+            engine._submit_order(_nc(code), value=float(value))
 
         def order_target_value(code, target_value):
             """调整到目标持仓金额"""
+            clean = _nc(code)
             target_value = float(target_value)
-            pos = engine.context.portfolio.positions.get(code)
+            pos = engine.context.portfolio.positions.get(clean)
             if target_value <= 0 and pos and pos.closeable_amount > 0:
-                # 清仓：直接按股数卖出，避免金额→股数换算的舍入残留
-                engine._submit_order(code, amount=-pos.closeable_amount)
+                engine._submit_order(clean, amount=-pos.closeable_amount)
                 return
             current_value = pos.value if pos and pos.amount > 0 else 0
             diff = target_value - current_value
-            if abs(diff) > 100:  # 忽略过小的调整
-                engine._submit_order(code, value=diff)
+            if abs(diff) > 100:
+                engine._submit_order(clean, value=diff)
 
         def history(code, count, field='close'):
             """获取最近 N 个交易日的数据"""
-            df = engine._stock_data.get(code)
+            clean = _nc(code)
+            df = engine._stock_data.get(clean)
             if df is None:
                 return pd.Series(dtype=float)
             current_date = engine.context.current_dt
@@ -351,12 +361,44 @@ class PortfolioBacktestEngine:
                 return subset[field].reset_index(drop=True)
             return pd.Series(dtype=float)
 
+        def attribute_history(security, count, unit='1d', fields=None,
+                              skip_paused=True, df=True, fq='pre'):
+            """聚宽 attribute_history — 获取单只股票多字段历史数据
+
+            返回 DataFrame，index 为日期，columns 为 fields 中的字段名。
+            """
+            clean = _nc(security)
+            engine._ensure_stock_loaded(clean)
+            stock_df = engine._stock_data.get(clean)
+            if stock_df is None:
+                if fields:
+                    return pd.DataFrame(columns=fields)
+                return pd.DataFrame()
+            current_date = engine.context.current_dt
+            mask = stock_df['date'] <= pd.Timestamp(current_date)
+            subset = stock_df.loc[mask].tail(count)
+            if fields is None:
+                fields = ['open', 'close', 'high', 'low', 'volume', 'money']
+            result_cols = {}
+            for f in fields:
+                if f in subset.columns:
+                    result_cols[f] = subset[f].values
+                elif f == 'money':
+                    if 'volume' in subset.columns and 'close' in subset.columns:
+                        result_cols['money'] = (subset['volume'] * subset['close'] * 100).values
+                    else:
+                        result_cols['money'] = [0] * len(subset)
+                else:
+                    result_cols[f] = [0] * len(subset)
+            result = pd.DataFrame(result_cols, index=subset['date'].values)
+            return result
+
         def get_price(code, start_date=None, end_date=None, count=None,
                       frequency='daily', fields=None, fq=None, **kwargs):
             """获取历史数据（兼容聚宽 count/end_date 模式和 start_date/end_date 模式）"""
-            # 懒加载：策略可能请求不在初始股票池的代码
-            engine._ensure_stock_loaded(code)
-            df = engine._stock_data.get(code)
+            clean = _nc(code)
+            engine._ensure_stock_loaded(clean)
+            df = engine._stock_data.get(clean)
             if df is None:
                 return pd.DataFrame()
             result = df.copy()
@@ -539,6 +581,7 @@ class PortfolioBacktestEngine:
             'order_value': order_value,
             'order_target_value': order_target_value,
             'history': history,
+            'attribute_history': attribute_history,
             'get_price': get_price,
             'set_benchmark': set_benchmark,
             'set_order_cost': set_order_cost,
@@ -969,30 +1012,35 @@ class PortfolioBacktestEngine:
     def _discover_and_load_stocks(self, pre_start, end_date):
         """
         发现策略涉及的股票并预加载数据。
-        初始化时从 context 的属性中提取股票代码。
+        初始化时从 context 和 g 的属性中提取股票代码。
+        支持6位纯数字代码和聚宽风格（如 '000001.XSHE'）。
         """
-        # 从 context 中发现股票代码
         codes = set()
-        for attr in dir(self.context):
-            val = getattr(self.context, attr, None)
-            if isinstance(val, str) and len(val) == 6 and val.isdigit():
-                codes.add(val)
+
+        def _try_extract(val):
+            """尝试从值中提取股票代码"""
+            if isinstance(val, str):
+                # 纯6位数字
+                if len(val) == 6 and val.isdigit():
+                    codes.add(val)
+                # 聚宽格式: 000001.XSHE / 600036.XSHG
+                elif '.' in val:
+                    prefix = val.split('.')[0]
+                    if len(prefix) == 6 and prefix.isdigit():
+                        codes.add(prefix)
             elif isinstance(val, (list, tuple, set)):
                 for item in val:
-                    if isinstance(item, str) and len(item) == 6 and item.isdigit():
-                        codes.add(item)
+                    _try_extract(item)
+
+        # 从 context 中发现股票代码
+        for attr in dir(self.context):
+            _try_extract(getattr(self.context, attr, None))
 
         # 也从 g 对象中发现
         for attr in dir(self.g):
             if attr.startswith('_'):
                 continue
-            val = getattr(self.g, attr, None)
-            if isinstance(val, str) and len(val) == 6 and val.isdigit():
-                codes.add(val)
-            elif isinstance(val, (list, tuple, set)):
-                for item in val:
-                    if isinstance(item, str) and len(item) == 6 and item.isdigit():
-                        codes.add(item)
+            _try_extract(getattr(self.g, attr, None))
 
         if codes:
             logging.info(f"[回测引擎] 预加载 {len(codes)} 只股票数据")

@@ -39,6 +39,7 @@
           </el-button>
         </template>
       </el-popconfirm>
+      <el-button @click="seedTemplateStrategies" :loading="importing" style="margin-left: auto;">导入示例策略</el-button>
     </div>
 
     <!-- 表格 -->
@@ -85,7 +86,7 @@
               description="还没有策略，点击「新建策略」或导入示例策略">
       <div style="display: flex; gap: 12px;">
         <el-button type="primary" @click="onCreateStrategy('stock')">新建股票策略</el-button>
-        <el-button @click="seedTemplateStrategies">导入示例策略</el-button>
+        <el-button @click="seedTemplateStrategies" :loading="importing">导入示例策略</el-button>
       </div>
     </el-empty>
   </div>
@@ -111,6 +112,7 @@ const currentFolderId = ref(0)
 const currentFolderName = ref('')
 const editingRowId = ref<string | null>(null)
 const editingName = ref('')
+const importing = ref(false)
 const tableRef = ref<any>(null)
 
 const CATEGORY_MAP: Record<string, string> = {
@@ -245,18 +247,27 @@ async function onCreateStrategy(category: string) {
 }
 
 async function seedTemplateStrategies() {
+  if (importing.value) return
+  importing.value = true
   try {
+    await loadData()
     const res = await getStrategyTemplates() as any
     const list = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : [])
     if (!list.length) { ElMessage.warning('\u65e0\u53ef\u7528\u6a21\u677f'); return }
+    const existingNames = new Set(allStrategies.value.map((s: any) => s.name))
     let c = 0
     for (const t of list) {
+      if (existingNames.has(t.name)) continue
       const r = await saveStrategyCode({ name: t.name, code: t.code, category: t.category || 'stock' }) as any
-      if ((r?.code ?? r?.data?.code) === 0) c++
+      if ((r?.code ?? r?.data?.code) === 0) {
+        c++
+        existingNames.add(t.name)
+      }
     }
+    if (c === 0) { ElMessage.info('\u6240\u6709\u6a21\u677f\u5df2\u5bfc\u5165'); return }
     ElMessage.success('\u5df2\u5bfc\u5165 ' + c + ' \u4e2a\u793a\u4f8b\u7b56\u7565')
     await loadData()
-  } catch (e) { ElMessage.error('\u5bfc\u5165\u5931\u8d25') }
+  } catch (e) { ElMessage.error('\u5bfc\u5165\u5931\u8d25') } finally { importing.value = false }
 }
 
 async function onCreateFolder() {

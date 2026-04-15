@@ -84,6 +84,28 @@ class Position:
                 f"cost={self.avg_cost:.3f}, price={self.price:.3f})")
 
 
+class PositionsDict(dict):
+    """持仓字典 — 自动将聚宽风格代码（'000001.XSHE'）映射到纯数字代码"""
+
+    @staticmethod
+    def _clean(key):
+        if isinstance(key, str) and '.' in key:
+            return key.split('.')[0]
+        return key
+
+    def __getitem__(self, key):
+        return super().__getitem__(self._clean(key))
+
+    def __contains__(self, key):
+        return super().__contains__(self._clean(key))
+
+    def get(self, key, default=None):
+        return super().get(self._clean(key), default)
+
+    def __delitem__(self, key):
+        super().__delitem__(self._clean(key))
+
+
 class Portfolio:
     """投资组合（账户信息）"""
 
@@ -92,7 +114,7 @@ class Portfolio:
         self.available_cash = initial_cash    # 可用现金
         self.total_value = initial_cash       # 总资产
         self.market_value = 0.0               # 持仓市值
-        self.positions = {}                   # {code: Position}
+        self.positions = PositionsDict()      # {code: Position}
         self._frozen_cash = 0.0               # 冻结资金（挂单中）
 
     @property
@@ -172,11 +194,13 @@ class DataProxy:
         self._history_cache = {}     # {code: DataFrame}  完整K线
 
     def __getitem__(self, code):
-        """data[code] → StockData 对象"""
-        return StockData(code, self)
+        """data[code] → StockData 对象（支持聚宽 .XSHE/.XSHG 后缀）"""
+        clean = code.split('.')[0] if isinstance(code, str) and '.' in code else code
+        return StockData(clean, self)
 
     def __contains__(self, code):
-        return code in self._current_bars
+        clean = code.split('.')[0] if isinstance(code, str) and '.' in code else code
+        return clean in self._current_bars
 
     def _set_current(self, code, bar_dict):
         """设置当日行情"""
