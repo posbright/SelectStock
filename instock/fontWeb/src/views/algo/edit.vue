@@ -16,10 +16,19 @@
           {{ dirty ? '保存 *' : '已保存' }}
         </el-button>
         <el-divider direction="vertical" />
-        <el-date-picker v-model="btDateRange" type="daterange" size="small"
-                        range-separator="至" start-placeholder="开始" end-placeholder="结束"
-                        value-format="YYYY-MM-DD" style="width: 240px;"
-                        :shortcuts="dateShortcuts" :unlink-panels="true" />
+        <el-dropdown trigger="click" @command="applyDateShortcut" style="margin-right: 4px;">
+          <el-button size="small">快捷 <el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item v-for="s in dateShortcuts" :key="s.text" :command="s.text">{{ s.text }}</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <el-date-picker v-model="btStartDate" type="date" size="small"
+                        placeholder="开始日期" value-format="YYYY-MM-DD" style="width: 130px;" />
+        <span class="param-label">至</span>
+        <el-date-picker v-model="btEndDate" type="date" size="small"
+                        placeholder="结束日期" value-format="YYYY-MM-DD" style="width: 130px;" />
         <el-input-number v-model="btCash" :min="10000" :step="100000" size="small"
                          style="width: 130px;" :controls="false" />
         <span class="param-label">元</span>
@@ -137,7 +146,7 @@
 import { ref, computed, onMounted, nextTick, watch, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, DocumentChecked, CaretRight, Monitor, DataLine } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowDown, DocumentChecked, CaretRight, Monitor, DataLine } from '@element-plus/icons-vue'
 import { getStrategyCodeDetail, saveStrategyCode, startPortfolioBacktest, getBacktestTaskResult, createPaperTrading } from '@/api/stock'
 import * as echarts from 'echarts'
 
@@ -182,15 +191,17 @@ function loadSavedCash(): number {
   return 1000000
 }
 
-const btDateRange = ref<[string, string]>(loadSavedDateRange())
+const _savedRange = loadSavedDateRange()
+const btStartDate = ref<string>(_savedRange[0])
+const btEndDate = ref<string>(_savedRange[1])
 const btCash = ref(loadSavedCash())
 
 // 持久化回测参数
-watch(btDateRange, (val) => {
-  if (val && val[0] && val[1]) {
-    localStorage.setItem(_STORAGE_KEY_DATE, JSON.stringify(val))
+watch([btStartDate, btEndDate], ([s, e]) => {
+  if (s && e) {
+    localStorage.setItem(_STORAGE_KEY_DATE, JSON.stringify([s, e]))
   }
-}, { deep: true })
+})
 
 watch(btCash, (val) => {
   if (val >= 10000) {
@@ -216,8 +227,17 @@ let currentTaskId: string | null = null
 const dateShortcuts = [
   { text: '近1年', value: () => { const e = new Date(); const s = new Date(); s.setFullYear(s.getFullYear()-1); return [s, e] }},
   { text: '近2年', value: () => { const e = new Date(); const s = new Date(); s.setFullYear(s.getFullYear()-2); return [s, e] }},
-  { text: '2024全年', value: [new Date('2024-01-01'), new Date('2024-12-31')] },
+  { text: '2024全年', value: () => [new Date('2024-01-01'), new Date('2024-12-31')] },
 ]
+
+function applyDateShortcut(text: string) {
+  const sc = dateShortcuts.find(s => s.text === text)
+  if (!sc) return
+  const range = typeof sc.value === 'function' ? sc.value() : sc.value
+  const fmt = (d: Date) => d.toISOString().slice(0, 10)
+  btStartDate.value = fmt(range[0])
+  btEndDate.value = fmt(range[1])
+}
 
 const metricCards = computed(() => {
   const m = btResult.value?.metrics
@@ -295,7 +315,7 @@ async function doSave() {
 
 async function doRun() {
   if (!strategy.value.code?.trim()) { ElMessage.warning('请输入策略代码'); return }
-  if (!btDateRange.value?.[0]) { ElMessage.warning('请选择回测日期'); return }
+  if (!btStartDate.value || !btEndDate.value) { ElMessage.warning('请选择回测日期'); return }
   if (dirty.value) await doSave()
 
   running.value = true
@@ -310,8 +330,8 @@ async function doRun() {
     const res = await startPortfolioBacktest({
       code: strategy.value.code,
       strategy_id: strategy.value.id || undefined,
-      start_date: btDateRange.value[0],
-      end_date: btDateRange.value[1],
+      start_date: btStartDate.value,
+      end_date: btEndDate.value,
       initial_cash: btCash.value,
     }) as any
     const { ok, data } = unwrap(res)
