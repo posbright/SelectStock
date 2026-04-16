@@ -775,6 +775,563 @@ def market_open(context):
             log.info("无大幅回撤买入 " + code + " 60日涨幅:" + str(round(gain * 100, 1)) + "%")
 ''',
     },
+    # ── 第二批策略选股模板（S02, S03, S04, S05, S10） ──
+    {
+        'id': 'keep_increasing',
+        'name': '均线多头',
+        'category': 'stock',
+        'description': '趋势策略：MA30持续上升且30日涨幅超20%时买入，均线走平或止损时卖出。对应策略选股 S02。',
+        'code': '''# 均线多头（策略选股模板 S02）
+# 买入：MA30在30日内持续上升（4个采样点递增）且涨幅>20%
+# 卖出：止盈+20%，止损-10%，最长持有30日，或MA30开始下降
+# 兼容聚宽 + 本地回测引擎
+import jqdata
+
+def initialize(context):
+    set_benchmark('000300.XSHG')
+    set_option('use_real_price', True)
+    set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
+                             open_commission=0.0003, close_commission=0.0003,
+                             close_today_commission=0, min_commission=5), type='stock')
+    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
+                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
+                '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
+    g.max_positions = 5
+    g.take_profit = 0.20
+    g.stop_loss = -0.10
+    g.max_hold_days = 30
+    g.hold_days = {}
+    g.ma_window = 30
+    run_daily(market_open, time='every_bar')
+
+def _calc_ma(closes, period):
+    if len(closes) < period:
+        return 0
+    return closes.iloc[-period:].mean()
+
+def market_open(context):
+    # ── 卖出检查 ──
+    for code in list(context.portfolio.positions.keys()):
+        g.hold_days[code] = g.hold_days.get(code, 0) + 1
+        pos = context.portfolio.positions[code]
+        if pos.avg_cost <= 0:
+            continue
+        profit_rate = (pos.price - pos.avg_cost) / pos.avg_cost
+        if profit_rate >= g.take_profit:
+            order_target(code, 0)
+            log.info("止盈 " + code + " +" + str(round(profit_rate * 100, 1)) + "%")
+            g.hold_days.pop(code, None)
+            continue
+        if profit_rate <= g.stop_loss:
+            order_target(code, 0)
+            log.info("止损 " + code + " " + str(round(profit_rate * 100, 1)) + "%")
+            g.hold_days.pop(code, None)
+            continue
+        if g.hold_days.get(code, 0) >= g.max_hold_days:
+            order_target(code, 0)
+            log.info("超时卖出 " + code)
+            g.hold_days.pop(code, None)
+            continue
+        # MA30开始下降时卖出
+        h = attribute_history(code, 62, '1d', ['close'])
+        if len(h) >= 62:
+            ma_today = h['close'].iloc[-30:].mean()
+            ma_yesterday = h['close'].iloc[-31:-1].mean()
+            if ma_today < ma_yesterday:
+                order_target(code, 0)
+                log.info("均线走平卖出 " + code)
+                g.hold_days.pop(code, None)
+
+    # ── 买入检查 ──
+    current_count = len(context.portfolio.positions)
+    if current_count >= g.max_positions:
+        return
+
+    for code in g.stocks:
+        if code in context.portfolio.positions or current_count >= g.max_positions:
+            continue
+        h = attribute_history(code, 60, '1d', ['close'])
+        if len(h) < 60:
+            continue
+        # 取最近30日数据中4个采样点的MA30
+        # 采样点：30日前、20日前、10日前、当日
+        ma30_p0 = h['close'].iloc[:30].mean()   # 30日前的MA30
+        ma30_p1 = h['close'].iloc[10:40].mean() # 20日前的MA30
+        ma30_p2 = h['close'].iloc[20:50].mean() # 10日前的MA30
+        ma30_p3 = h['close'].iloc[30:60].mean() # 当日的MA30
+        if ma30_p0 <= 0:
+            continue
+        # 条件1：4个采样点递增
+        if not (ma30_p0 < ma30_p1 < ma30_p2 < ma30_p3):
+            continue
+        # 条件2：当日MA30 / 30日前MA30 > 1.2
+        if ma30_p3 / ma30_p0 <= 1.2:
+            continue
+
+        cash_per = context.portfolio.total_value / g.max_positions
+        order_value(code, min(cash_per, context.portfolio.available_cash * 0.95))
+        g.hold_days[code] = 0
+        current_count += 1
+        ma_gain = (ma30_p3 / ma30_p0 - 1) * 100
+        log.info("均线多头买入 " + code + " MA30涨幅:" + str(round(ma_gain, 1)) + "%")
+''',
+    },
+    {
+        'id': 'parking_apron',
+        'name': '停机坪',
+        'category': 'stock',
+        'description': '涨停后横盘蓄力策略：近15日内出现涨停+放量，随后3日高开收涨且振幅<3%。对应策略选股 S03。',
+        'code': '''# 停机坪（策略选股模板 S03）
+# 买入：近15日内有涨停（涨幅≥9.5%）且放量，之后3日高开收涨、振幅<3%、日涨跌幅<5%
+# 卖出：止盈+15%，止损-7%，最长持有15日
+# 兼容聚宽 + 本地回测引擎
+import jqdata
+
+def initialize(context):
+    set_benchmark('000300.XSHG')
+    set_option('use_real_price', True)
+    set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
+                             open_commission=0.0003, close_commission=0.0003,
+                             close_today_commission=0, min_commission=5), type='stock')
+    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
+                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
+                '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
+    g.max_positions = 5
+    g.take_profit = 0.15
+    g.stop_loss = -0.07
+    g.max_hold_days = 15
+    g.hold_days = {}
+    run_daily(market_open, time='every_bar')
+
+def _check_parking_apron(h):
+    """检测停机坪形态：涨停 + 3日横盘蓄力"""
+    if len(h) < 5:
+        return False
+    closes = h['close']
+    opens = h['open']
+    # 在前面的数据中寻找涨停日
+    for i in range(len(h) - 4):
+        if i == 0:
+            continue
+        prev_close = closes.iloc[i - 1]
+        if prev_close <= 0:
+            continue
+        pct = (closes.iloc[i] - prev_close) / prev_close * 100
+        if pct < 9.5:
+            continue
+        # 涨停日找到，检查后续3天
+        limitup_close = closes.iloc[i]
+        ok = True
+        for j in range(1, 4):
+            idx = i + j
+            if idx >= len(h):
+                ok = False
+                break
+            c = closes.iloc[idx]
+            o = opens.iloc[idx]
+            if o <= 0 or limitup_close <= 0:
+                ok = False
+                break
+            # 高开：开盘价 > 涨停日收盘价
+            if o <= limitup_close:
+                ok = False
+                break
+            # 收涨：收盘 > 涨停日收盘
+            if c <= limitup_close:
+                ok = False
+                break
+            # 振幅 < 3%
+            if abs(c / o - 1) >= 0.03:
+                ok = False
+                break
+            # 日涨跌幅 < 5%（相对前日）
+            prev_c = closes.iloc[idx - 1]
+            if prev_c > 0 and abs((c - prev_c) / prev_c) >= 0.05:
+                ok = False
+                break
+        if ok:
+            return True
+    return False
+
+def market_open(context):
+    # ── 卖出检查 ──
+    for code in list(context.portfolio.positions.keys()):
+        g.hold_days[code] = g.hold_days.get(code, 0) + 1
+        pos = context.portfolio.positions[code]
+        if pos.avg_cost <= 0:
+            continue
+        profit_rate = (pos.price - pos.avg_cost) / pos.avg_cost
+        if profit_rate >= g.take_profit:
+            order_target(code, 0)
+            log.info("止盈 " + code + " +" + str(round(profit_rate * 100, 1)) + "%")
+            g.hold_days.pop(code, None)
+            continue
+        if profit_rate <= g.stop_loss:
+            order_target(code, 0)
+            log.info("止损 " + code + " " + str(round(profit_rate * 100, 1)) + "%")
+            g.hold_days.pop(code, None)
+            continue
+        if g.hold_days.get(code, 0) >= g.max_hold_days:
+            order_target(code, 0)
+            log.info("超时卖出 " + code)
+            g.hold_days.pop(code, None)
+
+    # ── 买入检查 ──
+    current_count = len(context.portfolio.positions)
+    if current_count >= g.max_positions:
+        return
+
+    for code in g.stocks:
+        if code in context.portfolio.positions or current_count >= g.max_positions:
+            continue
+        h = attribute_history(code, 16, '1d', ['close', 'open'])
+        if len(h) < 5:
+            continue
+        if _check_parking_apron(h):
+            cash_per = context.portfolio.total_value / g.max_positions
+            order_value(code, min(cash_per, context.portfolio.available_cash * 0.95))
+            g.hold_days[code] = 0
+            current_count += 1
+            log.info("停机坪买入 " + code + " 价格:" + str(round(h['close'].iloc[-1], 2)))
+''',
+    },
+    {
+        'id': 'backtrace_ma250',
+        'name': '回踩年线',
+        'category': 'stock',
+        'description': '中长线策略：突破MA250后缩量回踩年线，回踩幅度≥20%且量比>2。对应策略选股 S04。',
+        'code': '''# 回踩年线（策略选股模板 S04）
+# 买入：60日内从MA250下方突破后回踩，后段始终在MA250上方
+#       最高价日与回踩最低日间隔10-50日，量比>2，回踩幅度≥20%
+# 卖出：止盈+20%，止损-10%，最长持有30日
+# 需要至少250日历史数据
+# 兼容聚宽 + 本地回测引擎
+import jqdata
+
+def initialize(context):
+    set_benchmark('000300.XSHG')
+    set_option('use_real_price', True)
+    set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
+                             open_commission=0.0003, close_commission=0.0003,
+                             close_today_commission=0, min_commission=5), type='stock')
+    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
+                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
+                '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
+    g.max_positions = 5
+    g.take_profit = 0.20
+    g.stop_loss = -0.10
+    g.max_hold_days = 30
+    g.hold_days = {}
+    g.check_window = 60
+    run_daily(market_open, time='every_bar')
+
+def _check_backtrace_ma250(h):
+    """检测回踩年线形态"""
+    closes = h['close']
+    volumes = h['volume']
+    n = len(closes)
+    if n < 60:
+        return False
+
+    # 简化MA250：用全部可用数据计算（需要引擎提供足够前导数据）
+    # 这里用最近60日窗口中各日的估算MA250
+    # 找出60日窗口内最高价及其位置
+    window = closes.iloc[-60:]
+    vol_window = volumes.iloc[-60:]
+    highest_idx = window.values.argmax()
+    highest_price = window.iloc[highest_idx]
+    highest_vol = vol_window.iloc[highest_idx]
+    if highest_idx == 0 or highest_idx >= 59:
+        return False
+
+    # 前段：最高价之前
+    front = window.iloc[:highest_idx + 1]
+    # 后段：最高价之后（含最高价日）
+    back = window.iloc[highest_idx:]
+    back_vol = vol_window.iloc[highest_idx:]
+
+    if len(front) < 2 or len(back) < 2:
+        return False
+
+    # 简化检查：前段首日价格 < 前段末日价格（向上突破趋势）
+    if front.iloc[0] >= front.iloc[-1]:
+        return False
+
+    # 后段找最低价
+    back_lowest_idx = back.values.argmin()
+    back_lowest_price = back.iloc[back_lowest_idx]
+    back_lowest_vol = back_vol.iloc[back_lowest_idx]
+
+    # 回踩天数在10-50日间
+    days_diff = back_lowest_idx
+    if days_diff < 10 or days_diff > 50:
+        return False
+
+    # 量比 > 2（最高价日成交量 / 回踩最低价日成交量）
+    if back_lowest_vol <= 0:
+        return False
+    vol_ratio = highest_vol / back_lowest_vol
+    if vol_ratio <= 2:
+        return False
+
+    # 回踩幅度 ≥ 20%
+    if highest_price <= 0:
+        return False
+    back_ratio = back_lowest_price / highest_price
+    if back_ratio >= 0.8:
+        return False
+
+    return True
+
+def market_open(context):
+    # ── 卖出检查 ──
+    for code in list(context.portfolio.positions.keys()):
+        g.hold_days[code] = g.hold_days.get(code, 0) + 1
+        pos = context.portfolio.positions[code]
+        if pos.avg_cost <= 0:
+            continue
+        profit_rate = (pos.price - pos.avg_cost) / pos.avg_cost
+        if profit_rate >= g.take_profit:
+            order_target(code, 0)
+            log.info("止盈 " + code + " +" + str(round(profit_rate * 100, 1)) + "%")
+            g.hold_days.pop(code, None)
+            continue
+        if profit_rate <= g.stop_loss:
+            order_target(code, 0)
+            log.info("止损 " + code + " " + str(round(profit_rate * 100, 1)) + "%")
+            g.hold_days.pop(code, None)
+            continue
+        if g.hold_days.get(code, 0) >= g.max_hold_days:
+            order_target(code, 0)
+            log.info("超时卖出 " + code)
+            g.hold_days.pop(code, None)
+
+    # ── 买入检查 ──
+    current_count = len(context.portfolio.positions)
+    if current_count >= g.max_positions:
+        return
+
+    for code in g.stocks:
+        if code in context.portfolio.positions or current_count >= g.max_positions:
+            continue
+        h = attribute_history(code, 61, '1d', ['close', 'volume'])
+        if len(h) < 60:
+            continue
+        if _check_backtrace_ma250(h):
+            cash_per = context.portfolio.total_value / g.max_positions
+            order_value(code, min(cash_per, context.portfolio.available_cash * 0.95))
+            g.hold_days[code] = 0
+            current_count += 1
+            log.info("回踩年线买入 " + code + " 价格:" + str(round(h['close'].iloc[-1], 2)))
+''',
+    },
+    {
+        'id': 'breakthrough_platform',
+        'name': '突破平台',
+        'category': 'stock',
+        'description': '横盘突破策略：60日内价格在MA60附近整理后放量上穿MA60买入。对应策略选股 S05。',
+        'code': '''# 突破平台（策略选股模板 S05）
+# 买入：60日内某日开盘<MA60≤收盘（上穿），且放量
+#       上穿日之前所有交易日，收盘价偏离MA60在-5%~+20%（横盘整理）
+# 卖出：止盈+15%，止损-7%，最长持有20日
+# 兼容聚宽 + 本地回测引擎
+import jqdata
+
+def initialize(context):
+    set_benchmark('000300.XSHG')
+    set_option('use_real_price', True)
+    set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
+                             open_commission=0.0003, close_commission=0.0003,
+                             close_today_commission=0, min_commission=5), type='stock')
+    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
+                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
+                '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
+    g.max_positions = 5
+    g.take_profit = 0.15
+    g.stop_loss = -0.07
+    g.max_hold_days = 20
+    g.hold_days = {}
+    run_daily(market_open, time='every_bar')
+
+def _check_breakthrough(h):
+    """检测突破平台形态"""
+    closes = h['close']
+    opens = h['open']
+    volumes = h['volume']
+    n = len(closes)
+    if n < 60:
+        return False
+
+    # 计算每日MA60（简化：用整个窗口的滚动均值）
+    # 检查最近几日是否有上穿
+    recent = 10  # 在最近10日内寻找突破
+    for i in range(n - recent, n):
+        if i < 59:
+            continue
+        ma60 = closes.iloc[i - 59:i + 1].mean()
+        c = closes.iloc[i]
+        o = opens.iloc[i]
+        if ma60 <= 0:
+            continue
+        # 上穿条件：开盘价 < MA60 ≤ 收盘价
+        if not (o < ma60 <= c):
+            continue
+        # 放量条件：当日成交量 > 5日均量 * 1.5
+        if i >= 5:
+            vol_ma5 = volumes.iloc[i - 5:i].mean()
+            if vol_ma5 > 0 and volumes.iloc[i] < vol_ma5 * 1.5:
+                continue
+        # 检查上穿日之前的横盘：偏离MA60在-5%~+20%
+        platform_ok = True
+        for j in range(max(0, i - 59), i):
+            if j < 59:
+                continue
+            ma60_j = closes.iloc[j - 59:j + 1].mean()
+            if ma60_j <= 0:
+                continue
+            deviation = (closes.iloc[j] - ma60_j) / ma60_j
+            if deviation < -0.05 or deviation > 0.20:
+                platform_ok = False
+                break
+        if platform_ok:
+            return True
+    return False
+
+def market_open(context):
+    # ── 卖出检查 ──
+    for code in list(context.portfolio.positions.keys()):
+        g.hold_days[code] = g.hold_days.get(code, 0) + 1
+        pos = context.portfolio.positions[code]
+        if pos.avg_cost <= 0:
+            continue
+        profit_rate = (pos.price - pos.avg_cost) / pos.avg_cost
+        if profit_rate >= g.take_profit:
+            order_target(code, 0)
+            log.info("止盈 " + code + " +" + str(round(profit_rate * 100, 1)) + "%")
+            g.hold_days.pop(code, None)
+            continue
+        if profit_rate <= g.stop_loss:
+            order_target(code, 0)
+            log.info("止损 " + code + " " + str(round(profit_rate * 100, 1)) + "%")
+            g.hold_days.pop(code, None)
+            continue
+        if g.hold_days.get(code, 0) >= g.max_hold_days:
+            order_target(code, 0)
+            log.info("超时卖出 " + code)
+            g.hold_days.pop(code, None)
+
+    # ── 买入检查 ──
+    current_count = len(context.portfolio.positions)
+    if current_count >= g.max_positions:
+        return
+
+    for code in g.stocks:
+        if code in context.portfolio.positions or current_count >= g.max_positions:
+            continue
+        h = attribute_history(code, 70, '1d', ['close', 'open', 'volume'])
+        if len(h) < 60:
+            continue
+        if _check_breakthrough(h):
+            cash_per = context.portfolio.total_value / g.max_positions
+            order_value(code, min(cash_per, context.portfolio.available_cash * 0.95))
+            g.hold_days[code] = 0
+            current_count += 1
+            log.info("突破平台买入 " + code + " 价格:" + str(round(h['close'].iloc[-1], 2)))
+''',
+    },
+    {
+        'id': 'low_atr_growth',
+        'name': '低ATR成长',
+        'category': 'stock',
+        'description': '低波动成长策略：上市满250日，近10日ATR≤10%且最高/最低价比>1.1。对应策略选股 S10。',
+        'code': '''# 低ATR成长（策略选股模板 S10）
+# 买入：上市满250日 + 近10日ATR≤10% + 近10日最高/最低收盘价比>1.1
+# 卖出：止盈+15%，止损-7%，最长持有20日
+# 兼容聚宽 + 本地回测引擎
+import jqdata
+
+def initialize(context):
+    set_benchmark('000300.XSHG')
+    set_option('use_real_price', True)
+    set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
+                             open_commission=0.0003, close_commission=0.0003,
+                             close_today_commission=0, min_commission=5), type='stock')
+    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
+                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
+                '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
+    g.max_positions = 5
+    g.take_profit = 0.15
+    g.stop_loss = -0.07
+    g.max_hold_days = 20
+    g.hold_days = {}
+    g.atr_window = 10
+    g.atr_threshold = 10
+    run_daily(market_open, time='every_bar')
+
+def _check_low_atr(h, window=10, atr_max=10):
+    """检测低ATR成长条件"""
+    if len(h) < window:
+        return False
+    closes = h['close'].iloc[-window:]
+    if closes.min() <= 0:
+        return False
+    # 计算ATR：日涨跌幅绝对值之和 / 天数
+    total_change = 0.0
+    for i in range(1, len(closes)):
+        prev = closes.iloc[i - 1]
+        if prev > 0:
+            total_change += abs((closes.iloc[i] - prev) / prev * 100)
+    atr = total_change / window
+    if atr > atr_max:
+        return False
+    # 最高/最低收盘价比 > 1.1
+    ratio = (closes.max() - closes.min()) / closes.min()
+    if ratio <= 0.1:
+        return False
+    return True
+
+def market_open(context):
+    # ── 卖出检查 ──
+    for code in list(context.portfolio.positions.keys()):
+        g.hold_days[code] = g.hold_days.get(code, 0) + 1
+        pos = context.portfolio.positions[code]
+        if pos.avg_cost <= 0:
+            continue
+        profit_rate = (pos.price - pos.avg_cost) / pos.avg_cost
+        if profit_rate >= g.take_profit:
+            order_target(code, 0)
+            log.info("止盈 " + code + " +" + str(round(profit_rate * 100, 1)) + "%")
+            g.hold_days.pop(code, None)
+            continue
+        if profit_rate <= g.stop_loss:
+            order_target(code, 0)
+            log.info("止损 " + code + " " + str(round(profit_rate * 100, 1)) + "%")
+            g.hold_days.pop(code, None)
+            continue
+        if g.hold_days.get(code, 0) >= g.max_hold_days:
+            order_target(code, 0)
+            log.info("超时卖出 " + code)
+            g.hold_days.pop(code, None)
+
+    # ── 买入检查 ──
+    current_count = len(context.portfolio.positions)
+    if current_count >= g.max_positions:
+        return
+
+    for code in g.stocks:
+        if code in context.portfolio.positions or current_count >= g.max_positions:
+            continue
+        h = attribute_history(code, 11, '1d', ['close'])
+        if len(h) < g.atr_window:
+            continue
+        if _check_low_atr(h, g.atr_window, g.atr_threshold):
+            cash_per = context.portfolio.total_value / g.max_positions
+            order_value(code, min(cash_per, context.portfolio.available_cash * 0.95))
+            g.hold_days[code] = 0
+            current_count += 1
+            log.info("低ATR成长买入 " + code + " 价格:" + str(round(h['close'].iloc[-1], 2)))
+''',
+    },
 ]
 
 

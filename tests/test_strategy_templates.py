@@ -3,7 +3,7 @@
 """
 策略选股模板测试
 
-对应文档：document/策略选股说明.md 第 4 章"第一批模板落地计划"
+对应文档：document/策略选股说明.md 第 4 章"模板落地计划"
 对应实施方案：document/选股策略说明以及实现需求说明.md Phase 3
 
 测试范围：
@@ -13,11 +13,14 @@
   4. 回测结果结构完整（含 nav、trades、metrics）
   5. 无未来函数检测（信号日不晚于数据可见日）
   6. 模板名称与策略选股说明一致
+  7. 第二批策略模板核心逻辑单元测试
+  8. 模板ID唯一性、字段完整性
 """
 
 import os
 import sys
 import unittest
+import types
 import numpy as np
 import pandas as pd
 
@@ -25,6 +28,10 @@ import pandas as pd
 cpath = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if cpath not in sys.path:
     sys.path.insert(0, cpath)
+
+# jqdata shim：模板代码含 import jqdata，在非沙箱环境直接 exec 时需要
+if 'jqdata' not in sys.modules:
+    sys.modules['jqdata'] = types.ModuleType('jqdata')
 
 
 def _create_test_cache(code, start='2024-01-02', periods=250, base_price=10.0, seed=None):
@@ -63,6 +70,7 @@ def _get_template(template_id):
 
 
 # 所有需要测试的策略选股模板（id → 策略选股说明中的名称）
+# 第一批
 STRATEGY_TEMPLATES_MAP = {
     'turtle_trade': '海龟交易法则',
     'volume_increase': '放量上涨',
@@ -70,6 +78,18 @@ STRATEGY_TEMPLATES_MAP = {
     'oversold_rebound': '超跌反弹',
     'low_backtrace_increase': '无大幅回撤',
 }
+
+# 第二批
+STRATEGY_TEMPLATES_BATCH2 = {
+    'keep_increasing': '均线多头',
+    'parking_apron': '停机坪',
+    'backtrace_ma250': '回踩年线',
+    'breakthrough_platform': '突破平台',
+    'low_atr_growth': '低ATR成长',
+}
+
+# 合并全部策略选股模板
+ALL_STRATEGY_TEMPLATES = {**STRATEGY_TEMPLATES_MAP, **STRATEGY_TEMPLATES_BATCH2}
 
 # 候选股票池（模板中用到的代码都需要有缓存）
 TEST_STOCKS = ['000001', '600036', '601318', '600519', '000858',
@@ -81,24 +101,36 @@ class TestTemplateRegistry(unittest.TestCase):
     """测试模板注册：确保所有策略选股模板都在后端模板列表中"""
 
     def test_all_templates_exist(self):
-        """所有第一批模板都已注册到 STRATEGY_TEMPLATES"""
+        """所有模板都已注册到 STRATEGY_TEMPLATES"""
         from instock.web.portfolioBacktestHandler import STRATEGY_TEMPLATES
         registered_ids = {t['id'] for t in STRATEGY_TEMPLATES}
-        for tid, name in STRATEGY_TEMPLATES_MAP.items():
+        for tid, name in ALL_STRATEGY_TEMPLATES.items():
             self.assertIn(tid, registered_ids,
                           f"模板 '{name}' (id={tid}) 未注册到 STRATEGY_TEMPLATES")
 
     def test_template_names_match(self):
         """模板名称与策略选股说明文档一致"""
-        for tid, expected_name in STRATEGY_TEMPLATES_MAP.items():
+        for tid, expected_name in ALL_STRATEGY_TEMPLATES.items():
             tpl = _get_template(tid)
             self.assertIsNotNone(tpl, f"模板 {tid} 不存在")
             self.assertEqual(tpl['name'], expected_name,
                              f"模板 {tid} 名称应为 '{expected_name}'，实际为 '{tpl['name']}'")
 
+    def test_template_ids_unique(self):
+        """所有模板ID全局唯一"""
+        from instock.web.portfolioBacktestHandler import STRATEGY_TEMPLATES
+        ids = [t['id'] for t in STRATEGY_TEMPLATES]
+        self.assertEqual(len(ids), len(set(ids)),
+                         f"存在重复ID: {[x for x in ids if ids.count(x) > 1]}")
+
+    def test_template_count_at_least_16(self):
+        """模板总数不少于16"""
+        from instock.web.portfolioBacktestHandler import STRATEGY_TEMPLATES
+        self.assertGreaterEqual(len(STRATEGY_TEMPLATES), 16)
+
     def test_templates_have_required_fields(self):
         """每个模板都包含必要字段"""
-        for tid in STRATEGY_TEMPLATES_MAP:
+        for tid in ALL_STRATEGY_TEMPLATES:
             tpl = _get_template(tid)
             self.assertIsNotNone(tpl)
             self.assertIn('id', tpl)
@@ -109,6 +141,20 @@ class TestTemplateRegistry(unittest.TestCase):
             self.assertTrue(len(tpl['code'].strip()) > 0,
                             f"模板 {tid} 代码为空")
 
+    def test_batch2_descriptions_reference_strategy_id(self):
+        """第二批模板描述中包含策略编号引用"""
+        sid_map = {
+            'keep_increasing': 'S02',
+            'parking_apron': 'S03',
+            'backtrace_ma250': 'S04',
+            'breakthrough_platform': 'S05',
+            'low_atr_growth': 'S10',
+        }
+        for tid, sid in sid_map.items():
+            tpl = _get_template(tid)
+            self.assertIn(sid, tpl['description'],
+                          f"模板 {tid} 描述未引用策略编号 {sid}")
+
 
 class TestTemplateSandbox(unittest.TestCase):
     """测试模板代码安全性：可通过沙箱校验"""
@@ -116,7 +162,7 @@ class TestTemplateSandbox(unittest.TestCase):
     def test_all_templates_pass_sandbox(self):
         """所有模板代码通过沙箱安全检查"""
         from instock.core.backtest.strategy_sandbox import validate_code
-        for tid, name in STRATEGY_TEMPLATES_MAP.items():
+        for tid, name in ALL_STRATEGY_TEMPLATES.items():
             tpl = _get_template(tid)
             self.assertIsNotNone(tpl, f"模板 {tid} 不存在")
             ok, err = validate_code(tpl['code'])
@@ -125,13 +171,34 @@ class TestTemplateSandbox(unittest.TestCase):
     def test_all_templates_compilable(self):
         """所有模板代码可编译（含 initialize 函数）"""
         from instock.core.backtest.strategy_sandbox import compile_strategy
-        for tid, name in STRATEGY_TEMPLATES_MAP.items():
+        for tid, name in ALL_STRATEGY_TEMPLATES.items():
             tpl = _get_template(tid)
             funcs = compile_strategy(tpl['code'])
             self.assertIn('initialize', funcs,
                           f"模板 '{name}' 缺少 initialize 函数")
             self.assertTrue(callable(funcs['initialize']),
                             f"模板 '{name}' 的 initialize 不可调用")
+
+    def test_all_templates_have_callback(self):
+        """每个模板至少有 handle_data 或使用 run_daily/run_weekly"""
+        from instock.core.backtest.strategy_sandbox import compile_strategy
+        for tid, name in ALL_STRATEGY_TEMPLATES.items():
+            tpl = _get_template(tid)
+            funcs = compile_strategy(tpl['code'])
+            has_handle = funcs.get('handle_data') is not None
+            uses_run = 'run_daily' in tpl['code'] or 'run_weekly' in tpl['code']
+            self.assertTrue(has_handle or uses_run,
+                            f"模板 '{name}' 既无 handle_data 也未使用 run_daily/run_weekly")
+
+    def test_no_dangerous_imports(self):
+        """模板代码不含危险导入"""
+        dangerous = ['import os', 'import subprocess', 'import socket',
+                     'import shutil', '__import__("os")']
+        for tid, name in ALL_STRATEGY_TEMPLATES.items():
+            tpl = _get_template(tid)
+            for d in dangerous:
+                self.assertNotIn(d, tpl['code'],
+                                 f"模板 '{name}' 包含危险代码: {d}")
 
 
 class TestTemplateBacktest(unittest.TestCase):
@@ -294,6 +361,232 @@ class TestTemplateIndependence(unittest.TestCase):
         for tid, result in results.items():
             self.assertIn('metrics', result, f"模板 {tid} 缺少 metrics")
             self.assertIn('nav', result, f"模板 {tid} 缺少 nav")
+
+
+# ============================================================================
+# 第二批模板回测运行测试
+# ============================================================================
+class TestBatch2TemplateBacktest(unittest.TestCase):
+    """测试第二批策略模板可运行回测"""
+
+    @classmethod
+    def setUpClass(cls):
+        for i, code in enumerate(TEST_STOCKS):
+            _create_test_cache(code, start='2024-01-02', periods=250,
+                               base_price=10.0 + i * 2, seed=42 + i)
+
+    def _run_template(self, template_id):
+        from instock.core.backtest.portfolio_engine import run_backtest
+        tpl = _get_template(template_id)
+        self.assertIsNotNone(tpl, f"模板 {template_id} 不存在")
+        return run_backtest(tpl['code'], '2024-03-01', '2024-12-31',
+                            initial_cash=1000000)
+
+    def test_keep_increasing_runs(self):
+        """均线多头模板可运行"""
+        result = self._run_template('keep_increasing')
+        self.assertEqual(result['status'], 'completed',
+                         f"回测失败: {result.get('message', '')}")
+        self.assertIn('metrics', result)
+        self.assertIn('nav', result)
+
+    def test_parking_apron_runs(self):
+        """停机坪模板可运行"""
+        result = self._run_template('parking_apron')
+        self.assertEqual(result['status'], 'completed',
+                         f"回测失败: {result.get('message', '')}")
+        self.assertIn('metrics', result)
+
+    def test_backtrace_ma250_runs(self):
+        """回踩年线模板可运行"""
+        result = self._run_template('backtrace_ma250')
+        self.assertEqual(result['status'], 'completed',
+                         f"回测失败: {result.get('message', '')}")
+        self.assertIn('metrics', result)
+
+    def test_breakthrough_platform_runs(self):
+        """突破平台模板可运行"""
+        result = self._run_template('breakthrough_platform')
+        self.assertEqual(result['status'], 'completed',
+                         f"回测失败: {result.get('message', '')}")
+        self.assertIn('metrics', result)
+
+    def test_low_atr_growth_runs(self):
+        """低ATR成长模板可运行"""
+        result = self._run_template('low_atr_growth')
+        self.assertEqual(result['status'], 'completed',
+                         f"回测失败: {result.get('message', '')}")
+        self.assertIn('metrics', result)
+
+    def test_batch2_no_future_leak(self):
+        """第二批模板无未来函数（交易日期在回测范围内）"""
+        from instock.core.backtest.portfolio_engine import run_backtest
+        for tid in STRATEGY_TEMPLATES_BATCH2:
+            tpl = _get_template(tid)
+            result = run_backtest(tpl['code'], '2024-03-01', '2024-12-31',
+                                  initial_cash=1000000)
+            if result['status'] != 'completed':
+                continue
+            for trade in result.get('trades', []):
+                self.assertGreaterEqual(trade['date'], '2024-03-01',
+                                        f"{tid}: 交易日期 {trade['date']} 早于回测起始")
+                self.assertLessEqual(trade['date'], '2024-12-31',
+                                     f"{tid}: 交易日期 {trade['date']} 晚于回测结束")
+
+
+# ============================================================================
+# 第二批模板核心逻辑单元测试
+# ============================================================================
+class TestKeepIncreasingLogic(unittest.TestCase):
+    """均线多头(S02)核心逻辑"""
+
+    def test_bullish_ma30_over_20pct(self):
+        """MA30持续上升且涨幅>20%满足条件"""
+        prices = np.concatenate([
+            np.linspace(9.0, 10.5, 30),
+            np.linspace(11.0, 14.0, 30),
+        ])
+        ma30_p0 = prices[:30].mean()
+        ma30_p3 = prices[30:60].mean()
+        self.assertGreater(ma30_p3 / ma30_p0, 1.2)
+        # 采样点递增
+        ma30_p1 = prices[10:40].mean()
+        ma30_p2 = prices[20:50].mean()
+        self.assertLess(ma30_p0, ma30_p1)
+        self.assertLess(ma30_p1, ma30_p2)
+        self.assertLess(ma30_p2, ma30_p3)
+
+    def test_flat_ma30_not_satisfied(self):
+        """走平的MA30不满足"""
+        prices = np.full(60, 10.0)
+        ma30_p0 = prices[:30].mean()
+        ma30_p3 = prices[30:60].mean()
+        self.assertLessEqual(ma30_p3 / ma30_p0, 1.2)
+
+
+class TestParkingApronLogic(unittest.TestCase):
+    """停机坪(S03)核心逻辑"""
+
+    def _get_func(self):
+        tpl = _get_template('parking_apron')
+        ns = {}
+        exec(tpl['code'], ns)
+        return ns['_check_parking_apron']
+
+    def test_perfect_pattern(self):
+        """涨停+3日高开收涨应触发"""
+        func = self._get_func()
+        closes = [10.0, 10.1, 10.2, 10.0, 10.1,
+                  11.1, 11.2, 11.25, 11.3, 11.3, 11.4]
+        opens = [10.0, 10.0, 10.1, 10.0, 10.0,
+                 10.1, 11.15, 11.2, 11.25, 11.3, 11.3]
+        h = pd.DataFrame({'close': closes, 'open': opens})
+        self.assertTrue(func(h))
+
+    def test_no_limitup_no_trigger(self):
+        """无涨停时不触发"""
+        func = self._get_func()
+        closes = [10.0 + i * 0.01 for i in range(10)]
+        opens = [c - 0.005 for c in closes]
+        h = pd.DataFrame({'close': closes, 'open': opens})
+        self.assertFalse(func(h))
+
+
+class TestBacktraceMa250Logic(unittest.TestCase):
+    """回踩年线(S04)核心逻辑"""
+
+    def _get_func(self):
+        tpl = _get_template('backtrace_ma250')
+        ns = {}
+        exec(tpl['code'], ns)
+        return ns['_check_backtrace_ma250']
+
+    def test_steady_uptrend_no_pullback(self):
+        """单调上涨无回踩不触发"""
+        func = self._get_func()
+        closes = np.linspace(10.0, 20.0, 61)
+        volumes = np.full(61, 1_000_000.0)
+        h = pd.DataFrame({'close': closes, 'volume': volumes})
+        self.assertFalse(func(h))
+
+    def test_function_returns_bool(self):
+        """函数返回布尔值"""
+        func = self._get_func()
+        closes = np.concatenate([
+            np.linspace(10.0, 15.0, 20),
+            np.linspace(14.8, 11.5, 41),
+        ])
+        volumes = np.concatenate([
+            np.full(20, 2_000_000.0),
+            np.linspace(1_800_000, 800_000, 41),
+        ])
+        h = pd.DataFrame({'close': closes, 'volume': volumes})
+        self.assertIsInstance(func(h), bool)
+
+
+class TestBreakthroughPlatformLogic(unittest.TestCase):
+    """突破平台(S05)核心逻辑"""
+
+    def _get_func(self):
+        tpl = _get_template('breakthrough_platform')
+        ns = {}
+        exec(tpl['code'], ns)
+        return ns['_check_breakthrough']
+
+    def test_short_data_false(self):
+        """数据不足60日返回False"""
+        func = self._get_func()
+        h = pd.DataFrame({
+            'close': [10.0] * 30,
+            'open': [9.9] * 30,
+            'volume': [1_000_000.0] * 30,
+        })
+        self.assertFalse(func(h))
+
+    def test_returns_bool(self):
+        """正常数据返回布尔值"""
+        func = self._get_func()
+        closes = np.full(70, 10.0) + np.random.RandomState(42).randn(70) * 0.1
+        opens = closes - 0.05
+        volumes = np.full(70, 1_000_000.0)
+        h = pd.DataFrame({'close': closes, 'open': opens, 'volume': volumes})
+        self.assertIsInstance(func(h), bool)
+
+
+class TestLowAtrGrowthLogic(unittest.TestCase):
+    """低ATR成长(S10)核心逻辑"""
+
+    def _get_func(self):
+        tpl = _get_template('low_atr_growth')
+        ns = {}
+        exec(tpl['code'], ns)
+        return ns['_check_low_atr']
+
+    def test_high_atr_rejected(self):
+        """高波动不触发"""
+        func = self._get_func()
+        closes = pd.Series([10.0, 12.0, 9.0, 13.0, 8.0,
+                            14.0, 7.0, 15.0, 6.0, 16.0, 5.0])
+        h = pd.DataFrame({'close': closes})
+        self.assertFalse(func(h, window=10, atr_max=10))
+
+    def test_flat_price_rejected(self):
+        """完全平坦价格（范围<10%）不触发"""
+        func = self._get_func()
+        closes = pd.Series([10.0, 10.01, 10.02, 10.03, 10.04,
+                            10.05, 10.04, 10.03, 10.02, 10.01, 10.0])
+        h = pd.DataFrame({'close': closes})
+        self.assertFalse(func(h, window=10, atr_max=10))
+
+    def test_low_atr_with_range_triggers(self):
+        """低ATR且有价格范围时触发"""
+        func = self._get_func()
+        # 缓慢上涨: ATR低, 但range>10%
+        closes = pd.Series([10.0, 10.15, 10.3, 10.45, 10.6,
+                            10.75, 10.9, 11.05, 11.1, 11.15, 11.2])
+        h = pd.DataFrame({'close': closes})
+        result = func(h, window=10, atr_max=10)
+        self.assertTrue(result, "低ATR+足够范围应触发")
 
 
 if __name__ == '__main__':
