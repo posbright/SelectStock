@@ -25,10 +25,10 @@
     </div>
 
     <el-table :data="list" v-loading="loading" stripe style="width: 100%;"
-              :default-sort="{ prop: 'id', order: 'descending' }"
-              @selection-change="onSelectionChange" ref="tableRef">
+              :default-sort="{ prop: 'total_return', order: 'descending' }"
+              @selection-change="onSelectionChange" @sort-change="onSortChange" ref="tableRef">
       <el-table-column type="selection" width="45" />
-      <el-table-column prop="id" label="ID" width="60" sortable />
+      <el-table-column prop="id" label="ID" width="60" sortable="custom" />
       <el-table-column prop="strategy_name" label="策略名称" width="150" show-overflow-tooltip>
         <template #default="{ row }">
           <el-link type="primary" @click="$router.push('/algo/edit/' + row.strategy_id)">
@@ -42,12 +42,12 @@
       <el-table-column prop="initial_cash" label="初始资金" width="100" align="right">
         <template #default="{ row }">{{ formatCash(row.initial_cash) }}</template>
       </el-table-column>
-      <el-table-column prop="total_return" label="策略收益" width="95" align="right" sortable>
+      <el-table-column prop="total_return" label="策略收益" width="95" align="right" sortable="custom">
         <template #default="{ row }">
           <span :class="retCls(row.total_return)">{{ fmtRet(row.total_return) }}</span>
         </template>
       </el-table-column>
-      <el-table-column prop="annual_return" label="年化收益" width="95" align="right" sortable>
+      <el-table-column prop="annual_return" label="年化收益" width="95" align="right" sortable="custom">
         <template #default="{ row }">
           <span :class="retCls(row.annual_return)">{{ fmtRet(row.annual_return) }}</span>
         </template>
@@ -62,7 +62,7 @@
           <span :class="retCls(row.excess_return)">{{ fmtRet(row.excess_return) }}</span>
         </template>
       </el-table-column>
-      <el-table-column prop="max_drawdown" label="最大回撤" width="90" align="right" sortable>
+      <el-table-column prop="max_drawdown" label="最大回撤" width="90" align="right" sortable="custom">
         <template #default="{ row }">
           <span class="val-green">{{ N(row.max_drawdown).toFixed(2) }}%</span>
         </template>
@@ -72,15 +72,24 @@
           <span class="val-green">{{ N(row.excess_max_drawdown || 0).toFixed(2) }}%</span>
         </template>
       </el-table-column>
-      <el-table-column prop="sharpe_ratio" label="夏普" width="70" align="right" sortable>
+      <el-table-column prop="sharpe_ratio" label="夏普" width="70" align="right" sortable="custom">
         <template #default="{ row }">{{ N(row.sharpe_ratio).toFixed(2) }}</template>
       </el-table-column>
       <el-table-column label="超额夏普" width="85" align="right" sortable :sort-method="(a:any,b:any)=> (a.excess_sharpe_ratio||0)-(b.excess_sharpe_ratio||0)">
         <template #default="{ row }">{{ N(row.excess_sharpe_ratio || 0).toFixed(2) }}</template>
       </el-table-column>
-      <el-table-column prop="trade_count" label="交易数" width="70" align="right" sortable />
+      <el-table-column label="索提诺" width="75" align="right" sortable :sort-method="(a:any,b:any)=> (a.sortino_ratio||0)-(b.sortino_ratio||0)">
+        <template #default="{ row }">{{ N(row.sortino_ratio || 0).toFixed(2) }}</template>
+      </el-table-column>
+      <el-table-column prop="win_rate" label="胜率" width="70" align="right" sortable="custom">
+        <template #default="{ row }">{{ N(row.win_rate || 0).toFixed(1) }}%</template>
+      </el-table-column>
+      <el-table-column label="盈亏比" width="75" align="right" sortable :sort-method="(a:any,b:any)=> (a.profit_loss_ratio||0)-(b.profit_loss_ratio||0)">
+        <template #default="{ row }">{{ N(row.profit_loss_ratio || 0).toFixed(2) }}</template>
+      </el-table-column>
+      <el-table-column prop="trade_count" label="交易数" width="70" align="right" sortable="custom" />
       <el-table-column prop="elapsed" label="回测耗时" width="90" align="right" show-overflow-tooltip />
-      <el-table-column prop="completed_at" label="完成时间" width="160" sortable />
+      <el-table-column prop="completed_at" label="完成时间" width="160" sortable="custom" />
       <el-table-column label="操作" width="120" fixed="right">
         <template #default="{ row }">
           <el-button size="small" type="primary" text @click="viewDetail(row.id)">详情</el-button>
@@ -122,6 +131,8 @@ const tableRef = ref()
 const total = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(20)
+const sortBy = ref('total_return')
+const sortOrder = ref('desc')
 
 const N = Number
 function formatCash(v: number) {
@@ -138,6 +149,18 @@ function retCls(v: number | undefined) {
 
 function onSelectionChange(rows: any[]) {
   selectedRows.value = rows
+}
+
+function onSortChange({ prop, order }: { prop: string; order: string | null }) {
+  if (prop && order) {
+    sortBy.value = prop
+    sortOrder.value = order === 'ascending' ? 'asc' : 'desc'
+  } else {
+    sortBy.value = 'total_return'
+    sortOrder.value = 'desc'
+  }
+  currentPage.value = 1
+  loadData()
 }
 
 function onFilterChange() {
@@ -203,7 +226,7 @@ async function deleteSingle(row: any) {
 async function loadData() {
   loading.value = true
   try {
-    const params: any = { page: currentPage.value, page_size: pageSize.value }
+    const params: any = { page: currentPage.value, page_size: pageSize.value, sort_by: sortBy.value, sort_order: sortOrder.value }
     if (filterStrategyId.value) params.strategy_id = filterStrategyId.value
     const res = await getPortfolioBacktestListPage(params) as any
     if (res?.code === 0) {

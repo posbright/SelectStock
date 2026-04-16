@@ -1332,6 +1332,246 @@ def market_open(context):
             log.info("低ATR成长买入 " + code + " 价格:" + str(round(h['close'].iloc[-1], 2)))
 ''',
     },
+    {
+        'id': 'high_tight_flag',
+        'name': '高而窄的旗形',
+        'category': 'stock',
+        'description': '极端强势形态：短期翻倍且含连续涨停，止盈20%/止损10%。对应策略选股 S08。',
+        'code': '''# 高而窄的旗形（策略选股模板 S08）
+# 买入：上市满60日 + 收盘价/10~24日前最低价≥1.9 + 区间内连续两日涨幅≥9.5%
+# 卖出：止盈+20%，止损-10%，最长持有15日
+# 兼容聚宽 + 本地回测引擎
+import jqdata
+
+def initialize(context):
+    set_benchmark('000300.XSHG')
+    set_option('use_real_price', True)
+    set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
+                             open_commission=0.0003, close_commission=0.0003,
+                             close_today_commission=0, min_commission=5), type='stock')
+    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
+                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
+                '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
+    g.max_positions = 5
+    g.take_profit = 0.20
+    g.stop_loss = -0.10
+    g.max_hold_days = 15
+    g.hold_days = {}
+    run_daily(market_open, time='every_bar')
+
+def _check_high_tight_flag(h, threshold=60):
+    """检测高而窄旗形：收盘价/10~24日前最低价>=1.9，且该区间有连续两日涨幅>=9.5%"""
+    if len(h) < threshold:
+        return False
+    closes = h['close'].values
+    current_close = closes[-1]
+    if current_close <= 0:
+        return False
+    # 取 10~24 日前的数据片段（即倒数第25到倒数第11行）
+    seg_start = max(0, len(closes) - 25)
+    seg_end = max(0, len(closes) - 10)
+    if seg_end <= seg_start:
+        return False
+    segment = closes[seg_start:seg_end]
+    if len(segment) < 2:
+        return False
+    low = segment.min()
+    if low <= 0:
+        return False
+    # 条件1：涨幅 >= 90%
+    if current_close / low < 1.9:
+        return False
+    # 条件2：该段内连续两日涨幅 >= 9.5%
+    prev_pct = 0.0
+    for i in range(1, len(segment)):
+        if segment[i - 1] <= 0:
+            prev_pct = 0.0
+            continue
+        pct = (segment[i] - segment[i - 1]) / segment[i - 1] * 100
+        if pct >= 9.5:
+            if prev_pct >= 9.5:
+                return True
+            prev_pct = pct
+        else:
+            prev_pct = 0.0
+    return False
+
+def market_open(context):
+    # ── 卖出检查 ──
+    for code in list(context.portfolio.positions.keys()):
+        g.hold_days[code] = g.hold_days.get(code, 0) + 1
+        pos = context.portfolio.positions[code]
+        if pos.avg_cost <= 0:
+            continue
+        profit_rate = (pos.price - pos.avg_cost) / pos.avg_cost
+        if profit_rate >= g.take_profit:
+            order_target(code, 0)
+            log.info("止盈 " + code + " +" + str(round(profit_rate * 100, 1)) + "%")
+            g.hold_days.pop(code, None)
+            continue
+        if profit_rate <= g.stop_loss:
+            order_target(code, 0)
+            log.info("止损 " + code + " " + str(round(profit_rate * 100, 1)) + "%")
+            g.hold_days.pop(code, None)
+            continue
+        if g.hold_days.get(code, 0) >= g.max_hold_days:
+            order_target(code, 0)
+            log.info("超时卖出 " + code)
+            g.hold_days.pop(code, None)
+
+    # ── 买入检查 ──
+    current_count = len(context.portfolio.positions)
+    if current_count >= g.max_positions:
+        return
+
+    for code in g.stocks:
+        if code in context.portfolio.positions or current_count >= g.max_positions:
+            continue
+        h = attribute_history(code, 60, '1d', ['close'])
+        if len(h) < 60:
+            continue
+        if _check_high_tight_flag(h, 60):
+            cash_per = context.portfolio.total_value / g.max_positions
+            order_value(code, min(cash_per, context.portfolio.available_cash * 0.95))
+            g.hold_days[code] = 0
+            current_count += 1
+            log.info("高而窄旗形买入 " + code + " 价格:" + str(round(h['close'].iloc[-1], 2)))
+''',
+    },
+    {
+        'id': 'breakout_confirm',
+        'name': '突破确认',
+        'category': 'stock',
+        'description': '横盘后放量突破策略：40日振幅<25%、创新高、量比≥1.5、涨幅>2%、站上MA60。对应策略选股 S13。',
+        'code': '''# 突破确认（策略选股模板 S13）
+# 买入：40日振幅<25% + 收盘创40日新高 + 量比≥1.5 + 涨幅>2% + 收盘>MA60
+# 卖出：止盈+20%，止损-8%，最长持有20日
+# 兼容聚宽 + 本地回测引擎
+import jqdata
+
+def initialize(context):
+    set_benchmark('000300.XSHG')
+    set_option('use_real_price', True)
+    set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
+                             open_commission=0.0003, close_commission=0.0003,
+                             close_today_commission=0, min_commission=5), type='stock')
+    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
+                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
+                '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
+    g.max_positions = 5
+    g.take_profit = 0.20
+    g.stop_loss = -0.08
+    g.max_hold_days = 20
+    g.hold_days = {}
+    g.consolidation_window = 40
+    g.amplitude_max = 0.25
+    g.volume_ratio_min = 1.5
+    g.min_pct_change = 0.02
+    run_daily(market_open, time='every_bar')
+
+def _check_breakout(h, window=40, amp_max=0.25, vol_ratio=1.5, pct_min=0.02):
+    """检测横盘突破条件"""
+    if len(h) < window + 1:
+        return False
+    closes = h['close'].values
+    highs = h['high'].values
+    lows = h['low'].values
+    volumes = h['volume'].values
+
+    last_close = closes[-1]
+    last_vol = volumes[-1]
+    if last_close <= 0:
+        return False
+
+    # 过去40日（不含今日）
+    seg_close = closes[-(window + 1):-1]
+    seg_high = highs[-(window + 1):-1]
+    seg_low = lows[-(window + 1):-1]
+    seg_vol = volumes[-(window + 1):-1]
+
+    if len(seg_close) < window:
+        return False
+
+    # 条件1：振幅 < 25%
+    period_high = seg_high.max()
+    period_low = seg_low.min()
+    if period_low <= 0:
+        return False
+    amplitude = (period_high - period_low) / period_low
+    if amplitude >= amp_max:
+        return False
+
+    # 条件2：当日创新高
+    if last_close <= seg_close.max():
+        return False
+
+    # 条件3：量比 >= 1.5（相对过去20日均量）
+    vol_ma = volumes[-(21):-1].mean() if len(volumes) >= 21 else seg_vol.mean()
+    if vol_ma <= 0:
+        return False
+    if last_vol / vol_ma < vol_ratio:
+        return False
+
+    # 条件4：涨幅 > 2%
+    prev_close = closes[-2]
+    if prev_close <= 0:
+        return False
+    pct_change = (last_close - prev_close) / prev_close
+    if pct_change <= pct_min:
+        return False
+
+    # 条件5：站上MA60
+    if len(closes) >= 60:
+        ma60 = closes[-60:].mean()
+        if last_close <= ma60:
+            return False
+    # 数据不足60日时跳过MA60检查
+
+    return True
+
+def market_open(context):
+    # ── 卖出检查 ──
+    for code in list(context.portfolio.positions.keys()):
+        g.hold_days[code] = g.hold_days.get(code, 0) + 1
+        pos = context.portfolio.positions[code]
+        if pos.avg_cost <= 0:
+            continue
+        profit_rate = (pos.price - pos.avg_cost) / pos.avg_cost
+        if profit_rate >= g.take_profit:
+            order_target(code, 0)
+            log.info("止盈 " + code + " +" + str(round(profit_rate * 100, 1)) + "%")
+            g.hold_days.pop(code, None)
+            continue
+        if profit_rate <= g.stop_loss:
+            order_target(code, 0)
+            log.info("止损 " + code + " " + str(round(profit_rate * 100, 1)) + "%")
+            g.hold_days.pop(code, None)
+            continue
+        if g.hold_days.get(code, 0) >= g.max_hold_days:
+            order_target(code, 0)
+            log.info("超时卖出 " + code)
+            g.hold_days.pop(code, None)
+
+    # ── 买入检查 ──
+    current_count = len(context.portfolio.positions)
+    if current_count >= g.max_positions:
+        return
+
+    for code in g.stocks:
+        if code in context.portfolio.positions or current_count >= g.max_positions:
+            continue
+        h = attribute_history(code, 61, '1d', ['close', 'high', 'low', 'volume'])
+        if len(h) < g.consolidation_window + 1:
+            continue
+        if _check_breakout(h, g.consolidation_window, g.amplitude_max,
+                           g.volume_ratio_min, g.min_pct_change):
+            cash_per = context.portfolio.total_value / g.max_positions
+            order_value(code, min(cash_per, context.portfolio.available_cash * 0.95))
+            g.hold_days[code] = 0
+            current_count += 1
+            log.info("突破确认买入 " + code + " 价格:" + str(round(h['close'].iloc[-1], 2)))
+''',
+    },
 ]
 
 
@@ -2096,6 +2336,13 @@ class DeleteBacktestHandler(webBase.BaseHandler, ABC):
 class GetPortfolioBacktestListPageHandler(webBase.BaseHandler, ABC):
     """获取历史回测列表（分页版本）"""
 
+    # 允许排序的列白名单（防止 SQL 注入）
+    _SORT_WHITELIST = {
+        'id', 'total_return', 'annual_return', 'max_drawdown',
+        'sharpe_ratio', 'trade_count', 'completed_at', 'win_rate',
+        'alpha', 'beta', 'initial_cash',
+    }
+
     @gen.coroutine
     def get(self):
         try:
@@ -2103,10 +2350,16 @@ class GetPortfolioBacktestListPageHandler(webBase.BaseHandler, ABC):
             strategy_id = self.get_argument('strategy_id', None)
             page = int(self.get_argument('page', '1'))
             page_size = int(self.get_argument('page_size', '20'))
+            sort_by = self.get_argument('sort_by', 'total_return')
+            sort_order = self.get_argument('sort_order', 'desc')
             if page < 1:
                 page = 1
             if page_size < 1 or page_size > 200:
                 page_size = 20
+            if sort_by not in self._SORT_WHITELIST:
+                sort_by = 'total_return'
+            if sort_order.lower() not in ('asc', 'desc'):
+                sort_order = 'desc'
             offset = (page - 1) * page_size
 
             where = ''
@@ -2121,6 +2374,7 @@ class GetPortfolioBacktestListPageHandler(webBase.BaseHandler, ABC):
                 tuple(params) if params else None)
             total = count_row[0][0] if count_row else 0
 
+            order_clause = f'ORDER BY bp.{sort_by} {sort_order.upper()}'
             rows = mdb.executeSqlFetch(
                 f'SELECT bp.id, bp.strategy_id, sc.name as strategy_name, '
                 f'bp.start_date, bp.end_date, bp.initial_cash, bp.status, '
@@ -2129,7 +2383,7 @@ class GetPortfolioBacktestListPageHandler(webBase.BaseHandler, ABC):
                 f'bp.trade_count, bp.completed_at, bp.result_json '
                 f'FROM cn_stock_backtest_portfolio bp '
                 f'LEFT JOIN cn_stock_strategy_code sc ON bp.strategy_id = sc.id '
-                f'{where} ORDER BY bp.id DESC LIMIT %s OFFSET %s',
+                f'{where} {order_clause} LIMIT %s OFFSET %s',
                 tuple(params + [page_size, offset]) if params else (page_size, offset))
             data = []
             if rows:
@@ -2146,6 +2400,10 @@ class GetPortfolioBacktestListPageHandler(webBase.BaseHandler, ABC):
                                 'excess_max_drawdown': float(m.get('excess_max_drawdown', 0)),
                                 'excess_sharpe_ratio': float(m.get('excess_sharpe_ratio', 0)),
                                 'benchmark_annual_return': float(m.get('benchmark_annual_return', 0)),
+                                'sortino_ratio': float(m.get('sortino_ratio', 0)),
+                                'information_ratio': float(m.get('information_ratio', 0)),
+                                'profit_loss_ratio': float(m.get('profit_loss_ratio', 0)),
+                                'strategy_volatility': float(m.get('strategy_volatility', 0)),
                             }
                             elapsed = rj.get('elapsed', '')
                         except Exception as e:
