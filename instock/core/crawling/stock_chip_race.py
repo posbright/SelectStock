@@ -46,7 +46,10 @@ def stock_chip_race_open(date: str = "") -> pd.DataFrame:
         return pd.DataFrame()
 
     if r.status_code != 200:
-        logging.warning(f"stock_chip_race_open HTTP {r.status_code}")
+        if r.status_code == 462:
+            logging.info(f"stock_chip_race_open HTTP 462: 早盘抢筹数据暂不可用（通常仅在集合竞价时段9:15-9:30后可获取）")
+        else:
+            logging.warning(f"stock_chip_race_open HTTP {r.status_code}")
         return pd.DataFrame()
 
     try:
@@ -133,7 +136,10 @@ def stock_chip_race_end(date: str = "") -> pd.DataFrame:
         return pd.DataFrame()
 
     if r.status_code != 200:
-        logging.warning(f"stock_chip_race_end HTTP {r.status_code}")
+        if r.status_code == 462:
+            logging.info(f"stock_chip_race_end HTTP 462: 尾盘抢筹数据暂不可用（通常仅在收盘后14:57-15:00后可获取）")
+        else:
+            logging.warning(f"stock_chip_race_end HTTP {r.status_code}")
         return pd.DataFrame()
 
     try:

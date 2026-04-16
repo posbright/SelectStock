@@ -22,8 +22,8 @@ __date__ = '2026/02/14'
 
 # API获取重试间隔（秒）
 _RETRY_DELAY = 10
-# 子任务间防限流延迟（秒）
-_TASK_DELAY = 30
+# 子任务间防限流延迟（秒）—— 本地模式减少等待
+_TASK_DELAY = 5 if os.environ.get('INSTOCK_LOCAL_MODE') == '1' else 30
 
 
 # 每日股票龙虎榜
@@ -307,7 +307,8 @@ def stock_spot_buy(date):
 # 每日早盘抢筹
 def stock_chip_race_open_data(date):
     try:
-        data = _fetch_with_retry(lambda: stf.fetch_stock_chip_race_open(date), "早盘抢筹")
+        data = _fetch_with_retry(lambda: stf.fetch_stock_chip_race_open(date), "早盘抢筹",
+                                 retries=0)  # 早盘数据依赖时段，462错误无需重试
         if data is None or len(data.index) == 0:
             return
 

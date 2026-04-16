@@ -60,8 +60,8 @@ class TestPosition(unittest.TestCase):
     def test_on_buy_single(self):
         self.pos._on_buy(1000, 10.0, cost=3.0)
         self.assertEqual(self.pos.amount, 1000)
-        # avg_cost = (0*0 + 10*1000 + 3) / 1000 = 10.003
-        self.assertAlmostEqual(self.pos.avg_cost, 10.003, places=4)
+        # avg_cost 不含佣金（与聚宽一致）: (0*0 + 10*1000) / 1000 = 10.0
+        self.assertAlmostEqual(self.pos.avg_cost, 10.0, places=4)
         self.assertAlmostEqual(self.pos.price, 10.0)
         self.assertAlmostEqual(self.pos.value, 10000.0)
         self.assertEqual(self.pos._today_bought, 1000)
@@ -574,7 +574,9 @@ class TestCreateSafeNamespace(unittest.TestCase):
         self.assertNotIn('exec', builtins)
         self.assertNotIn('eval', builtins)
         self.assertNotIn('open', builtins)
-        self.assertNotIn('__import__', builtins)
+        # __import__ is a sandboxed _safe_import (whitelist-only), not the real __import__
+        self.assertIn('__import__', builtins)
+        self.assertNotEqual(builtins['__import__'], __builtins__.__import__ if hasattr(__builtins__, '__import__') else None)
 
     def test_math_available(self):
         ns = _create_safe_namespace()
