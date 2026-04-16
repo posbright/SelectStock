@@ -188,7 +188,7 @@ class TestPortfolioEngineSlippage(unittest.TestCase):
     """测试回测引擎的滑点、佣金和估值修复"""
 
     def test_avg_cost_includes_slippage(self):
-        """买入后 avg_cost 应反映滑点成本"""
+        """买入后 avg_cost 应反映滑点（但不含佣金，与聚宽一致）"""
         from instock.core.backtest.strategy_context import Position
 
         pos = Position('000001', '测试')
@@ -199,7 +199,8 @@ class TestPortfolioEngineSlippage(unittest.TestCase):
         commission = max(total_cost * 0.0003, 5.0)
 
         pos._on_buy(amount, actual_price, commission)
-        expected_avg_cost = (actual_price * amount + commission) / amount
+        # avg_cost 不含佣金，与聚宽一致；滑点体现在 actual_price 本身
+        expected_avg_cost = actual_price
         self.assertAlmostEqual(pos.avg_cost, expected_avg_cost, places=4)
         self.assertGreater(pos.avg_cost, exec_price)
 
@@ -406,7 +407,7 @@ class TestSlippageEconomics(unittest.TestCase):
         self.assertAlmostEqual(p.total_value, expected_total, places=2)
 
     def test_profit_reflects_all_costs(self):
-        """position.profit 应反映滑点和佣金"""
+        """position.profit 应反映滑点成本（avg_cost 不含佣金，与聚宽一致）"""
         from instock.core.backtest.strategy_context import Position
 
         pos = Position('000001')
@@ -420,7 +421,8 @@ class TestSlippageEconomics(unittest.TestCase):
         self.assertGreater(pos.avg_cost, exec_price)
         self.assertLess(pos.profit, 0, "刚买入时应有浮亏")
 
-        expected_avg = (actual_price * 1000 + commission) / 1000
+        # avg_cost 不含佣金，与聚宽一致
+        expected_avg = actual_price
         expected_profit = (exec_price - expected_avg) * 1000
         self.assertAlmostEqual(pos.profit, expected_profit, places=2)
 

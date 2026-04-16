@@ -1230,7 +1230,7 @@ class TestInitJob(unittest.TestCase):
         mock_connect.return_value = conn
         m.create_new_base_table()
         create_calls = [c for c in cursor.execute.call_args_list if 'CREATE TABLE' in str(c)]
-        self.assertEqual(len(create_calls), 2)
+        self.assertEqual(len(create_calls), 3)
 
     @patch('pymysql.connect')
     def test_main_existing_db(self, mock_connect):

@@ -50,7 +50,7 @@ class TestPerfEnvDefaults(unittest.TestCase):
         os.environ.pop('INSTOCK_DB_CONN_RETRIES', None)
         import importlib, instock.lib.database as m
         importlib.reload(m)
-        self.assertEqual(m._DB_CONN_RETRIES, 3)
+        self.assertEqual(m._DB_CONN_RETRIES, 1)
 
     def test_job_timeout_defaults(self):
         """验证 execute_daily_job 中的超时默认值（通过 envconfig 间接验证）"""
