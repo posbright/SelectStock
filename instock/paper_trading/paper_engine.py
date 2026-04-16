@@ -321,6 +321,20 @@ def run_paper_trading_daily(paper_id):
                      round(pos.value, 2), round(pos.profit, 2),
                      round(pos.profit_rate, 6), round(weight, 6)))
 
+        # 11. 每日 NAV 记录
+        _ensure_nav_table()
+        position_value = context.portfolio.total_value - context.portfolio.available_cash
+        mdb.executeSql(
+            'INSERT INTO cn_stock_paper_nav '
+            '(paper_id, date, total_value, cash, position_value) '
+            'VALUES (%s,%s,%s,%s,%s) '
+            'ON DUPLICATE KEY UPDATE total_value=VALUES(total_value), '
+            'cash=VALUES(cash), position_value=VALUES(position_value)',
+            (paper_id, date_str,
+             round(context.portfolio.total_value, 2),
+             round(context.portfolio.available_cash, 2),
+             round(position_value, 2)))
+
         logging.info(f"[模拟交易] 模拟盘 #{paper_id} 完成: "
                      f"交易 {len(trade_records)} 笔, "
                      f"总资产 {context.portfolio.total_value:.2f}")
@@ -490,5 +504,25 @@ def _ensure_position_table():
             `weight` DECIMAL(10,6),
             INDEX `idx_bt_date` (`backtest_id`, `date`),
             INDEX `idx_paper_date` (`paper_id`, `date`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ''')
+
+
+def _ensure_nav_table():
+    """确保模拟盘每日 NAV 记录表存在"""
+    import instock.lib.database as mdb
+    if mdb.checkTableIsExist('cn_stock_paper_nav'):
+        return
+    mdb.executeSql('''
+        CREATE TABLE IF NOT EXISTS `cn_stock_paper_nav` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `paper_id` INT NOT NULL,
+            `date` DATE NOT NULL,
+            `total_value` DECIMAL(15,2) NOT NULL,
+            `cash` DECIMAL(15,2),
+            `position_value` DECIMAL(15,2),
+            `benchmark_value` DECIMAL(10,6) DEFAULT 1.0,
+            UNIQUE KEY `uq_paper_date` (`paper_id`, `date`),
+            INDEX `idx_paper` (`paper_id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     ''')

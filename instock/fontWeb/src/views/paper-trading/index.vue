@@ -4,12 +4,19 @@
       <template #header>
         <div class="card-header">
           <h3>模拟交易</h3>
-          <el-button type="primary" @click="showCreateDialog = true" :icon="Plus">创建模拟盘</el-button>
+          <div class="header-actions">
+            <el-button type="primary" :disabled="selectedRows.length < 2" @click="goCompare">
+              <el-icon><DataAnalysis /></el-icon>
+              对比 ({{ selectedRows.length }})
+            </el-button>
+            <el-button type="primary" @click="showCreateDialog = true" :icon="Plus">创建模拟盘</el-button>
+          </div>
         </div>
       </template>
 
       <!-- 模拟盘列表 -->
-      <el-table :data="paperList" v-loading="loading" stripe>
+      <el-table :data="paperList" v-loading="loading" stripe @selection-change="onSelectionChange">
+        <el-table-column type="selection" width="45" />
         <el-table-column prop="id" label="ID" width="60" />
         <el-table-column prop="name" label="名称" width="150" />
         <el-table-column prop="strategy_name" label="策略" width="120" />
@@ -49,7 +56,7 @@
     </el-card>
 
     <!-- 详情对话框 -->
-    <el-dialog v-model="showDetail" :title="detailData?.info?.name || '模拟盘详情'" width="80%">
+    <el-dialog v-model="showDetail" :title="detailData?.info?.name || '模拟盘详情'" width="85%">
       <div v-if="detailData" v-loading="detailLoading">
         <!-- 汇总信息 -->
         <div class="detail-summary">
@@ -71,6 +78,20 @@
               {{ detailData.info.profit_rate >= 0 ? '+' : '' }}{{ detailData.info.profit_rate }}%
             </span>
           </div>
+        </div>
+
+        <!-- 绩效指标 -->
+        <div class="detail-metrics" v-if="detailData.info.running_days > 0">
+          <div class="metric-item" v-for="m in metricCards" :key="m.key">
+            <span class="label">{{ m.label }}</span>
+            <span class="value" :class="m.cls(detailData.info[m.key])">{{ m.fmt(detailData.info[m.key]) }}</span>
+          </div>
+        </div>
+
+        <!-- NAV 走势图 -->
+        <div v-if="detailData.nav && detailData.nav.length > 1" style="margin: 16px 0;">
+          <h4>资产走势</h4>
+          <div ref="navChartRef" style="height: 280px; width: 100%;"></div>
         </div>
 
         <!-- 当前持仓 -->
@@ -125,6 +146,29 @@
       </div>
     </el-dialog>
 
+    <!-- 对比对话框 -->
+    <el-dialog v-model="showCompare" title="模拟盘对比" width="90%">
+      <div v-loading="compareLoading">
+        <div v-if="compareData.length">
+          <!-- 对比 NAV 走势 -->
+          <h4>收益走势对比</h4>
+          <div ref="compareChartRef" style="height: 320px; width: 100%;"></div>
+
+          <!-- 指标对比表 -->
+          <h4 style="margin-top: 16px;">绩效指标对比</h4>
+          <el-table :data="compareMetricRows" size="small" stripe border>
+            <el-table-column prop="label" label="指标" width="120" fixed />
+            <el-table-column v-for="p in compareData" :key="p.id" :label="p.name || p.strategy_name" align="right">
+              <template #default="{ row }">
+                <span :class="row.cls ? row.cls(row.values[p.id]) : ''">{{ row.fmt(row.values[p.id]) }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+        <el-empty v-else description="暂无对比数据" />
+      </div>
+    </el-dialog>
+
     <!-- 创建对话框 -->
     <el-dialog v-model="showCreateDialog" title="创建模拟盘" width="500px">
       <el-form label-width="100px">
@@ -149,12 +193,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, nextTick, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus } from '@element-plus/icons-vue'
+import { Plus, DataAnalysis } from '@element-plus/icons-vue'
+import * as echarts from 'echarts'
 import {
   getPaperTradingList, getPaperTradingDetail, createPaperTrading,
-  paperTradingAction, runPaperTrading, getStrategyCodeList
+  paperTradingAction, runPaperTrading, getStrategyCodeList, getPaperCompare
 } from '@/api/stock'
 
 const paperList = ref<any[]>([])
@@ -162,11 +207,17 @@ const strategies = ref<any[]>([])
 const loading = ref(false)
 const showDetail = ref(false)
 const showCreateDialog = ref(false)
+const showCompare = ref(false)
 const detailData = ref<any>(null)
 const detailLoading = ref(false)
+const compareData = ref<any[]>([])
+const compareLoading = ref(false)
 const creating = ref(false)
 const runningId = ref<number | null>(null)
+const selectedRows = ref<any[]>([])
 const createForm = ref({ strategy_id: null as number | null, name: '', initial_cash: 1000000 })
+const navChartRef = ref<HTMLElement | null>(null)
+const compareChartRef = ref<HTMLElement | null>(null)
 
 function formatMoney(v: number) {
   return v >= 10000 ? `${(v / 10000).toFixed(2)}万` : v.toFixed(0)
@@ -176,6 +227,80 @@ function statusType(s: string) {
 }
 function statusLabel(s: string) {
   return s === 'running' ? '运行中' : s === 'paused' ? '已暂停' : '已停止'
+}
+
+const metricCards = [
+  { key: 'annual_return', label: '年化收益', fmt: (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`,
+    cls: (v: number) => v >= 0 ? 'text-red' : 'text-green' },
+  { key: 'max_drawdown', label: '最大回撤', fmt: (v: number) => `${v.toFixed(2)}%`, cls: () => 'text-green' },
+  { key: 'sharpe_ratio', label: '夏普比率', fmt: (v: number) => v.toFixed(2), cls: (v: number) => v >= 1 ? 'text-red' : '' },
+  { key: 'sortino_ratio', label: '索提诺', fmt: (v: number) => v.toFixed(2), cls: (v: number) => v >= 1 ? 'text-red' : '' },
+  { key: 'win_rate', label: '胜率', fmt: (v: number) => `${v.toFixed(1)}%`, cls: (v: number) => v >= 50 ? 'text-red' : '' },
+  { key: 'profit_loss_ratio', label: '盈亏比', fmt: (v: number) => v.toFixed(2), cls: (v: number) => v >= 1 ? 'text-red' : '' },
+  { key: 'trade_count', label: '交易笔数', fmt: (v: number) => String(v || 0), cls: () => '' },
+  { key: 'running_days', label: '运行天数', fmt: (v: number) => String(v || 0), cls: () => '' },
+]
+
+const compareMetricRows = computed(() => {
+  if (!compareData.value.length) return []
+  const rows = [
+    { label: '总收益', key: 'total_return', fmt: (v: number) => `${(v||0) >= 0 ? '+' : ''}${(v||0).toFixed(2)}%`, cls: (v: number) => (v||0) >= 0 ? 'text-red' : 'text-green' },
+    { label: '年化收益', key: 'annual_return', fmt: (v: number) => `${(v||0) >= 0 ? '+' : ''}${(v||0).toFixed(2)}%`, cls: (v: number) => (v||0) >= 0 ? 'text-red' : 'text-green' },
+    { label: '最大回撤', key: 'max_drawdown', fmt: (v: number) => `${(v||0).toFixed(2)}%`, cls: () => 'text-green' },
+    { label: '夏普比率', key: 'sharpe_ratio', fmt: (v: number) => (v||0).toFixed(2), cls: undefined },
+    { label: '索提诺', key: 'sortino_ratio', fmt: (v: number) => (v||0).toFixed(2), cls: undefined },
+    { label: '胜率', key: 'win_rate', fmt: (v: number) => `${(v||0).toFixed(1)}%`, cls: undefined },
+    { label: '盈亏比', key: 'profit_loss_ratio', fmt: (v: number) => (v||0).toFixed(2), cls: undefined },
+    { label: '交易笔数', key: 'trade_count', fmt: (v: number) => String(v||0), cls: undefined },
+  ]
+  return rows.map(r => ({
+    ...r,
+    values: Object.fromEntries(compareData.value.map(p => [p.id, p.metrics?.[r.key] ?? 0]))
+  }))
+})
+
+function onSelectionChange(rows: any[]) {
+  selectedRows.value = rows
+}
+
+function initNavChart() {
+  if (!navChartRef.value || !detailData.value?.nav?.length) return
+  const chart = echarts.init(navChartRef.value)
+  const dates = detailData.value.nav.map((n: any) => n.date)
+  const values = detailData.value.nav.map((n: any) => n.total_value)
+  chart.setOption({
+    tooltip: { trigger: 'axis' },
+    xAxis: { type: 'category', data: dates },
+    yAxis: { type: 'value', scale: true },
+    series: [{ name: '总资产', type: 'line', data: values, smooth: true, areaStyle: { opacity: 0.15 } }],
+    grid: { left: 60, right: 20, top: 20, bottom: 30 },
+  })
+}
+
+function initCompareChart() {
+  if (!compareChartRef.value || !compareData.value.length) return
+  const chart = echarts.init(compareChartRef.value)
+  const colors = ['#5470c6', '#91cc75', '#fac858', '#ee6666', '#73c0de', '#3ba272', '#fc8452', '#9a60b4']
+  const series = compareData.value.map((p: any, i: number) => {
+    const nav = p.nav || []
+    if (!nav.length) return null
+    const initial = nav[0].total_value || 1
+    return {
+      name: p.name || p.strategy_name,
+      type: 'line',
+      smooth: true,
+      data: nav.map((n: any) => [n.date, ((n.total_value / initial - 1) * 100).toFixed(2)]),
+      itemStyle: { color: colors[i % colors.length] },
+    }
+  }).filter(Boolean)
+  chart.setOption({
+    tooltip: { trigger: 'axis' },
+    legend: { top: 0 },
+    xAxis: { type: 'category' },
+    yAxis: { type: 'value', axisLabel: { formatter: '{value}%' } },
+    series,
+    grid: { left: 60, right: 20, top: 40, bottom: 30 },
+  })
 }
 
 async function loadList() {
@@ -204,8 +329,30 @@ async function viewDetail(id: number) {
     const res = await getPaperTradingDetail(id)
     if ((res as any)?.code === 0) detailData.value = (res as any).data
     else if (res.data?.code === 0) detailData.value = res.data.data
+    await nextTick()
+    initNavChart()
   } finally {
     detailLoading.value = false
+  }
+}
+
+async function goCompare() {
+  if (selectedRows.value.length < 2) return
+  showCompare.value = true
+  compareLoading.value = true
+  try {
+    const ids = selectedRows.value.map((r: any) => r.id)
+    const res = await getPaperCompare(ids)
+    const body = (res as any)?.code !== undefined ? (res as any) : res.data
+    if (body?.code === 0) {
+      compareData.value = body.data
+      await nextTick()
+      initCompareChart()
+    } else {
+      ElMessage.error(body?.msg || '对比失败')
+    }
+  } finally {
+    compareLoading.value = false
   }
 }
 
@@ -274,14 +421,19 @@ onMounted(() => {
 .paper-trading { padding: 16px; }
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .card-header h3 { margin: 0; }
-.text-red { color: #f56c6c; }
-.text-green { color: #67c23a; }
+.header-actions { display: flex; gap: 8px; }
+.text-red { color: #f56c6c; font-weight: 600; }
+.text-green { color: #67c23a; font-weight: 600; }
 .detail-summary {
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px;
 }
-.summary-item {
+.detail-metrics {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px;
+}
+.summary-item, .metric-item {
   text-align: center; padding: 12px; background: #f5f7fa; border-radius: 6px;
 }
-.summary-item .label { display: block; font-size: 12px; color: #909399; margin-bottom: 4px; }
+.summary-item .label, .metric-item .label { display: block; font-size: 12px; color: #909399; margin-bottom: 4px; }
 .summary-item .value { font-size: 18px; font-weight: bold; }
+.metric-item .value { font-size: 16px; font-weight: 600; }
 </style>

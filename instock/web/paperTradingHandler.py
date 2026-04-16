@@ -124,8 +124,109 @@ class GetPaperTradingListHandler(webBase.BaseHandler, ABC):
             self.write(json.dumps({'code': -1, 'msg': str(e)}))
 
 
+def _compute_paper_metrics(nav_rows, trade_rows):
+    """
+    从 NAV 序列和交易记录计算模拟盘绩效指标。
+
+    Args:
+        nav_rows: [(date, total_value, cash, position_value), ...]  按日期升序
+        trade_rows: [(date, code, direction, price, amount, value, commission, tax), ...] 或
+                    [(date, code, name, direction, price, amount, value, commission, tax), ...]
+
+    Returns:
+        dict 绩效指标
+    """
+    metrics = {
+        'total_return': 0, 'annual_return': 0, 'max_drawdown': 0,
+        'sharpe_ratio': 0, 'sortino_ratio': 0, 'win_rate': 0,
+        'profit_loss_ratio': 0, 'trade_count': 0, 'running_days': 0,
+    }
+
+    if not nav_rows or len(nav_rows) < 2:
+        return metrics
+
+    values = [float(r[1]) for r in nav_rows]
+    initial = values[0]
+    final = values[-1]
+    metrics['total_return'] = round((final / initial - 1) * 100, 2) if initial > 0 else 0
+
+    first_date = nav_rows[0][0]
+    last_date = nav_rows[-1][0]
+    days = (last_date - first_date).days if hasattr(first_date, '__sub__') else 0
+    metrics['running_days'] = days
+    if days > 0 and initial > 0:
+        ann_factor = 365.0 / days
+        metrics['annual_return'] = round(((final / initial) ** ann_factor - 1) * 100, 2)
+
+    # 最大回撤
+    peak = values[0]
+    max_dd = 0
+    for v in values:
+        if v > peak:
+            peak = v
+        dd = (peak - v) / peak * 100 if peak > 0 else 0
+        if dd > max_dd:
+            max_dd = dd
+    metrics['max_drawdown'] = round(max_dd, 2)
+
+    # 日收益率
+    daily_returns = []
+    for i in range(1, len(values)):
+        if values[i - 1] > 0:
+            daily_returns.append(values[i] / values[i - 1] - 1)
+
+    # 夏普比率
+    if len(daily_returns) >= 5:
+        rf_daily = 0.03 / 252
+        mean_r = sum(daily_returns) / len(daily_returns)
+        std_r = (sum((r - mean_r) ** 2 for r in daily_returns) / len(daily_returns)) ** 0.5
+        if std_r > 0:
+            metrics['sharpe_ratio'] = round((mean_r - rf_daily) / std_r * (252 ** 0.5), 2)
+        downside = [r for r in daily_returns if r < rf_daily]
+        if len(downside) >= 2:
+            down_std = (sum((r - rf_daily) ** 2 for r in downside) / len(downside)) ** 0.5
+            if down_std > 0:
+                metrics['sortino_ratio'] = round((mean_r - rf_daily) / down_std * (252 ** 0.5), 2)
+
+    # 胜率 & 盈亏比
+    if trade_rows:
+        metrics['trade_count'] = len(trade_rows)
+        buys = {}
+        wins = 0
+        losses = 0
+        total_profit = 0
+        total_loss = 0
+        for t in trade_rows:
+            # 兼容两种元组格式
+            if len(t) >= 9:
+                code, direction, price, amount = t[1], t[3], float(t[4]), int(t[5])
+            else:
+                code, direction, price, amount = t[1], t[2], float(t[3]), int(t[4])
+            if direction == 'buy':
+                buys.setdefault(code, []).append((price, amount))
+            elif direction == 'sell' and code in buys and buys[code]:
+                buy_price = buys[code][0][0]
+                pnl = (price - buy_price) * amount
+                if pnl >= 0:
+                    wins += 1
+                    total_profit += pnl
+                else:
+                    losses += 1
+                    total_loss += abs(pnl)
+                buys[code].pop(0)
+        total_trades = wins + losses
+        if total_trades > 0:
+            metrics['win_rate'] = round(wins / total_trades * 100, 1)
+        if losses > 0 and total_loss > 0:
+            avg_win = total_profit / wins if wins > 0 else 0
+            avg_loss = total_loss / losses
+            metrics['profit_loss_ratio'] = round(avg_win / avg_loss, 2) if avg_loss > 0 else 0
+
+    return metrics
+
+
 class GetPaperTradingDetailHandler(webBase.BaseHandler, ABC):
-    """获取模拟盘详情（含持仓和最近交易）"""
+    """获取模拟盘详情（含持仓、交易、NAV 曲线和绩效指标）"""
 
     @gen.coroutine
     def get(self):
@@ -135,7 +236,6 @@ class GetPaperTradingDetailHandler(webBase.BaseHandler, ABC):
                 self.write(json.dumps({'code': -1, 'msg': '缺少 id'}))
                 return
 
-            # 基本信息
             rows = mdb.executeSqlFetch(
                 'SELECT pt.id, sc.name, pt.name, pt.initial_cash, '
                 'pt.current_cash, pt.current_value, pt.status, '
@@ -165,7 +265,7 @@ class GetPaperTradingDetailHandler(webBase.BaseHandler, ABC):
                 'last_run_date': str(r[8]) if r[8] else '',
             }
 
-            # 当前持仓（最近日期的快照）
+            # 当前持仓
             positions = []
             if mdb.checkTableIsExist('cn_stock_backtest_position'):
                 pos_rows = mdb.executeSqlFetch(
@@ -190,14 +290,15 @@ class GetPaperTradingDetailHandler(webBase.BaseHandler, ABC):
 
             # 最近交易
             trades = []
+            trade_rows_raw = []
             if mdb.checkTableIsExist('cn_stock_backtest_trade'):
-                trade_rows = mdb.executeSqlFetch(
+                trade_rows_raw = mdb.executeSqlFetch(
                     'SELECT date, code, name, direction, price, amount, value, commission, tax '
                     'FROM cn_stock_backtest_trade '
-                    'WHERE paper_id = %s ORDER BY date DESC, id DESC LIMIT 100',
+                    'WHERE paper_id = %s ORDER BY date DESC, id DESC LIMIT 200',
                     (paper_id,))
-                if trade_rows:
-                    for t in trade_rows:
+                if trade_rows_raw:
+                    for t in trade_rows_raw:
                         trades.append({
                             'date': str(t[0]) if t[0] else '',
                             'code': t[1], 'name': t[2] or '',
@@ -209,9 +310,30 @@ class GetPaperTradingDetailHandler(webBase.BaseHandler, ABC):
                             'tax': float(t[8]) if t[8] else 0,
                         })
 
+            # NAV 曲线
+            nav = []
+            nav_rows_raw = []
+            if mdb.checkTableIsExist('cn_stock_paper_nav'):
+                nav_rows_raw = mdb.executeSqlFetch(
+                    'SELECT date, total_value, cash, position_value '
+                    'FROM cn_stock_paper_nav '
+                    'WHERE paper_id = %s ORDER BY date ASC', (paper_id,))
+                if nav_rows_raw:
+                    for n in nav_rows_raw:
+                        nav.append({
+                            'date': str(n[0]) if n[0] else '',
+                            'total_value': float(n[1]) if n[1] else 0,
+                            'cash': float(n[2]) if n[2] else 0,
+                            'position_value': float(n[3]) if n[3] else 0,
+                        })
+
+            # 绩效指标
+            metrics = _compute_paper_metrics(nav_rows_raw, trade_rows_raw)
+            info.update(metrics)
+
             self.write(json.dumps({
                 'code': 0,
-                'data': {'info': info, 'positions': positions, 'trades': trades}
+                'data': {'info': info, 'positions': positions, 'trades': trades, 'nav': nav}
             }, ensure_ascii=False))
         except Exception as e:
             logging.error("GetPaperTradingDetail异常", exc_info=True)
@@ -234,4 +356,97 @@ class RunPaperTradingHandler(webBase.BaseHandler, ABC):
             result = run_paper_trading_daily(paper_id)
             self.write(json.dumps({'code': 0, 'data': result}, ensure_ascii=False, default=str))
         except Exception as e:
+            self.write(json.dumps({'code': -1, 'msg': str(e)}))
+
+
+class GetPaperCompareHandler(webBase.BaseHandler, ABC):
+    """模拟盘多策略对比：NAV 曲线 + 绩效指标"""
+
+    @gen.coroutine
+    def get(self):
+        try:
+            ids_str = self.get_argument('ids', '')
+            if not ids_str:
+                self.write(json.dumps({'code': -1, 'msg': '缺少 ids 参数'}))
+                return
+
+            paper_ids = []
+            for s in ids_str.split(','):
+                s = s.strip()
+                if s.isdigit():
+                    paper_ids.append(int(s))
+            if len(paper_ids) < 1 or len(paper_ids) > 10:
+                self.write(json.dumps({'code': -1, 'msg': 'ids 数量需在 1-10 之间'}))
+                return
+
+            from instock.paper_trading.paper_engine import _ensure_paper_table, _ensure_nav_table
+            _ensure_paper_table()
+            _ensure_nav_table()
+
+            placeholders = ','.join(['%s'] * len(paper_ids))
+
+            info_rows = mdb.executeSqlFetch(
+                f'SELECT pt.id, sc.name as strategy_name, pt.name, '
+                f'pt.initial_cash, pt.current_value, pt.status, pt.started_at, pt.last_run_date '
+                f'FROM cn_stock_paper_trading pt '
+                f'LEFT JOIN cn_stock_strategy_code sc ON pt.strategy_id = sc.id '
+                f'WHERE pt.id IN ({placeholders})', tuple(paper_ids))
+
+            papers = {}
+            if info_rows:
+                for r in info_rows:
+                    pid = r[0]
+                    initial = float(r[3]) if r[3] else 1000000
+                    current = float(r[4]) if r[4] else initial
+                    papers[pid] = {
+                        'id': pid,
+                        'strategy_name': r[1] or '未知',
+                        'name': r[2] or f'模拟盘-{pid}',
+                        'initial_cash': initial,
+                        'current_value': current,
+                        'profit_rate': round((current / initial - 1) * 100, 2) if initial > 0 else 0,
+                        'status': r[5],
+                        'started_at': r[6].strftime('%Y-%m-%d') if r[6] else '',
+                        'last_run_date': str(r[7]) if r[7] else '',
+                        'nav': [],
+                        'metrics': {},
+                    }
+
+            # NAV 曲线 + 绩效指标
+            nav_by_paper = {}
+            if mdb.checkTableIsExist('cn_stock_paper_nav'):
+                nav_rows = mdb.executeSqlFetch(
+                    f'SELECT paper_id, date, total_value, cash, position_value '
+                    f'FROM cn_stock_paper_nav WHERE paper_id IN ({placeholders}) '
+                    f'ORDER BY paper_id, date ASC', tuple(paper_ids))
+                if nav_rows:
+                    for n in nav_rows:
+                        pid = n[0]
+                        nav_by_paper.setdefault(pid, []).append(n[1:])
+                        if pid in papers:
+                            papers[pid]['nav'].append({
+                                'date': str(n[1]),
+                                'total_value': float(n[2]) if n[2] else 0,
+                            })
+
+            trade_by_paper = {}
+            if mdb.checkTableIsExist('cn_stock_backtest_trade'):
+                trade_rows = mdb.executeSqlFetch(
+                    f'SELECT paper_id, date, code, direction, price, amount, value, commission, tax '
+                    f'FROM cn_stock_backtest_trade WHERE paper_id IN ({placeholders}) '
+                    f'ORDER BY paper_id, date ASC', tuple(paper_ids))
+                if trade_rows:
+                    for t in trade_rows:
+                        trade_by_paper.setdefault(t[0], []).append(t[1:])
+
+            for pid in paper_ids:
+                if pid in papers:
+                    papers[pid]['metrics'] = _compute_paper_metrics(
+                        nav_by_paper.get(pid, []),
+                        trade_by_paper.get(pid, []))
+
+            result = [papers[pid] for pid in paper_ids if pid in papers]
+            self.write(json.dumps({'code': 0, 'data': result}, ensure_ascii=False))
+        except Exception as e:
+            logging.error("GetPaperCompare异常", exc_info=True)
             self.write(json.dumps({'code': -1, 'msg': str(e)}))

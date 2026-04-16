@@ -343,3 +343,8 @@ export function getPaperTradingDetail(id: number) {
 export function runPaperTrading(id: number) {
   return request({ url: '/api/paper/run', method: 'post', data: { id } })
 }
+
+/** 模拟盘多策略对比 */
+export function getPaperCompare(ids: number[]) {
+  return request({ url: '/api/paper/compare', method: 'get', params: { ids: ids.join(',') } })
+}

@@ -113,6 +113,7 @@ class Application(tornado.web.Application):
             (r"/instock/api/paper/list", paperTradingHandler.GetPaperTradingListHandler),
             (r"/instock/api/paper/detail", paperTradingHandler.GetPaperTradingDetailHandler),
             (r"/instock/api/paper/run", paperTradingHandler.RunPaperTradingHandler),
+            (r"/instock/api/paper/compare", paperTradingHandler.GetPaperCompareHandler),
             # ── Vue SPA 路由 ──
             # 静态资源（assets/）
             (r"/assets/(.*)", tornado.web.StaticFileHandler, {"path": os.path.join(static_path, "assets")}),
