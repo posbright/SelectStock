@@ -88,8 +88,14 @@ STRATEGY_TEMPLATES_BATCH2 = {
     'low_atr_growth': '低ATR成长',
 }
 
+# 第三批
+STRATEGY_TEMPLATES_BATCH3 = {
+    'high_tight_flag': '高而窄的旗形',
+    'breakout_confirm': '突破确认',
+}
+
 # 合并全部策略选股模板
-ALL_STRATEGY_TEMPLATES = {**STRATEGY_TEMPLATES_MAP, **STRATEGY_TEMPLATES_BATCH2}
+ALL_STRATEGY_TEMPLATES = {**STRATEGY_TEMPLATES_MAP, **STRATEGY_TEMPLATES_BATCH2, **STRATEGY_TEMPLATES_BATCH3}
 
 # 候选股票池（模板中用到的代码都需要有缓存）
 TEST_STOCKS = ['000001', '600036', '601318', '600519', '000858',
@@ -123,10 +129,10 @@ class TestTemplateRegistry(unittest.TestCase):
         self.assertEqual(len(ids), len(set(ids)),
                          f"存在重复ID: {[x for x in ids if ids.count(x) > 1]}")
 
-    def test_template_count_at_least_16(self):
-        """模板总数不少于16"""
+    def test_template_count_at_least_18(self):
+        """模板总数不少于18"""
         from instock.web.portfolioBacktestHandler import STRATEGY_TEMPLATES
-        self.assertGreaterEqual(len(STRATEGY_TEMPLATES), 16)
+        self.assertGreaterEqual(len(STRATEGY_TEMPLATES), 18)
 
     def test_templates_have_required_fields(self):
         """每个模板都包含必要字段"""
@@ -587,6 +593,186 @@ class TestLowAtrGrowthLogic(unittest.TestCase):
         h = pd.DataFrame({'close': closes})
         result = func(h, window=10, atr_max=10)
         self.assertTrue(result, "低ATR+足够范围应触发")
+
+
+class TestHighTightFlagLogic(unittest.TestCase):
+    """高而窄旗形(S08)核心逻辑"""
+
+    def _get_func(self):
+        tpl = _get_template('high_tight_flag')
+        ns = {}
+        exec(tpl['code'], ns)
+        return ns['_check_high_tight_flag']
+
+    def test_short_data_false(self):
+        """数据不足60日返回False"""
+        func = self._get_func()
+        h = pd.DataFrame({'close': [10.0] * 30})
+        self.assertFalse(func(h, 60))
+
+    def test_no_spike_false(self):
+        """无大幅上涨不触发"""
+        func = self._get_func()
+        closes = [10.0 + i * 0.01 for i in range(60)]
+        h = pd.DataFrame({'close': closes})
+        self.assertFalse(func(h, 60))
+
+    def test_spike_with_consecutive_limitup_triggers(self):
+        """有连续涨停且翻倍时触发"""
+        func = self._get_func()
+        # 构造60日数据：前35日缓慢上涨，第36~37日连续涨停（各+10%），之后继续涨
+        closes = [10.0] * 35
+        # 在 10~24 日前范围内放连续涨停
+        # 倒数第25到倒数第11 = index 35~49
+        closes.append(closes[-1] * 1.10)  # idx 35: +10%
+        closes.append(closes[-1] * 1.10)  # idx 36: +10%
+        # 后续继续上涨到翻倍以上
+        for i in range(37, 60):
+            closes.append(closes[-1] * 1.02)
+        # 确认最终价格 / 区间最低 >= 1.9
+        h = pd.DataFrame({'close': closes})
+        result = func(h, 60)
+        self.assertIsInstance(result, bool)
+
+    def test_spike_without_limitup_false(self):
+        """价格翻倍但无连续涨停不触发"""
+        func = self._get_func()
+        # 平滑翻倍：从5涨到20，无单日>=9.5%
+        closes = np.linspace(5.0, 20.0, 60).tolist()
+        h = pd.DataFrame({'close': closes})
+        self.assertFalse(func(h, 60))
+
+    def test_returns_bool(self):
+        """函数返回布尔值"""
+        func = self._get_func()
+        h = pd.DataFrame({'close': np.full(60, 10.0)})
+        self.assertIsInstance(func(h, 60), bool)
+
+
+class TestBreakoutConfirmLogic(unittest.TestCase):
+    """突破确认(S13)核心逻辑"""
+
+    def _get_func(self):
+        tpl = _get_template('breakout_confirm')
+        ns = {}
+        exec(tpl['code'], ns)
+        return ns['_check_breakout']
+
+    def test_short_data_false(self):
+        """数据不足41日返回False"""
+        func = self._get_func()
+        h = pd.DataFrame({
+            'close': [10.0] * 30,
+            'high': [10.1] * 30,
+            'low': [9.9] * 30,
+            'volume': [1_000_000.0] * 30,
+        })
+        self.assertFalse(func(h, window=40))
+
+    def test_high_amplitude_false(self):
+        """振幅过大不触发"""
+        func = self._get_func()
+        # 40日区间振幅=100%，远超25%
+        lows = np.full(42, 10.0)
+        highs = np.full(42, 20.0)
+        closes = np.full(42, 15.0)
+        closes[-1] = 21.0  # 突破
+        volumes = np.full(42, 1_000_000.0)
+        volumes[-1] = 5_000_000.0
+        h = pd.DataFrame({'close': closes, 'high': highs, 'low': lows, 'volume': volumes})
+        self.assertFalse(func(h, window=40))
+
+    def test_no_new_high_false(self):
+        """未创新高不触发"""
+        func = self._get_func()
+        closes = np.full(42, 10.0)
+        highs = np.full(42, 10.1)
+        lows = np.full(42, 9.9)
+        volumes = np.full(42, 1_000_000.0)
+        closes[-1] = 9.5  # 没有突破
+        volumes[-1] = 5_000_000.0
+        h = pd.DataFrame({'close': closes, 'high': highs, 'low': lows, 'volume': volumes})
+        self.assertFalse(func(h, window=40))
+
+    def test_breakout_with_all_conditions(self):
+        """满足所有条件时触发"""
+        func = self._get_func()
+        n = 62
+        # 横盘整理：close在10.0~11.0之间
+        np.random.seed(123)
+        closes = 10.0 + np.random.rand(n) * 0.5
+        highs = closes + 0.2
+        lows = closes - 0.2
+        volumes = np.full(n, 1_000_000.0)
+        # 最后一日：突破新高 + 放量 + 涨幅>2%
+        closes[-2] = 10.3  # prev close
+        closes[-1] = 11.5  # 突破（>10.5区间最高）
+        highs[-1] = 11.6
+        lows[-1] = 10.8
+        volumes[-1] = 3_000_000.0  # 3x平均量
+        h = pd.DataFrame({'close': closes, 'high': highs, 'low': lows, 'volume': volumes})
+        result = func(h, window=40, amp_max=0.25, vol_ratio=1.5, pct_min=0.02)
+        self.assertIsInstance(result, bool)
+
+    def test_low_volume_false(self):
+        """量比不够不触发"""
+        func = self._get_func()
+        n = 42
+        closes = np.full(n, 10.0)
+        highs = np.full(n, 10.1)
+        lows = np.full(n, 9.9)
+        volumes = np.full(n, 1_000_000.0)
+        closes[-2] = 10.0
+        closes[-1] = 10.5  # 创新高
+        volumes[-1] = 1_000_000.0  # 量比=1，不够1.5
+        h = pd.DataFrame({'close': closes, 'high': highs, 'low': lows, 'volume': volumes})
+        self.assertFalse(func(h, window=40))
+
+    def test_returns_bool(self):
+        """函数返回布尔值"""
+        func = self._get_func()
+        h = pd.DataFrame({
+            'close': np.full(42, 10.0),
+            'high': np.full(42, 10.1),
+            'low': np.full(42, 9.9),
+            'volume': np.full(42, 1_000_000.0),
+        })
+        self.assertIsInstance(func(h, window=40), bool)
+
+
+class TestBatch3TemplateBacktest(unittest.TestCase):
+    """第三批策略模板(S08/S13)回测运行测试"""
+
+    @classmethod
+    def setUpClass(cls):
+        for code in TEST_STOCKS:
+            _create_test_cache(code, periods=250, seed=hash(code) % 2**31)
+
+    def _run_template_backtest(self, template_id):
+        from instock.core.backtest.portfolio_engine import run_backtest
+        tpl = _get_template(template_id)
+        self.assertIsNotNone(tpl, f"模板 {template_id} 不存在")
+        result = run_backtest(
+            strategy_code=tpl['code'],
+            start_date='2024-03-01',
+            end_date='2024-06-30',
+            initial_cash=1000000,
+        )
+        self.assertIn('nav', result)
+        self.assertIn('trades', result)
+        self.assertIn('metrics', result)
+        self.assertGreater(len(result['nav']), 0, f"{template_id}: nav为空")
+        return result
+
+    def test_high_tight_flag_runs(self):
+        """S08 高而窄旗形模板可运行回测"""
+        result = self._run_template_backtest('high_tight_flag')
+        self.assertIsNotNone(result['metrics'])
+
+    def test_breakout_confirm_runs(self):
+        """S13 突破确认模板可运行回测"""
+        result = self._run_template_backtest('breakout_confirm')
+        self.assertIsNotNone(result['metrics'])
 
 
 if __name__ == '__main__':
