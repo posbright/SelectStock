@@ -70,6 +70,8 @@ class Application(tornado.web.Application):
             (r"/instock/api/strategy/params", strategyParamsHandler.GetStrategyParamsHandler),
             (r"/instock/api/strategy/params/save", strategyParamsHandler.SaveStrategyParamsHandler),
             (r"/instock/api/strategy/params/reset", strategyParamsHandler.ResetStrategyParamsHandler),
+            (r"/instock/api/strategy/params/history", strategyParamsHandler.GetParamsHistoryHandler),
+            (r"/instock/api/strategy/params/diff", strategyParamsHandler.GetParamsDiffHandler),
             (r"/instock/api/strategy/filter", strategyParamsHandler.FilterStocksHandler),
             # K线数据JSON API
             (r"/instock/api/kline", klineHandler.GetKlineDataHandler),

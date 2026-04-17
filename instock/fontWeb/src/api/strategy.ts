@@ -90,3 +90,25 @@ export function filterStocks(strategy: string, date?: string, page?: number, pag
     params: { strategy, date, page, page_size: pageSize }
   })
 }
+
+/**
+ * 查询策略参数变更历史
+ */
+export function getParamsHistory(strategy: string, limit?: number) {
+  return request({
+    url: '/api/strategy/params/history',
+    method: 'get',
+    params: { strategy, limit }
+  })
+}
+
+/**
+ * 对比两个参数版本的差异
+ */
+export function getParamsDiff(strategy: string, v1: number, v2: number) {
+  return request({
+    url: '/api/strategy/params/diff',
+    method: 'get',
+    params: { strategy, v1, v2 }
+  })
+}

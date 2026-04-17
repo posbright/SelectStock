@@ -447,8 +447,15 @@ DEFAULT_STRATEGY_PARAMS.update(TECHNICAL_STRATEGY_PARAMS)
 
 # ========== 数据库操作 ==========
 
+_params_table_ready = False
+_history_table_ready = False
+
+
 def _ensure_params_table():
     """确保参数存储表存在"""
+    global _params_table_ready
+    if _params_table_ready:
+        return
     try:
         if not mdb.checkTableIsExist('cn_strategy_params'):
             mdb.executeSql("""
@@ -461,9 +468,37 @@ def _ensure_params_table():
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='策略参数配置表';
             """)
             logging.info("已创建策略参数表 cn_strategy_params")
+        _params_table_ready = True
     except Exception as e:
-        mdb._invalidate_shared_conn()  # 废弃可能损坏的连接
+        mdb._invalidate_shared_conn()
         logging.error(f"创建策略参数表异常", exc_info=True)
+
+
+def _ensure_history_table():
+    """确保参数历史表存在"""
+    global _history_table_ready
+    if _history_table_ready:
+        return
+    try:
+        if not mdb.checkTableIsExist('cn_strategy_params_history'):
+            mdb.executeSql("""
+                CREATE TABLE IF NOT EXISTS `cn_strategy_params_history` (
+                    `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    `strategy_key` VARCHAR(50) NOT NULL COMMENT '策略标识',
+                    `version` INT NOT NULL COMMENT '版本号(自增)',
+                    `params_snapshot` JSON COMMENT '完整参数快照',
+                    `changed_keys` TEXT COMMENT '本次变更的参数key列表(JSON数组)',
+                    `source` VARCHAR(20) DEFAULT 'manual' COMMENT '来源: manual/reset/backtest',
+                    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    INDEX `idx_strategy_version` (`strategy_key`, `version` DESC),
+                    INDEX `idx_strategy_created` (`strategy_key`, `created_at` DESC)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='策略参数变更历史';
+            """)
+            logging.info("已创建策略参数历史表 cn_strategy_params_history")
+        _history_table_ready = True
+    except Exception as e:
+        mdb._invalidate_shared_conn()
+        logging.error("创建策略参数历史表异常", exc_info=True)
 
 
 def _load_saved_params(strategy_key):
@@ -507,6 +542,65 @@ def _delete_strategy_params(strategy_key):
     except Exception as e:
         logging.error(f"删除策略参数异常", exc_info=True)
         return False
+
+
+def _get_next_version(strategy_key):
+    """获取策略下一个版本号"""
+    try:
+        row = mdb.executeSqlFetch(
+            "SELECT MAX(`version`) FROM `cn_strategy_params_history` WHERE `strategy_key` = %s",
+            (strategy_key,))
+        if row and row[0][0] is not None:
+            return int(row[0][0]) + 1
+    except Exception:
+        pass
+    return 1
+
+
+def _record_params_history(strategy_key, params_snapshot, changed_keys, source='manual'):
+    """记录参数变更历史"""
+    try:
+        _ensure_history_table()
+        version = _get_next_version(strategy_key)
+        snapshot_json = json.dumps(params_snapshot, ensure_ascii=False)
+        changed_json = json.dumps(changed_keys, ensure_ascii=False)
+        mdb.executeSql(
+            """INSERT INTO `cn_strategy_params_history`
+               (`strategy_key`, `version`, `params_snapshot`, `changed_keys`, `source`)
+               VALUES (%s, %s, %s, %s, %s)""",
+            (strategy_key, version, snapshot_json, changed_json, source))
+        return version
+    except Exception as e:
+        logging.error("记录参数历史异常", exc_info=True)
+        return None
+
+
+def _get_params_history(strategy_key, limit=50):
+    """查询参数变更历史"""
+    try:
+        _ensure_history_table()
+        rows = mdb.executeSqlFetch(
+            """SELECT `id`, `version`, `params_snapshot`, `changed_keys`, `source`, `created_at`
+               FROM `cn_strategy_params_history`
+               WHERE `strategy_key` = %s
+               ORDER BY `version` DESC LIMIT %s""",
+            (strategy_key, limit))
+        if not rows:
+            return []
+        result = []
+        for r in rows:
+            result.append({
+                'id': r[0],
+                'version': r[1],
+                'params_snapshot': json.loads(r[2]) if r[2] else {},
+                'changed_keys': json.loads(r[3]) if r[3] else [],
+                'source': r[4],
+                'created_at': r[5].strftime('%Y-%m-%d %H:%M:%S') if r[5] else '',
+            })
+        return result
+    except Exception as e:
+        logging.error("查询参数历史异常", exc_info=True)
+        return []
 
 
 def get_strategy_params(strategy_key):
@@ -620,10 +714,22 @@ class SaveStrategyParamsHandler(webBase.BaseHandler, ABC):
         
         _ensure_params_table()
         
+        # 保存前记录旧值，用于检测实际变更
+        old_params = _load_saved_params(strategy_key)
+        
         saved_count = 0
+        changed_keys = []
         for key, value in params.items():
+            old_val = old_params.get(key)
             if _save_param(strategy_key, key, value):
                 saved_count += 1
+                if old_val != value:
+                    changed_keys.append(key)
+        
+        # 记录参数变更历史（仅在有实际变更时记录）
+        if changed_keys:
+            full_snapshot = _load_saved_params(strategy_key)
+            _record_params_history(strategy_key, full_snapshot, changed_keys, source='manual')
         
         # 参数变更后清除筛选结果缓存
         filter_result_cache.invalidate()
@@ -657,7 +763,13 @@ class ResetStrategyParamsHandler(webBase.BaseHandler, ABC):
         
         _ensure_params_table()
         
+        # 记录重置前的参数快照
+        old_params = _load_saved_params(strategy_key)
+        
         if _delete_strategy_params(strategy_key):
+            # 记录重置操作到历史（快照记录默认值）
+            if old_params:
+                _record_params_history(strategy_key, {}, list(old_params.keys()), source='reset')
             # 参数重置后清除筛选结果缓存
             filter_result_cache.invalidate()
             self.write(json.dumps({
@@ -989,7 +1101,7 @@ class FilterStocksHandler(webBase.BaseHandler, ABC):
             except (ValueError, TypeError):
                 pass
         return ""
-    
+
     def _exec_filter_query(self, table, where, sql_params, limit_clause, params_used, select_cols, columns, order_by=""):
         """通用筛选查询执行"""
         try:
@@ -1028,3 +1140,112 @@ class FilterStocksHandler(webBase.BaseHandler, ABC):
                 logging.error(f"FilterStocksHandler 查询异常", exc_info=True)
                 self.set_status(500)
                 self.write(json.dumps({"error": f"查询异常: {error_msg}"}, ensure_ascii=False))
+
+
+class GetParamsHistoryHandler(webBase.BaseHandler, ABC):
+    """查询策略参数变更历史"""
+
+    def get(self):
+        self.set_header('Content-Type', 'application/json;charset=UTF-8')
+        strategy_key = self.get_argument("strategy", default=None, strip=True)
+        if not strategy_key or strategy_key not in DEFAULT_STRATEGY_PARAMS:
+            self.set_status(400)
+            self.write(json.dumps({"error": "无效的策略标识"}, ensure_ascii=False))
+            return
+
+        limit = min(100, max(1, int(self.get_argument("limit", "50"))))
+        history = _get_params_history(strategy_key, limit)
+
+        # 为每条记录附加参数标签映射
+        label_map = _build_param_label_map(strategy_key)
+        for h in history:
+            h['changed_labels'] = [label_map.get(k, k) for k in h.get('changed_keys', [])]
+
+        self.write(json.dumps({"code": 0, "data": history}, ensure_ascii=False))
+
+
+class GetParamsDiffHandler(webBase.BaseHandler, ABC):
+    """对比两个参数版本的差异"""
+
+    def get(self):
+        self.set_header('Content-Type', 'application/json;charset=UTF-8')
+        strategy_key = self.get_argument("strategy", default=None, strip=True)
+        v1 = self.get_argument("v1", default=None, strip=True)
+        v2 = self.get_argument("v2", default=None, strip=True)
+
+        if not strategy_key or strategy_key not in DEFAULT_STRATEGY_PARAMS:
+            self.set_status(400)
+            self.write(json.dumps({"error": "无效的策略标识"}, ensure_ascii=False))
+            return
+        if not v1 or not v2:
+            self.set_status(400)
+            self.write(json.dumps({"error": "需要指定 v1 和 v2 版本号"}, ensure_ascii=False))
+            return
+
+        try:
+            v1_int, v2_int = int(v1), int(v2)
+        except ValueError:
+            self.set_status(400)
+            self.write(json.dumps({"error": "版本号必须为整数"}, ensure_ascii=False))
+            return
+
+        _ensure_history_table()
+        rows = mdb.executeSqlFetch(
+            """SELECT `version`, `params_snapshot`
+               FROM `cn_strategy_params_history`
+               WHERE `strategy_key` = %s AND `version` IN (%s, %s)""",
+            (strategy_key, v1_int, v2_int))
+
+        snapshots = {}
+        if rows:
+            for r in rows:
+                snapshots[r[0]] = json.loads(r[1]) if r[1] else {}
+
+        snap1 = snapshots.get(v1_int, {})
+        snap2 = snapshots.get(v2_int, {})
+
+        # 构建 diff
+        all_keys = sorted(set(list(snap1.keys()) + list(snap2.keys())))
+        label_map = _build_param_label_map(strategy_key)
+        default_map = _build_default_value_map(strategy_key)
+
+        diffs = []
+        for k in all_keys:
+            val1 = snap1.get(k, default_map.get(k))
+            val2 = snap2.get(k, default_map.get(k))
+            if val1 != val2:
+                diffs.append({
+                    'key': k,
+                    'label': label_map.get(k, k),
+                    'v1_value': val1,
+                    'v2_value': val2,
+                })
+
+        self.write(json.dumps({
+            "code": 0,
+            "data": {
+                "v1": v1_int, "v2": v2_int,
+                "diffs": diffs,
+                "total_changed": len(diffs),
+            }
+        }, ensure_ascii=False))
+
+
+def _build_param_label_map(strategy_key):
+    """构建 param_key -> label 映射"""
+    label_map = {}
+    if strategy_key in DEFAULT_STRATEGY_PARAMS:
+        for group in DEFAULT_STRATEGY_PARAMS[strategy_key].get('groups', []):
+            for param in group.get('params', []):
+                label_map[param['key']] = param.get('label', param['key'])
+    return label_map
+
+
+def _build_default_value_map(strategy_key):
+    """构建 param_key -> default_value 映射"""
+    defaults = {}
+    if strategy_key in DEFAULT_STRATEGY_PARAMS:
+        for group in DEFAULT_STRATEGY_PARAMS[strategy_key].get('groups', []):
+            for param in group.get('params', []):
+                defaults[param['key']] = param.get('value')
+    return defaults

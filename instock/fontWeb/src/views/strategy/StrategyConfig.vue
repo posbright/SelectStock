@@ -7,7 +7,9 @@ import {
   getStrategyParams,
   saveStrategyParams,
   resetStrategyParams,
-  filterStocks
+  filterStocks,
+  getParamsHistory,
+  getParamsDiff
 } from '@/api/strategy'
 import { toggleAttention } from '@/api/stock'
 import dayjs from 'dayjs'
@@ -260,6 +262,53 @@ onMounted(() => {
   loadStrategies()
   loadParams()
 })
+
+// ========== 参数历史 ==========
+const showHistory = ref(false)
+const historyLoading = ref(false)
+const historyList = ref<any[]>([])
+const selectedVersions = ref<number[]>([])
+const diffResult = ref<any>(null)
+const diffLoading = ref(false)
+
+const loadHistory = async () => {
+  historyLoading.value = true
+  showHistory.value = true
+  diffResult.value = null
+  selectedVersions.value = []
+  try {
+    const res: any = await getParamsHistory(activeStrategy.value, 50)
+    historyList.value = res.data || []
+  } catch {
+    ElMessage.error('加载历史失败')
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+const handleSelectionChange = (rows: any[]) => {
+  selectedVersions.value = rows.map((r: any) => r.version).sort((a: number, b: number) => a - b)
+}
+
+const handleDiff = async () => {
+  if (selectedVersions.value.length !== 2) {
+    ElMessage.warning('请勾选恰好两个版本进行对比')
+    return
+  }
+  diffLoading.value = true
+  try {
+    const res: any = await getParamsDiff(
+      activeStrategy.value,
+      selectedVersions.value[0],
+      selectedVersions.value[1]
+    )
+    diffResult.value = res.data || res
+  } catch {
+    ElMessage.error('对比失败')
+  } finally {
+    diffLoading.value = false
+  }
+}
 </script>
 
 <template>
@@ -377,6 +426,10 @@ onMounted(() => {
           <el-button @click="handleReset" :loading="saving" size="large">
             <el-icon><RefreshLeft /></el-icon>
             恢复默认
+          </el-button>
+          <el-button @click="loadHistory" size="large">
+            <el-icon><Clock /></el-icon>
+            变更历史
           </el-button>
           <el-button
             v-if="!['moat_scoring', 'ai_model'].includes(activeStrategy)"
@@ -520,6 +573,77 @@ onMounted(() => {
         />
       </div>
     </el-card>
+
+    <!-- 参数变更历史对话框 -->
+    <el-dialog v-model="showHistory" title="参数变更历史" width="800px" destroy-on-close>
+      <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+        <el-button
+          type="primary"
+          size="small"
+          :disabled="selectedVersions.length !== 2"
+          :loading="diffLoading"
+          @click="handleDiff"
+        >
+          对比选中的两个版本
+        </el-button>
+        <span v-if="selectedVersions.length > 0" style="font-size: 12px; color: #909399;">
+          已选 {{ selectedVersions.length }} 个版本
+        </span>
+      </div>
+
+      <el-table
+        :data="historyList"
+        v-loading="historyLoading"
+        border
+        stripe
+        max-height="300"
+        @selection-change="handleSelectionChange"
+      >
+        <el-table-column type="selection" width="45" />
+        <el-table-column prop="version" label="版本" width="70" align="center" />
+        <el-table-column label="变更参数" min-width="200">
+          <template #default="{ row }">
+            <el-tag
+              v-for="label in (row.changed_labels || row.changed_keys || [])"
+              :key="label"
+              size="small"
+              type="info"
+              effect="plain"
+              style="margin: 2px;"
+            >{{ label }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="source" label="操作" width="80" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.source === 'reset' ? 'warning' : 'info'" size="small">
+              {{ row.source === 'reset' ? '重置' : '修改' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="created_at" label="时间" width="170" />
+      </el-table>
+
+      <!-- 对比结果 -->
+      <div v-if="diffResult" style="margin-top: 16px;">
+        <el-divider content-position="left">
+          版本 {{ diffResult.v1 }} → {{ diffResult.v2 }} 参数差异
+        </el-divider>
+        <el-table :data="diffResult.diffs" border stripe size="small" v-if="diffResult.diffs?.length">
+          <el-table-column prop="label" label="参数" width="200" />
+          <el-table-column :label="'版本' + diffResult.v1" align="right">
+            <template #default="{ row }">
+              <span style="color: #f56c6c;">{{ row.v1_value ?? '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column :label="'版本' + diffResult.v2" align="right">
+            <template #default="{ row }">
+              <span style="color: #67c23a;">{{ row.v2_value ?? '-' }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-empty v-else description="两个版本无差异" :image-size="60" />
+      </div>
+    </el-dialog>
   </div>
 </template>
 
