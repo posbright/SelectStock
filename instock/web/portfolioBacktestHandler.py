@@ -1629,7 +1629,7 @@ class SyncStrategyTemplatesHandler(webBase.BaseHandler, ABC):
                 code = tpl['code']
                 desc = tpl.get('description', '')
                 cat = tpl.get('category', 'stock')
-                existing = mdb.executeSql(
+                existing = mdb.executeSqlFetch(
                     "SELECT id FROM cn_stock_strategy_code WHERE name=%s AND status!='archived' LIMIT 1",
                     (name,))
                 if existing and len(existing) > 0:
@@ -1708,7 +1708,7 @@ class SaveStrategyCodeHandler(webBase.BaseHandler, ABC):
                 result_id = strategy_id
             else:
                 # 新增 —— 同名且未归档的策略视为重复，直接返回已有记录
-                existing = mdb.executeSql(
+                existing = mdb.executeSqlFetch(
                     "SELECT id FROM cn_stock_strategy_code WHERE name=%s AND status!='archived' LIMIT 1",
                     (name,))
                 if existing and len(existing) > 0:

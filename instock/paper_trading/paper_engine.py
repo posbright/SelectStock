@@ -288,52 +288,69 @@ def run_paper_trading_daily(paper_id):
             except Exception as e:
                 logging.warning(f"[模拟交易] after_trading_end 异常: {e}")
 
-        # 8. 保存状态
-        new_state = serialize_portfolio(context)
-        mdb.executeSql(
-            'UPDATE cn_stock_paper_trading SET last_run_date=%s, state_json=%s, '
-            'current_cash=%s, current_value=%s WHERE id=%s',
-            (date_str, new_state, context.portfolio.available_cash,
-             context.portfolio.total_value, paper_id))
-
-        # 9. 记录交易
+        # 8–11: 保存状态、交易、持仓、NAV（在单个事务中执行）
         _ensure_trade_table()
-        for t in trade_records:
-            mdb.executeSql(
-                'INSERT INTO cn_stock_backtest_trade '
-                '(paper_id, date, code, name, direction, price, amount, value, commission, tax) '
-                'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
-                (paper_id, date_str, t.code, t.name, t.direction,
-                 t.price, t.amount, t.value, t.commission, t.tax))
-
-        # 10. 持仓快照
         _ensure_position_table()
-        for code, pos in context.portfolio.positions.items():
-            if pos.amount > 0:
-                weight = pos.value / context.portfolio.total_value * 100 if context.portfolio.total_value > 0 else 0
-                mdb.executeSql(
-                    'INSERT INTO cn_stock_backtest_position '
-                    '(paper_id, date, code, name, amount, avg_cost, close_price, '
-                    'market_value, profit, profit_rate, weight) '
-                    'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
-                    (paper_id, date_str, code, pos.name, pos.amount,
-                     round(pos.avg_cost, 3), round(pos.price, 3),
-                     round(pos.value, 2), round(pos.profit, 2),
-                     round(pos.profit_rate, 6), round(weight, 6)))
-
-        # 11. 每日 NAV 记录
         _ensure_nav_table()
+
+        new_state = serialize_portfolio(context)
         position_value = context.portfolio.total_value - context.portfolio.available_cash
-        mdb.executeSql(
-            'INSERT INTO cn_stock_paper_nav '
-            '(paper_id, date, total_value, cash, position_value) '
-            'VALUES (%s,%s,%s,%s,%s) '
-            'ON DUPLICATE KEY UPDATE total_value=VALUES(total_value), '
-            'cash=VALUES(cash), position_value=VALUES(position_value)',
-            (paper_id, date_str,
-             round(context.portfolio.total_value, 2),
-             round(context.portfolio.available_cash, 2),
-             round(position_value, 2)))
+
+        conn_ctx = mdb.get_connection()
+        conn = conn_ctx.__enter__()
+        try:
+            conn.autocommit(False)
+            cur = conn.cursor()
+
+            # 8. 保存状态
+            cur.execute(
+                'UPDATE cn_stock_paper_trading SET last_run_date=%s, state_json=%s, '
+                'current_cash=%s, current_value=%s WHERE id=%s',
+                (date_str, new_state, context.portfolio.available_cash,
+                 context.portfolio.total_value, paper_id))
+
+            # 9. 记录交易
+            for t in trade_records:
+                cur.execute(
+                    'INSERT INTO cn_stock_backtest_trade '
+                    '(paper_id, date, code, name, direction, price, amount, value, commission, tax) '
+                    'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                    (paper_id, date_str, t.code, t.name, t.direction,
+                     t.price, t.amount, t.value, t.commission, t.tax))
+
+            # 10. 持仓快照
+            for code, pos in context.portfolio.positions.items():
+                if pos.amount > 0:
+                    weight = pos.value / context.portfolio.total_value * 100 if context.portfolio.total_value > 0 else 0
+                    cur.execute(
+                        'INSERT INTO cn_stock_backtest_position '
+                        '(paper_id, date, code, name, amount, avg_cost, close_price, '
+                        'market_value, profit, profit_rate, weight) '
+                        'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                        (paper_id, date_str, code, pos.name, pos.amount,
+                         round(pos.avg_cost, 3), round(pos.price, 3),
+                         round(pos.value, 2), round(pos.profit, 2),
+                         round(pos.profit_rate, 6), round(weight, 6)))
+
+            # 11. 每日 NAV 记录
+            cur.execute(
+                'INSERT INTO cn_stock_paper_nav '
+                '(paper_id, date, total_value, cash, position_value) '
+                'VALUES (%s,%s,%s,%s,%s) '
+                'ON DUPLICATE KEY UPDATE total_value=VALUES(total_value), '
+                'cash=VALUES(cash), position_value=VALUES(position_value)',
+                (paper_id, date_str,
+                 round(context.portfolio.total_value, 2),
+                 round(context.portfolio.available_cash, 2),
+                 round(position_value, 2)))
+
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.autocommit(True)
+            conn_ctx.__exit__(None, None, None)
 
         logging.info(f"[模拟交易] 模拟盘 #{paper_id} 完成: "
                      f"交易 {len(trade_records)} 笔, "
@@ -378,7 +395,7 @@ def run_all_paper_trading():
 
 
 def _create_api(context, data_proxy, g):
-    """创建策略 API 命名空间"""
+    """创建策略 API 命名空间（兼容聚宽风格调用）"""
 
     def history(code, count, field='close'):
         df = context._engine._stock_data.get(code) if hasattr(context, '_engine') and context._engine else None
@@ -389,6 +406,21 @@ def _create_api(context, data_proxy, g):
         if field in subset.columns:
             return subset[field].reset_index(drop=True)
         return pd.Series(dtype=float)
+
+    def attribute_history(security, count, unit='1d', fields=None,
+                          skip_paused=True, df=True, fq='pre'):
+        """聚宽 attribute_history 兼容"""
+        code = security.split('.')[0] if '.' in security else security
+        stock_df = context._engine._stock_data.get(code) if hasattr(context, '_engine') and context._engine else None
+        if stock_df is None:
+            cols = fields or ['close']
+            return pd.DataFrame(columns=cols)
+        mask = stock_df['date'] <= pd.Timestamp(context.current_dt)
+        subset = stock_df.loc[mask].tail(count)
+        if fields:
+            cols = [f for f in fields if f in subset.columns]
+            return subset[cols].reset_index(drop=True)
+        return subset[['open', 'high', 'low', 'close', 'volume']].reset_index(drop=True)
 
     def get_price(code, start_date=None, end_date=None, fields=None):
         df = context._engine._stock_data.get(code) if hasattr(context, '_engine') and context._engine else None
@@ -404,25 +436,77 @@ def _create_api(context, data_proxy, g):
             result = result[cols]
         return result.reset_index(drop=True)
 
-    def set_order_cost(commission=0.0003, tax=0.001, slippage=0.002):
-        context.commission_rate = commission
-        context.stamp_tax_rate = tax
-        context.slippage_rate = slippage
+    def set_order_cost(cost_obj=None, type='stock', **kwargs):
+        """兼容聚宽 set_order_cost(OrderCost(...), type='stock')"""
+        if cost_obj is not None and isinstance(cost_obj, dict):
+            context.commission_rate = cost_obj.get('open_commission', 0.0003)
+            context.stamp_tax_rate = cost_obj.get('close_tax', 0.001)
+        elif isinstance(cost_obj, (int, float)):
+            context.commission_rate = cost_obj
+
+    class _OrderCost:
+        """聚宽 OrderCost 兼容"""
+        def __init__(self, **kwargs):
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+            self._data = kwargs
+        def get(self, key, default=None):
+            return self._data.get(key, default)
+
+    # run_daily 回调注册
+    _daily_callbacks = []
+    _weekly_callbacks = []
+
+    def run_daily(func, time='every_bar', reference_security=None):
+        _daily_callbacks.append(func)
+
+    def run_weekly(func, weekday=1, time='every_bar', reference_security=None):
+        _weekly_callbacks.append(func)
+
+    def run_monthly(func, monthday=1, time='every_bar', reference_security=None):
+        _daily_callbacks.append(func)
 
     class _Log:
         def info(self, msg): logging.info(f"[模拟盘策略] {msg}")
         def warn(self, msg): logging.warning(f"[模拟盘策略] {msg}")
+        def warning(self, msg): logging.warning(f"[模拟盘策略] {msg}")
         def error(self, msg): logging.error(f"[模拟盘策略] {msg}")
         def debug(self, msg): logging.debug(f"[模拟盘策略] {msg}")
+        def set_level(self, *args, **kwargs): pass
+
+    def get_all_cached_stocks():
+        try:
+            from instock.core.backtest.data_feed import get_all_cached_stocks as _gacs
+            return _gacs()
+        except Exception:
+            return []
 
     return {
         'history': history,
+        'attribute_history': attribute_history,
         'get_price': get_price,
         'log': _Log(),
         'g': g,
         'record': lambda **kw: None,
         'set_benchmark': lambda code: setattr(context, 'benchmark', code),
+        'set_option': lambda *a, **kw: None,
         'set_order_cost': set_order_cost,
+        'OrderCost': lambda **kw: kw,
+        'run_daily': run_daily,
+        'run_weekly': run_weekly,
+        'run_monthly': run_monthly,
+        'order_target': lambda code, amount: None,
+        'order_value': lambda code, value: None,
+        'order': lambda code, amount: None,
+        'get_index_stocks': lambda *a, **kw: [],
+        'get_all_securities': lambda *a, **kw: pd.DataFrame(),
+        'get_all_cached_stocks': get_all_cached_stocks,
+        'get_fundamentals': lambda *a, **kw: pd.DataFrame(),
+        'get_current_data': lambda: {},
+        'get_security_info': lambda code: type('Info', (), {'start_date': None, 'display_name': '', 'name': ''})(),
+        'normalize_code': lambda code: code.split('.')[0] if '.' in code else code,
+        '_daily_callbacks': _daily_callbacks,
+        '_weekly_callbacks': _weekly_callbacks,
     }
 
 

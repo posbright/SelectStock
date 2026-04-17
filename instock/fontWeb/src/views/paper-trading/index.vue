@@ -28,8 +28,8 @@
         </el-table-column>
         <el-table-column prop="profit_rate" label="收益率" width="90" align="right">
           <template #default="{ row }">
-            <span :class="row.profit_rate >= 0 ? 'text-red' : 'text-green'">
-              {{ row.profit_rate >= 0 ? '+' : '' }}{{ row.profit_rate }}%
+            <span :class="(row.profit_rate ?? 0) >= 0 ? 'text-red' : 'text-green'">
+              {{ (row.profit_rate ?? 0) >= 0 ? '+' : '' }}{{ row.profit_rate ?? 0 }}%
             </span>
           </template>
         </el-table-column>
@@ -74,8 +74,8 @@
           </div>
           <div class="summary-item">
             <span class="label">总收益</span>
-            <span class="value" :class="detailData.info.profit_rate >= 0 ? 'text-red' : 'text-green'">
-              {{ detailData.info.profit_rate >= 0 ? '+' : '' }}{{ detailData.info.profit_rate }}%
+            <span class="value" :class="(detailData.info.profit_rate ?? 0) >= 0 ? 'text-red' : 'text-green'">
+              {{ (detailData.info.profit_rate ?? 0) >= 0 ? '+' : '' }}{{ detailData.info.profit_rate ?? 0 }}%
             </span>
           </div>
         </div>
@@ -101,23 +101,23 @@
           <el-table-column prop="name" label="名称" width="80" />
           <el-table-column prop="amount" label="持仓" width="70" align="right" />
           <el-table-column prop="avg_cost" label="成本" width="80" align="right">
-            <template #default="{ row }">{{ row.avg_cost.toFixed(2) }}</template>
+            <template #default="{ row }">{{ (row.avg_cost ?? 0).toFixed(2) }}</template>
           </el-table-column>
           <el-table-column prop="price" label="现价" width="80" align="right">
-            <template #default="{ row }">{{ row.price.toFixed(2) }}</template>
+            <template #default="{ row }">{{ (row.price ?? 0).toFixed(2) }}</template>
           </el-table-column>
           <el-table-column prop="value" label="市值" width="100" align="right">
             <template #default="{ row }">{{ formatMoney(row.value) }}</template>
           </el-table-column>
           <el-table-column prop="profit_rate" label="盈亏" width="80" align="right">
             <template #default="{ row }">
-              <span :class="row.profit_rate >= 0 ? 'text-red' : 'text-green'">
-                {{ row.profit_rate >= 0 ? '+' : '' }}{{ row.profit_rate }}%
+              <span :class="(row.profit_rate ?? 0) >= 0 ? 'text-red' : 'text-green'">
+                {{ (row.profit_rate ?? 0) >= 0 ? '+' : '' }}{{ row.profit_rate ?? 0 }}%
               </span>
             </template>
           </el-table-column>
           <el-table-column prop="weight" label="权重" width="70" align="right">
-            <template #default="{ row }">{{ row.weight.toFixed(1) }}%</template>
+            <template #default="{ row }">{{ (row.weight ?? 0).toFixed(1) }}%</template>
           </el-table-column>
         </el-table>
         <el-empty v-else description="暂无持仓" :image-size="60" />
@@ -221,6 +221,7 @@ const navChartRef = ref<HTMLElement | null>(null)
 const compareChartRef = ref<HTMLElement | null>(null)
 
 function formatMoney(v: number) {
+  if (v == null) return '--'
   return v >= 10000 ? `${(v / 10000).toFixed(2)}万` : v.toFixed(0)
 }
 function statusType(s: string) {
@@ -231,13 +232,13 @@ function statusLabel(s: string) {
 }
 
 const metricCards = [
-  { key: 'annual_return', label: '年化收益', fmt: (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`,
-    cls: (v: number) => v >= 0 ? 'text-red' : 'text-green' },
-  { key: 'max_drawdown', label: '最大回撤', fmt: (v: number) => `${v.toFixed(2)}%`, cls: () => 'text-green' },
-  { key: 'sharpe_ratio', label: '夏普比率', fmt: (v: number) => v.toFixed(2), cls: (v: number) => v >= 1 ? 'text-red' : '' },
-  { key: 'sortino_ratio', label: '索提诺', fmt: (v: number) => v.toFixed(2), cls: (v: number) => v >= 1 ? 'text-red' : '' },
-  { key: 'win_rate', label: '胜率', fmt: (v: number) => `${v.toFixed(1)}%`, cls: (v: number) => v >= 50 ? 'text-red' : '' },
-  { key: 'profit_loss_ratio', label: '盈亏比', fmt: (v: number) => v.toFixed(2), cls: (v: number) => v >= 1 ? 'text-red' : '' },
+  { key: 'annual_return', label: '年化收益', fmt: (v: number) => `${(v ?? 0) >= 0 ? '+' : ''}${(v ?? 0).toFixed(2)}%`,
+    cls: (v: number) => (v ?? 0) >= 0 ? 'text-red' : 'text-green' },
+  { key: 'max_drawdown', label: '最大回撤', fmt: (v: number) => `${(v ?? 0).toFixed(2)}%`, cls: () => 'text-green' },
+  { key: 'sharpe_ratio', label: '夏普比率', fmt: (v: number) => (v ?? 0).toFixed(2), cls: (v: number) => (v ?? 0) >= 1 ? 'text-red' : '' },
+  { key: 'sortino_ratio', label: '索提诺', fmt: (v: number) => (v ?? 0).toFixed(2), cls: (v: number) => (v ?? 0) >= 1 ? 'text-red' : '' },
+  { key: 'win_rate', label: '胜率', fmt: (v: number) => `${(v ?? 0).toFixed(1)}%`, cls: (v: number) => (v ?? 0) >= 50 ? 'text-red' : '' },
+  { key: 'profit_loss_ratio', label: '盈亏比', fmt: (v: number) => (v ?? 0).toFixed(2), cls: (v: number) => (v ?? 0) >= 1 ? 'text-red' : '' },
   { key: 'trade_count', label: '交易笔数', fmt: (v: number) => String(v || 0), cls: () => '' },
   { key: 'running_days', label: '运行天数', fmt: (v: number) => String(v || 0), cls: () => '' },
 ]
@@ -406,6 +407,7 @@ async function doCreate() {
     if (body?.code === 0) {
       ElMessage.success('模拟盘创建成功')
       showCreateDialog.value = false
+      createForm.value = { strategy_id: null as any, name: '', initial_cash: 1000000 }
       loadList()
     } else {
       ElMessage.error(body?.msg || '创建失败')
