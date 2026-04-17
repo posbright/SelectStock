@@ -29,7 +29,7 @@ from .strategy_context import (
     TradeRecord, NavRecord,
 )
 from .strategy_sandbox import compile_strategy, validate_code
-from .data_feed import load_stock_data, load_multiple_stocks, get_trading_dates, load_benchmark_data
+from .data_feed import load_stock_data, load_multiple_stocks, get_trading_dates, load_benchmark_data, get_all_cached_stocks
 from .risk_metrics import calculate_metrics
 from .fundamentals import (
     FundamentalDataProvider, valuation as _valuation_obj,
@@ -604,6 +604,7 @@ class PortfolioBacktestEngine:
             # 聚宽兼容 shim
             'get_all_securities': get_all_securities,
             'get_security_info': get_security_info,
+            'get_all_cached_stocks': lambda: get_all_cached_stocks(),
         }
 
     def _call_with_api(self, func, args, api_ns):

@@ -305,8 +305,11 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
-                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE']
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    try:
+        g.stocks = get_all_cached_stocks()
+    except Exception:
+        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
     g.entry_window = 60
     g.exit_window = 20
     g.max_positions = 5
@@ -372,9 +375,11 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
-                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
-                '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    try:
+        g.stocks = get_all_cached_stocks()
+    except Exception:
+        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
     g.max_positions = 5
     g.take_profit = 0.15
     g.stop_loss = -0.07
@@ -466,8 +471,11 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
-                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE']
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    try:
+        g.stocks = get_all_cached_stocks()
+    except Exception:
+        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
     g.max_positions = 5
     g.take_profit = 0.15
     g.stop_loss = -0.07
@@ -571,9 +579,11 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
-                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
-                '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    try:
+        g.stocks = get_all_cached_stocks()
+    except Exception:
+        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
     g.max_positions = 5
     g.take_profit = 0.10
     g.stop_loss = -0.05
@@ -691,9 +701,11 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
-                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
-                '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    try:
+        g.stocks = get_all_cached_stocks()
+    except Exception:
+        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
     g.max_positions = 5
     g.take_profit = 0.20
     g.stop_loss = -0.10
@@ -793,9 +805,11 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
-                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
-                '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    try:
+        g.stocks = get_all_cached_stocks()
+    except Exception:
+        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
     g.max_positions = 5
     g.take_profit = 0.20
     g.stop_loss = -0.10
@@ -893,9 +907,11 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
-                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
-                '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    try:
+        g.stocks = get_all_cached_stocks()
+    except Exception:
+        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
     g.max_positions = 5
     g.take_profit = 0.15
     g.stop_loss = -0.07
@@ -1014,9 +1030,11 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
-                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
-                '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    try:
+        g.stocks = get_all_cached_stocks()
+    except Exception:
+        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
     g.max_positions = 5
     g.take_profit = 0.20
     g.stop_loss = -0.10
@@ -1143,9 +1161,11 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
-                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
-                '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    try:
+        g.stocks = get_all_cached_stocks()
+    except Exception:
+        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
     g.max_positions = 5
     g.take_profit = 0.15
     g.stop_loss = -0.07
@@ -1256,9 +1276,11 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
-                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
-                '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    try:
+        g.stocks = get_all_cached_stocks()
+    except Exception:
+        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
     g.max_positions = 5
     g.take_profit = 0.15
     g.stop_loss = -0.07
@@ -1349,9 +1371,11 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
-                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
-                '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    try:
+        g.stocks = get_all_cached_stocks()
+    except Exception:
+        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
     g.max_positions = 5
     g.take_profit = 0.20
     g.stop_loss = -0.10
@@ -1455,9 +1479,11 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    g.stocks = ['000001.XSHE', '600036.XSHG', '601318.XSHG', '600519.XSHG', '000858.XSHE',
-                '300750.XSHE', '601888.XSHG', '002594.XSHE', '600000.XSHG', '000002.XSHE',
-                '000568.XSHE', '002304.XSHE', '603259.XSHG', '601012.XSHG', '300059.XSHE']
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    try:
+        g.stocks = get_all_cached_stocks()
+    except Exception:
+        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
     g.max_positions = 5
     g.take_profit = 0.20
     g.stop_loss = -0.08

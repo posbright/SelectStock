@@ -237,6 +237,35 @@ def load_multiple_stocks(codes, start_date=None, end_date=None):
     return result
 
 
+def get_all_cached_stocks():
+    """
+    扫描本地缓存目录，返回所有可用的股票代码列表。
+
+    Returns:
+        list[str]: 6位股票代码列表（如 ['000001', '600036', ...]）
+    """
+    codes = set()
+    if not os.path.isdir(_CACHE_DIR):
+        return []
+    # 根目录下的 .gzip.pickle
+    for f in os.listdir(_CACHE_DIR):
+        if f.endswith('.gzip.pickle') and len(f) >= 18:
+            code = f[:6]
+            if code.isdigit():
+                codes.add(code)
+    # 子目录下的 {code}qfq.gzip.pickle
+    for sub in os.listdir(_CACHE_DIR):
+        sub_path = os.path.join(_CACHE_DIR, sub)
+        if not os.path.isdir(sub_path) or sub in ('index', 'sh6', 'sz0'):
+            continue
+        for f in os.listdir(sub_path):
+            if f.endswith('qfq.gzip.pickle'):
+                code = f.replace('qfq.gzip.pickle', '')
+                if len(code) == 6 and code.isdigit():
+                    codes.add(code)
+    return sorted(codes)
+
+
 def get_trading_dates(start_date, end_date):
     """
     获取交易日列表。

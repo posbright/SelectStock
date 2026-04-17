@@ -201,6 +201,7 @@ import {
   getPaperTradingList, getPaperTradingDetail, createPaperTrading,
   paperTradingAction, runPaperTrading, getStrategyCodeList, getPaperCompare
 } from '@/api/stock'
+import request from '@/api/request'
 
 const paperList = ref<any[]>([])
 const strategies = ref<any[]>([])
@@ -316,9 +317,12 @@ async function loadList() {
 
 async function loadStrategies() {
   try {
-    const res = await getStrategyCodeList()
-    if ((res as any)?.code === 0) strategies.value = (res as any).data
-    else if (res.data?.code === 0) strategies.value = res.data.data
+    // 先同步内置模板到数据库，确保模板策略可选
+    try { await request({ url: '/api/strategy/sync_templates', method: 'post' }) } catch { /* ignore */ }
+    // 加载策略列表
+    const res = await getStrategyCodeList() as any
+    const d = res?.data || res
+    strategies.value = d?.strategies || (Array.isArray(d) ? d : [])
   } catch (e) { /* ignore */ }
 }
 

@@ -102,6 +102,15 @@ TEST_STOCKS = ['000001', '600036', '601318', '600519', '000858',
                '300750', '601888', '002594', '600000', '000002',
                '000568', '002304', '603259', '601012', '300059']
 
+# Mock get_all_cached_stocks 以在测试中返回 TEST_STOCKS（避免扫描 4844+ 缓存文件）
+try:
+    import instock.core.backtest.data_feed as _data_feed
+    _data_feed.get_all_cached_stocks = lambda: list(TEST_STOCKS)
+    import instock.core.backtest.portfolio_engine as _engine
+    _engine.get_all_cached_stocks = lambda: list(TEST_STOCKS)
+except ImportError:
+    pass
+
 
 class TestTemplateRegistry(unittest.TestCase):
     """测试模板注册：确保所有策略选股模板都在后端模板列表中"""
