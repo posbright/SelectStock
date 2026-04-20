@@ -97,17 +97,17 @@
           </el-table-column>
           <el-table-column label="策略日收益" width="100" align="right">
             <template #default="{ row }">
-              <span :class="pctCls(row.daily_return)">{{ (row.daily_return * 100).toFixed(2) }}%</span>
+              <span :class="pctCls(row.daily_return)">{{ ((row.daily_return ?? 0) * 100).toFixed(2) }}%</span>
             </template>
           </el-table-column>
           <el-table-column label="基准日收益" width="100" align="right">
             <template #default="{ row }">
-              <span :class="pctCls(row.benchmark_return)">{{ (row.benchmark_return * 100).toFixed(2) }}%</span>
+              <span :class="pctCls(row.benchmark_return)">{{ ((row.benchmark_return ?? 0) * 100).toFixed(2) }}%</span>
             </template>
           </el-table-column>
           <el-table-column label="累计收益" width="100" align="right">
             <template #default="{ row }">
-              <span :class="pctCls(row.nav - 1)">{{ ((row.nav - 1) * 100).toFixed(2) }}%</span>
+              <span :class="pctCls((row.nav ?? 1) - 1)">{{ (((row.nav ?? 1) - 1) * 100).toFixed(2) }}%</span>
             </template>
           </el-table-column>
           <el-table-column label="总资产" width="130" align="right">
@@ -157,7 +157,7 @@
           <el-table-column label="平仓盈亏" width="110" align="right">
             <template #default="{ row }">
               <span v-if="row.direction === 'sell'" :class="pctCls(row.close_profit)">
-                {{ row.close_profit >= 0 ? '+' : '' }}{{ N(row.close_profit || 0).toFixed(2) }}
+                {{ (row.close_profit ?? 0) >= 0 ? '+' : '' }}{{ N(row.close_profit || 0).toFixed(2) }}
               </span>
               <span v-else>-</span>
             </template>
@@ -165,7 +165,7 @@
           <el-table-column label="收益率" width="85" align="right">
             <template #default="{ row }">
               <span v-if="row.direction === 'sell'" :class="pctCls(row.return_rate)">
-                {{ row.return_rate >= 0 ? '+' : '' }}{{ N(row.return_rate || 0).toFixed(2) }}%
+                {{ (row.return_rate ?? 0) >= 0 ? '+' : '' }}{{ N(row.return_rate || 0).toFixed(2) }}%
               </span>
               <span v-else>-</span>
             </template>
@@ -197,12 +197,12 @@
           </el-table-column>
           <el-table-column label="盈亏" width="100" align="right">
             <template #default="{ row }">
-              <span :class="pctCls(row.profit)">{{ row.profit >= 0 ? '+' : '' }}{{ N(row.profit).toFixed(2) }}</span>
+              <span :class="pctCls(row.profit)">{{ (row.profit ?? 0) >= 0 ? '+' : '' }}{{ N(row.profit ?? 0).toFixed(2) }}</span>
             </template>
           </el-table-column>
           <el-table-column label="盈亏比例" width="90" align="right">
             <template #default="{ row }">
-              <span :class="pctCls(row.profit_rate)">{{ row.profit_rate >= 0 ? '+' : '' }}{{ N(row.profit_rate).toFixed(2) }}%</span>
+              <span :class="pctCls(row.profit_rate)">{{ (row.profit_rate ?? 0) >= 0 ? '+' : '' }}{{ N(row.profit_rate ?? 0).toFixed(2) }}%</span>
             </template>
           </el-table-column>
           <el-table-column label="仓位占比" width="90" align="right">
@@ -364,8 +364,8 @@ function renderReturnChart() {
 
   const nav = info.value.nav as any[]
   const dates = nav.map(r => r.date)
-  const stratRet = nav.map(r => +((r.nav - 1) * 100).toFixed(2))
-  const bmRet = nav.map(r => +((r.benchmark_nav - 1) * 100).toFixed(2))
+  const stratRet = nav.map(r => +(((r.nav ?? 1) - 1) * 100).toFixed(2))
+  const bmRet = nav.map(r => +(((r.benchmark_nav ?? 1) - 1) * 100).toFixed(2))
   const excessRet = nav.map((_r, i) => +(stratRet[i] - bmRet[i]).toFixed(2))
   const hasBm = bmRet.some(v => Math.abs(v) > 0.01)
 
@@ -444,11 +444,11 @@ function renderPnlChart() {
 
   const nav = info.value.nav as any[]
   const dates = nav.map(r => r.date)
-  const dailyRet = nav.map(r => +(r.daily_return * 100).toFixed(3))
+  const dailyRet = nav.map(r => +((r.daily_return ?? 0) * 100).toFixed(3))
   // 每日盈亏金额
   const dailyPnl = nav.map((r: any, i: number) => {
     if (i === 0) return 0
-    return +(r.total_value - nav[i - 1].total_value).toFixed(2)
+    return +((r.total_value ?? 0) - (nav[i - 1].total_value ?? 0)).toFixed(2)
   })
 
   pnlChart.setOption({
@@ -514,7 +514,7 @@ function renderTradeChart() {
   const nav = info.value.nav as any[]
   const trades = (info.value.trades || []) as any[]
   const dates = nav.map(r => r.date)
-  const totalVals = nav.map(r => +r.total_value.toFixed(0))
+  const totalVals = nav.map(r => +(N(r.total_value || 0)).toFixed(0))
 
   // 构建买入/卖出散点数据
   const dateIdx = new Map<string, number>()

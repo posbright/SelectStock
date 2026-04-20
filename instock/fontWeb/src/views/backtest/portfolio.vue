@@ -64,31 +64,31 @@
             <!-- 汇总指标 -->
             <div v-if="result?.metrics" class="metrics-grid">
               <div class="metric-item">
-                <div class="metric-value" :class="result.metrics.total_return >= 0 ? 'positive' : 'negative'">
-                  {{ result.metrics.total_return.toFixed(2) }}%
+                <div class="metric-value" :class="(result.metrics.total_return ?? 0) >= 0 ? 'positive' : 'negative'">
+                  {{ (result.metrics.total_return ?? 0).toFixed(2) }}%
                 </div>
                 <div class="metric-label">累计收益</div>
               </div>
               <div class="metric-item">
-                <div class="metric-value" :class="result.metrics.annual_return >= 0 ? 'positive' : 'negative'">
-                  {{ result.metrics.annual_return.toFixed(2) }}%
+                <div class="metric-value" :class="(result.metrics.annual_return ?? 0) >= 0 ? 'positive' : 'negative'">
+                  {{ (result.metrics.annual_return ?? 0).toFixed(2) }}%
                 </div>
                 <div class="metric-label">年化收益</div>
               </div>
               <div class="metric-item">
-                <div class="metric-value negative">{{ result.metrics.max_drawdown.toFixed(2) }}%</div>
+                <div class="metric-value negative">{{ (result.metrics.max_drawdown ?? 0).toFixed(2) }}%</div>
                 <div class="metric-label">最大回撤</div>
               </div>
               <div class="metric-item">
-                <div class="metric-value">{{ result.metrics.sharpe_ratio.toFixed(2) }}</div>
+                <div class="metric-value">{{ (result.metrics.sharpe_ratio ?? 0).toFixed(2) }}</div>
                 <div class="metric-label">夏普比率</div>
               </div>
               <div class="metric-item">
-                <div class="metric-value">{{ result.metrics.trade_count }}</div>
+                <div class="metric-value">{{ result.metrics.trade_count ?? 0 }}</div>
                 <div class="metric-label">交易笔数</div>
               </div>
               <div class="metric-item">
-                <div class="metric-value">{{ result.metrics.daily_win_rate.toFixed(1) }}%</div>
+                <div class="metric-value">{{ (result.metrics.daily_win_rate ?? 0).toFixed(1) }}%</div>
                 <div class="metric-label">日胜率</div>
               </div>
             </div>
@@ -407,8 +407,8 @@ function renderNavChart() {
   navChart = echarts.init(navChartRef.value)
 
   const dates = result.value.nav.map((r: any) => r.date)
-  const navs = result.value.nav.map((r: any) => ((r.nav - 1) * 100).toFixed(2))
-  const benchmarks = result.value.nav.map((r: any) => ((r.benchmark_nav - 1) * 100).toFixed(2))
+  const navs = result.value.nav.map((r: any) => (((r.nav ?? 1) - 1) * 100).toFixed(2))
+  const benchmarks = result.value.nav.map((r: any) => (((r.benchmark_nav ?? 1) - 1) * 100).toFixed(2))
 
   navChart.setOption({
     tooltip: {

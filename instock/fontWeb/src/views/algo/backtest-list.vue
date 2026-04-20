@@ -64,7 +64,7 @@
       </el-table-column>
       <el-table-column prop="max_drawdown" label="最大回撤" width="90" align="right" sortable="custom">
         <template #default="{ row }">
-          <span class="val-green">{{ N(row.max_drawdown).toFixed(2) }}%</span>
+          <span class="val-green">{{ row.max_drawdown != null ? N(row.max_drawdown).toFixed(2) + '%' : '--' }}</span>
         </template>
       </el-table-column>
       <el-table-column label="超额最大回撤" width="110" align="right" sortable :sort-method="(a:any,b:any)=> (a.excess_max_drawdown||0)-(b.excess_max_drawdown||0)">
@@ -73,7 +73,7 @@
         </template>
       </el-table-column>
       <el-table-column prop="sharpe_ratio" label="夏普" width="70" align="right" sortable="custom">
-        <template #default="{ row }">{{ N(row.sharpe_ratio).toFixed(2) }}</template>
+        <template #default="{ row }">{{ row.sharpe_ratio != null ? N(row.sharpe_ratio).toFixed(2) : '--' }}</template>
       </el-table-column>
       <el-table-column label="超额夏普" width="85" align="right" sortable :sort-method="(a:any,b:any)=> (a.excess_sharpe_ratio||0)-(b.excess_sharpe_ratio||0)">
         <template #default="{ row }">{{ N(row.excess_sharpe_ratio || 0).toFixed(2) }}</template>

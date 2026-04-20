@@ -104,8 +104,8 @@
                 </el-table-column>
                 <el-table-column prop="profit_rate" label="盈亏" width="80" align="right">
                   <template #default="{ row }">
-                    <span :style="{ color: row.profit_rate >= 0 ? '#f56c6c' : '#67c23a' }">
-                      {{ Number(row.profit_rate).toFixed(1) }}%
+                    <span :style="{ color: (row.profit_rate ?? 0) >= 0 ? '#f56c6c' : '#67c23a' }">
+                      {{ Number(row.profit_rate ?? 0).toFixed(1) }}%
                     </span>
                   </template>
                 </el-table-column>
@@ -493,7 +493,7 @@ function renderChart() {
   const hasBenchmark = nav.some((r: any) => r.benchmark_nav != null && Math.abs(r.benchmark_nav - 1) > 0.0001)
   const legend = ['策略收益']
   const series: any[] = [
-    { name: '策略收益', type: 'line', data: nav.map((r: any) => ((r.nav - 1) * 100).toFixed(2)),
+    { name: '策略收益', type: 'line', data: nav.map((r: any) => (((r.nav ?? 1) - 1) * 100).toFixed(2)),
       symbol: 'none', lineStyle: { width: 2, color: '#e6a23c' },
       areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
         { offset: 0, color: 'rgba(230,162,60,0.25)' }, { offset: 1, color: 'rgba(230,162,60,0.02)' }]) }},
@@ -501,7 +501,7 @@ function renderChart() {
   if (hasBenchmark) {
     legend.push('基准收益')
     series.push(
-      { name: '基准收益', type: 'line', data: nav.map((r: any) => ((r.benchmark_nav - 1) * 100).toFixed(2)),
+      { name: '基准收益', type: 'line', data: nav.map((r: any) => (((r.benchmark_nav ?? 1) - 1) * 100).toFixed(2)),
         symbol: 'none', lineStyle: { width: 1.5, type: 'dashed', color: '#909399' }},
     )
   }
