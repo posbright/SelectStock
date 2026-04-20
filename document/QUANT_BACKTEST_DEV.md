@@ -1,8 +1,8 @@
 # 回测引擎 & 模拟交易 — 开发文档
 
 > **分支**: `backTest_dev`  
-> **日期**: 2026-03-13  
-> **状态**: Phase 1 实施中（v2.1）
+> **日期**: 2026-04-20  
+> **状态**: Phase 1–Phase 3 已完成（v3.0）
 
 ---
 
@@ -313,6 +313,41 @@ Cerebro.addstrategy() + adddata() + run()
 | 3 | `paperTradingHandler.py` | API |
 | 4 | `paper-trading/*.vue` | 前端面板 |
 
+### Phase 3 已完成的增强功能（2026-04-20）
+
+#### 模拟交易数据源架构
+
+**核心原则**：模拟交易中除账户金额是虚拟的外，所有数据均为实盘数据。
+
+```
+行情数据加载优先级：
+  pickle 缓存 (cache/hist/) → MySQL cn_stock_spot → EastMoney API
+
+基本面数据加载优先级：
+  cn_stock_selection（70+列真实数据） → FundamentalDataProvider 回退
+```
+
+| 数据类别 | 数据源 | 实时性 |
+|---------|--------|--------|
+| K线/行情 | pickle缓存 + cn_stock_spot DB + EastMoney API | 当日 |
+| PE/PB/市值 | cn_stock_selection.pe9/pbnewmrq/total_market_cap | 当日 |
+| ROE/EPS/毛利率 | cn_stock_selection.roe_weight/basic_eps/sale_gpr | 当日 |
+| 资产负债率 | cn_stock_selection.debt_asset_ratio | 当日 |
+| 增长率 | cn_stock_selection.netprofit_yoy_ratio/toi_yoy_ratio | 当日 |
+
+#### 新增聚宽 API
+
+| API | 说明 |
+|-----|------|
+| `order_target_percent(code, percent)` | 按目标仓位百分比调仓 |
+| `run_daily(func, time)` | 注册日级回调（每次运行重新注册） |
+| `run_weekly(func, weekday, time)` | 注册周级回调（存储 (func, weekday) 元组） |
+| `run_monthly(func, monthday, time)` | 注册月级回调 |
+| `get_fundamentals(query)` | 从 cn_stock_selection 查询真实基本面数据 |
+| `get_all_cached_stocks()` | 获取全部缓存股票代码（~4800只） |
+| `get_index_stocks(index_code)` | 获取指数成份股（内置 399951 银行指数） |
+| `get_all_securities()` | 获取全部股票信息 DataFrame |
+
 ---
 
 ## 七、策略 API 参考
@@ -348,6 +383,7 @@ def after_trading_end(context):
 | `order_target(code, amount)` | 调整到目标持仓股数 |
 | `order_value(code, value)` | 买入指定金额的股票 |
 | `order_target_value(code, value)` | 调整到目标持仓金额 |
+| `order_target_percent(code, percent)` | 按目标仓位百分比调仓 |
 
 **A股规则**：
 - T+1 交易：今日买入的股票明日才能卖出

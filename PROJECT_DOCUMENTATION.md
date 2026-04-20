@@ -283,6 +283,11 @@ SelectStock/
 │   │   ├── klinepattern_data_daily_job.py # [旧版] K线形态作业（已被streaming替代）
 │   │   ├── strategy_data_daily_job.py # [旧版] 策略选股作业（已被streaming替代）
 │   │   └── stock_financial_data.py # 个股财务数据获取（AKShare东方财富，月度增量）
+│   │
+│   ├── paper_trading/           # 📈 模拟交易模块
+│   │   ├── __init__.py
+│   │   ├── paper_engine.py     # 模拟交易执行引擎（每日定时驱动，真实数据源）
+│   │   └── state_manager.py    # 持仓/现金/NAV 状态持久化
 │   │   
 │   ├── web/                     # 🌐 Web服务
 │   │   ├── web_service.py      # Tornado主服务（路由注册）
@@ -477,9 +482,16 @@ SelectStock/
 回测引擎 (portfolio_engine.py)
     ↓   逐交易日驱动
     ├── 基本面数据 (fundamentals.py)  — 真实财务数据(cn_stock_financial) + 合成兜底
-    ├── K线数据 (data_feed.py)        — 缓存 + EastMoney API
+    ├── K线数据 (data_feed.py)        — 缓存 + DB补全 + EastMoney API
     ├── 策略上下文 (strategy_context.py) — Portfolio/Position/T+1
     └── 风险指标 (risk_metrics.py)     — 25项量化指标
+
+模拟交易引擎 (paper_engine.py)
+    │   每日定时驱动
+    ├── 基本面数据: cn_stock_selection（70+列真实数据） — 与 GPT选股同源
+    ├── K线行情: pickle缓存 → cn_stock_spot DB → EastMoney API
+    ├── 策略沙箱 (strategy_sandbox.py) — 安全编译用户策略
+    └── 状态管理 (state_manager.py)    — 持仓/现金/NAV 持久化
 ```
 
 #### 支持的聚宽API
@@ -490,6 +502,7 @@ SelectStock/
 | `order_target(code, amount)` | 调整到目标持仓 |
 | `order_value(code, value)` | 按金额下单 |
 | `order_target_value(code, value)` | 调整到目标金额 |
+| `order_target_percent(code, percent)` | 按目标仓位百分比调仓 |
 | `history(code, count, field)` | 获取历史数据 |
 | `get_price(code, start, end)` | 获取区间数据 |
 | `set_benchmark(code)` | 设定基准指数 |
@@ -527,6 +540,22 @@ SelectStock/
 回测引擎中 `get_fundamentals()` 查询 indicator/balance/cash_flow 字段时，优先从 `cn_stock_financial` 表读取真实财务数据（EPS、ROE、营收增长等20项指标），无数据时自动降级为确定性合成数据（基于股票代码+字段+季度的哈希值）。
 
 财务数据由 `stock_financial_data.py` 通过 AKShare `stock_financial_analysis_indicator_em` 接口获取，月度增量更新。
+
+#### 财务数据源（模拟交易 paper_engine.py）
+
+模拟交易引擎的 `get_fundamentals()` **不使用合成数据**，直接查询 `cn_stock_selection` 表，该表由每日定时任务从东方财富选股器 API 获取，包含 70+ 列真实基本面数据：
+
+| 聚宽字段 | cn_stock_selection 列 | 说明 |
+|---------|----------------------|------|
+| market_cap | total_market_cap / 1e8 | 总市值（亿元） |
+| pe_ratio | pe9 | 市盈率 TTM |
+| pb_ratio | pbnewmrq | 市净率 MRQ |
+| roe | roe_weight | 净资产收益率 |
+| eps | basic_eps | 每股收益 |
+| gross_profit_margin | sale_gpr | 毛利率 |
+| net_profit_margin | sale_npr | 净利率 |
+
+核心原则：模拟交易中除账户金额是虚拟的外，所有数据均为实盘数据。
 
 #### 数据缓存策略
 
