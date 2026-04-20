@@ -587,17 +587,198 @@ def _create_api(context, data_proxy, g):
         except Exception:
             return []
 
-    # ── 基本面数据查询 ──
+    # ── 基本面数据查询（基于实盘数据 cn_stock_selection / cn_stock_spot）──
+
+    # 聚宽字段名 → cn_stock_selection 列名映射
+    _JQ_FIELD_MAP = {
+        # valuation
+        'market_cap': 'total_market_cap',
+        'pe_ratio': 'pe9',
+        'pb_ratio': 'pbnewmrq',
+        'circulating_market_cap': 'free_cap',
+        # indicator
+        'roe': 'roe_weight',
+        'eps': 'basic_eps',
+        'inc_total_revenue_year_on_year': 'toi_yoy_ratio',
+        'inc_net_profit_year_on_year': 'netprofit_yoy_ratio',
+        'inc_revenue_year_on_year': 'toi_yoy_ratio',
+        'net_profit_margin': 'sale_npr',
+        'gross_profit_margin': 'sale_gpr',
+        # balance
+        'total_liability': 'debt_asset_ratio',  # 近似：资产负债率
+        'total_assets': None,  # cn_stock_selection 无此字段
+        'total_current_assets': None,
+        'total_current_liability': None,
+        # cash_flow
+        'net_operate_cash_flow': 'per_netcash_operate',  # 近似：每股经营现金流
+        'net_invest_cash_flow': None,
+        'net_finance_cash_flow': None,
+    }
+
     def get_fundamentals(q, date=None):
+        """从 cn_stock_selection 查询真实基本面数据（模拟交易专用）。
+
+        cn_stock_selection 由每日定时任务从东方财富选股器 API 获取，
+        包含 70+ 列真实基本面数据（PE/PB/ROE/毛利率/负债率/增长率等），
+        与 GPT 综合选股策略使用完全相同的数据源。
+        """
+        query_date = date or context.current_dt
+        date_str = query_date.strftime('%Y-%m-%d') if hasattr(query_date, 'strftime') else str(query_date)[:10]
+
+        try:
+            import instock.lib.database as mdb
+
+            # 查询 cn_stock_selection 的最新日期（可能 date_str 当天还没获取到）
+            date_rows = mdb.executeSqlFetch(
+                'SELECT MAX(date) FROM cn_stock_selection WHERE date <= %s', (date_str,))
+            if not date_rows or date_rows[0][0] is None:
+                logging.warning(f"[模拟交易] cn_stock_selection 无 <= {date_str} 的数据")
+                # 回退到 FundamentalDataProvider
+                return _get_fundamentals_fallback(q, query_date)
+            actual_date = date_rows[0][0]
+
+            # 构建查询列（code 必选 + 策略请求的字段）
+            select_cols = ['code', 'name']
+            jq_to_db = {}  # jq_field → db_col 映射（用于结果列重命名）
+            from instock.core.backtest.fundamentals import _FieldExpr
+            for field_expr in q._fields:
+                if isinstance(field_expr, _FieldExpr):
+                    jq_name = field_expr._name
+                    db_col = _JQ_FIELD_MAP.get(jq_name, jq_name)
+                    if db_col and db_col not in select_cols:
+                        select_cols.append(db_col)
+                        jq_to_db[jq_name] = db_col
+
+            # 同样处理过滤条件中引用的字段
+            for f in q._filters:
+                if isinstance(f, tuple) and len(f) >= 3:
+                    jq_name = f[1]
+                    db_col = _JQ_FIELD_MAP.get(jq_name, jq_name)
+                    if db_col and db_col not in select_cols:
+                        select_cols.append(db_col)
+                        jq_to_db[jq_name] = db_col
+
+            # 也加入估值相关常用列
+            for extra in ['total_market_cap', 'free_cap', 'pe9', 'pbnewmrq',
+                          'roe_weight', 'sale_gpr', 'sale_npr', 'debt_asset_ratio']:
+                if extra not in select_cols:
+                    select_cols.append(extra)
+
+            cols_sql = ', '.join(f'`{c}`' for c in select_cols)
+            rows = mdb.executeSqlFetch(
+                f'SELECT {cols_sql} FROM cn_stock_selection WHERE date = %s AND new_price > 0',
+                (actual_date,))
+
+            if not rows or len(rows) == 0:
+                logging.warning(f"[模拟交易] cn_stock_selection {actual_date} 无数据")
+                return _get_fundamentals_fallback(q, query_date)
+
+            result = pd.DataFrame(rows, columns=select_cols)
+
+            # 数值列转 float
+            for c in result.columns:
+                if c not in ('code', 'name', 'date'):
+                    result[c] = pd.to_numeric(result[c], errors='coerce')
+
+            # 市值单位转换：cn_stock_selection 的 total_market_cap 单位是元 → 转为亿元
+            if 'total_market_cap' in result.columns:
+                result['total_market_cap'] = result['total_market_cap'] / 1e8  # 元 → 亿
+            if 'free_cap' in result.columns:
+                result['free_cap'] = result['free_cap'] / 1e8
+
+            # 将 DB 列名映射回聚宽字段名，方便策略使用
+            rename_map = {}
+            for jq_name, db_col in jq_to_db.items():
+                if db_col in result.columns and jq_name != db_col:
+                    rename_map[db_col] = jq_name
+            # 标准映射（回测引擎兼容）
+            if 'total_market_cap' in result.columns:
+                rename_map.setdefault('total_market_cap', 'market_cap')
+            if 'pe9' in result.columns:
+                rename_map.setdefault('pe9', 'pe_ratio')
+            if 'pbnewmrq' in result.columns:
+                rename_map.setdefault('pbnewmrq', 'pb_ratio')
+            if 'free_cap' in result.columns:
+                rename_map.setdefault('free_cap', 'circulating_market_cap')
+            if 'roe_weight' in result.columns:
+                rename_map.setdefault('roe_weight', 'roe')
+            if 'basic_eps' in result.columns:
+                rename_map.setdefault('basic_eps', 'eps')
+            if 'sale_npr' in result.columns:
+                rename_map.setdefault('sale_npr', 'net_profit_margin')
+            if 'sale_gpr' in result.columns:
+                rename_map.setdefault('sale_gpr', 'gross_profit_margin')
+            if rename_map:
+                result = result.rename(columns=rename_map)
+
+            # 应用过滤条件
+            # 构建反向映射: jq_name → db_col（已经 rename 过，所以用 jq_name）
+            for f in q._filters:
+                if not isinstance(f, tuple) or len(f) < 3:
+                    continue
+                op = f[0]
+                # div_* 操作符处理 balance.total_liability / balance.total_assets 等
+                if op.startswith('div_'):
+                    # 对于 debt_asset_ratio 已在 cn_stock_selection 中，直接用
+                    numerator, denominator = f[1], f[2]
+                    threshold = f[3]
+                    if numerator == 'total_liability' and denominator == 'total_assets':
+                        col = 'debt_asset_ratio'
+                        if col in result.columns:
+                            cmp = op.replace('div_', '')
+                            if cmp == 'lt':
+                                result = result[result[col] < threshold * 100]  # 百分比
+                            elif cmp == 'gt':
+                                result = result[result[col] > threshold * 100]
+                            elif cmp == 'le':
+                                result = result[result[col] <= threshold * 100]
+                            elif cmp == 'ge':
+                                result = result[result[col] >= threshold * 100]
+                    continue
+                field = f[1]
+                if field not in result.columns:
+                    continue
+                if op == 'between' and len(f) >= 4:
+                    result = result[(result[field] >= f[2]) & (result[field] <= f[3])]
+                elif op == 'gt':
+                    result = result[result[field] > f[2]]
+                elif op == 'lt':
+                    result = result[result[field] < f[2]]
+                elif op == 'ge':
+                    result = result[result[field] >= f[2]]
+                elif op == 'le':
+                    result = result[result[field] <= f[2]]
+                elif op == 'in_':
+                    result = result[result[field].isin(f[2])]
+
+            # 排序
+            if q._order_by_clause is not None and isinstance(q._order_by_clause, tuple):
+                direction, field = q._order_by_clause
+                if field in result.columns:
+                    result = result.sort_values(field, ascending=(direction == 'asc'))
+
+            # 限制行数
+            if q._limit_val is not None:
+                result = result.head(q._limit_val)
+
+            if len(result) > 0:
+                logging.info(f"[模拟交易] get_fundamentals 从 cn_stock_selection({actual_date}) "
+                             f"查得 {len(result)} 只股票")
+
+            return result.reset_index(drop=True)
+
+        except Exception as e:
+            logging.warning(f"[模拟交易] get_fundamentals 查询异常: {e}")
+            return _get_fundamentals_fallback(q, query_date)
+
+    def _get_fundamentals_fallback(q, query_date):
+        """回退到 FundamentalDataProvider（当 cn_stock_selection 不可用时）"""
         provider = _get_fundamental_provider(context._engine if hasattr(context, '_engine') else None)
         if provider is None:
-            logging.warning("[模拟交易] 基本面数据不可用，返回空 DataFrame")
             return pd.DataFrame()
-        query_date = date or context.current_dt
         try:
             return provider.get_fundamentals(q, query_date)
-        except Exception as e:
-            logging.warning(f"[模拟交易] get_fundamentals 异常: {e}")
+        except Exception:
             return pd.DataFrame()
 
     # ── 指数成份股查询 ──
