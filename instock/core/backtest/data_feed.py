@@ -80,6 +80,88 @@ def _save_cache(code, df):
         logging.warning(f"缓存保存失败 {code}: {e}")
 
 
+def _load_today_from_db(code, date_str):
+    """
+    从 cn_stock_spot 表加载指定日期的行情数据（单条记录）。
+
+    每日定时任务会将全市场行情写入 cn_stock_spot，
+    此处作为 K 线缓存与在线 API 之间的中间层，避免大量网络请求。
+
+    Returns:
+        DataFrame with one row [date, open, high, low, close, volume] or None
+    """
+    try:
+        import instock.lib.database as mdb
+        rows = mdb.executeSqlFetch(
+            'SELECT date, open_price, high_price, low_price, new_price, volume, '
+            'pre_close_price, deal_amount '
+            'FROM cn_stock_spot WHERE code = %s AND date = %s',
+            (code, date_str))
+        if not rows or len(rows) == 0:
+            return None
+        r = rows[0]
+        # 跳过无效数据（停牌等: new_price=0 或 None）
+        if not r[4] or float(r[4]) <= 0:
+            return None
+        row_df = pd.DataFrame([{
+            'date': pd.Timestamp(r[0]),
+            'open': float(r[1] or r[4]),
+            'high': float(r[2] or r[4]),
+            'low': float(r[3] or r[4]),
+            'close': float(r[4]),
+            'volume': int(r[5] or 0),
+            'pre_close': float(r[6]) if r[6] else None,
+            'amount': float(r[7] or 0),
+        }])
+        return row_df
+    except Exception as e:
+        logging.debug(f"从 cn_stock_spot 加载 {code} {date_str} 失败: {e}")
+        return None
+
+
+def _batch_load_today_from_db(codes, date_str):
+    """
+    批量从 cn_stock_spot 加载指定日期的行情数据。
+
+    Returns:
+        dict: {code: {open, high, low, close, volume, pre_close}} 或空字典
+    """
+    if not codes:
+        return {}
+    try:
+        import instock.lib.database as mdb
+        placeholders = ','.join(['%s'] * len(codes))
+        rows = mdb.executeSqlFetch(
+            f'SELECT code, date, open_price, high_price, low_price, new_price, '
+            f'volume, pre_close_price, deal_amount '
+            f'FROM cn_stock_spot WHERE code IN ({placeholders}) AND date = %s',
+            (*codes, date_str))
+        if not rows:
+            return {}
+        result = {}
+        for r in rows:
+            code = r[0]
+            new_price = r[5]
+            if not new_price or float(new_price) <= 0:
+                continue
+            result[code] = {
+                'date': pd.Timestamp(r[1]),
+                'open': float(r[2] or new_price),
+                'high': float(r[3] or new_price),
+                'low': float(r[4] or new_price),
+                'close': float(new_price),
+                'volume': int(r[6] or 0),
+                'pre_close': float(r[7]) if r[7] else None,
+                'amount': float(r[8] or 0),
+            }
+        if result:
+            logging.info(f"从 cn_stock_spot 批量加载 {len(result)}/{len(codes)} 只股票 {date_str} 行情")
+        return result
+    except Exception as e:
+        logging.debug(f"批量从 cn_stock_spot 加载失败: {e}")
+        return {}
+
+
 def load_stock_data(code, start_date=None, end_date=None):
     """
     加载股票日 K 线数据。优先从缓存加载，缓存不足时从 EastMoney 补全。
@@ -105,6 +187,26 @@ def load_stock_data(code, start_date=None, end_date=None):
         if cache_end < req_end - datetime.timedelta(days=3):
             need_online = True
             logging.info(f"{code} 缓存截止 {cache_end}，需要数据到 {req_end}，尝试在线获取")
+        elif cache_end < req_end:
+            # 缓存只差1-3天（通常是今天的数据），尝试从 DB 补全
+            end_str = req_end.strftime('%Y-%m-%d')
+            db_row = _load_today_from_db(code, end_str)
+            if db_row is not None:
+                df = pd.concat([df, db_row], ignore_index=True).drop_duplicates(
+                    subset=['date'], keep='last').sort_values('date').reset_index(drop=True)
+
+    if need_online:
+        # 完全缺失时也先尝试 DB
+        if end_date:
+            end_str = pd.Timestamp(end_date).strftime('%Y-%m-%d')
+            db_row = _load_today_from_db(code, end_str)
+            if db_row is not None and df is not None and len(df) > 0:
+                df = pd.concat([df, db_row], ignore_index=True).drop_duplicates(
+                    subset=['date'], keep='last').sort_values('date').reset_index(drop=True)
+                need_online = False
+            elif db_row is not None and (df is None or len(df) == 0):
+                # 只有今天的 DB 数据，仍需在线补历史
+                pass
 
     if need_online:
         online_df = _fetch_stock_from_eastmoney(code, start_date, end_date)

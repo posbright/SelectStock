@@ -140,6 +140,11 @@ def run_paper_trading_daily(paper_id):
 
         today_prices = {}
         pre_start = (pd.Timestamp(date_str) - pd.Timedelta(days=60)).strftime('%Y-%m-%d')
+
+        # 优先从数据库批量加载当日行情（由定时任务每日写入 cn_stock_spot）
+        from instock.core.backtest.data_feed import _batch_load_today_from_db
+        db_today = _batch_load_today_from_db(list(all_codes), date_str) if all_codes else {}
+
         for code in all_codes:
             df = load_stock_data(code, pre_start, date_str)
             if df is not None:
@@ -157,6 +162,30 @@ def run_paper_trading_daily(paper_id):
                         'volume': row_data.get('volume', 0),
                         'pre_close': row_data.get('pre_close', row_data['close']),
                     })
+                elif code in db_today:
+                    # K线缓存有历史数据但缺今日，用 DB 行情补全
+                    spot = db_today[code]
+                    today_prices[code] = spot['close']
+                    data_proxy._set_current(code, {
+                        'open': spot['open'],
+                        'high': spot['high'],
+                        'low': spot['low'],
+                        'close': spot['close'],
+                        'volume': spot['volume'],
+                        'pre_close': spot.get('pre_close', spot['close']),
+                    })
+            elif code in db_today:
+                # 完全无缓存，但 DB 有今日行情（至少可参与撮合）
+                spot = db_today[code]
+                today_prices[code] = spot['close']
+                data_proxy._set_current(code, {
+                    'open': spot['open'],
+                    'high': spot['high'],
+                    'low': spot['low'],
+                    'close': spot['close'],
+                    'volume': spot['volume'],
+                    'pre_close': spot.get('pre_close', spot['close']),
+                })
 
         # 更新持仓价格 + T+1
         context.portfolio._on_new_day(today_prices)
@@ -184,6 +213,21 @@ def run_paper_trading_daily(paper_id):
                             'volume': row_data.get('volume', 0),
                             'pre_close': row_data.get('pre_close', row_data['close']),
                         })
+            # 如果仍无今日价格，尝试从 DB 单只加载
+            if code not in today_prices:
+                from instock.core.backtest.data_feed import _load_today_from_db
+                db_row = _load_today_from_db(code, date_str)
+                if db_row is not None:
+                    spot = db_row.iloc[0]
+                    today_prices[code] = float(spot['close'])
+                    data_proxy._set_current(code, {
+                        'open': float(spot['open']),
+                        'high': float(spot['high']),
+                        'low': float(spot['low']),
+                        'close': float(spot['close']),
+                        'volume': int(spot['volume']),
+                        'pre_close': float(spot['pre_close']) if pd.notna(spot.get('pre_close')) else float(spot['close']),
+                    })
             pending_orders.append({'code': code, 'amount': amount, 'value': value})
 
         def _get_current_amount(code):
