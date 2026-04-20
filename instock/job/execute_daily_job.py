@@ -414,6 +414,23 @@ def main():
     # ================================================================
     _data_health_check(start, run_date_nph)
 
+    # ================================================================
+    # Phase 5: 模拟交易（每日自动执行所有运行中的模拟盘）
+    # ================================================================
+    t5 = record_task_start(_JOB_NAME, 'paper_trading', run_date_nph)
+    try:
+        from instock.paper_trading.paper_engine import run_all_paper_trading
+        paper_results = run_all_paper_trading()
+        if paper_results:
+            ok_count = sum(1 for r in paper_results if r.get('status') == 'ok')
+            logging.info(f"Phase 5: 模拟交易完成，{ok_count}/{len(paper_results)} 个模拟盘执行成功")
+        else:
+            logging.info("Phase 5: 无运行中的模拟盘")
+        record_task_end(_JOB_NAME, 'paper_trading', run_date_nph, t5, success=True)
+    except Exception as e:
+        logging.error("execute_daily_job Phase 5 模拟交易异常", exc_info=True)
+        record_task_end(_JOB_NAME, 'paper_trading', run_date_nph, t5, success=False, message=str(e))
+
     elapsed = time.time() - start
     record_task_end(_JOB_NAME, '__overall__', run_date_nph, overall_start,
                     success=True, message=f"总耗时 {elapsed:.1f}s")

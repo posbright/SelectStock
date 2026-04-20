@@ -29,6 +29,23 @@ from instock.core.backtest.strategy_sandbox import compile_strategy
 from instock.core.backtest.data_feed import load_stock_data
 from .state_manager import serialize_portfolio, restore_portfolio
 
+# 基本面数据提供器（延迟初始化，仅在策略需要时加载）
+_fundamental_provider = None
+
+def _get_fundamental_provider(engine_obj=None):
+    """获取或创建基本面数据提供器单例"""
+    global _fundamental_provider
+    if _fundamental_provider is None:
+        try:
+            from instock.core.backtest.fundamentals import FundamentalDataProvider
+            _fundamental_provider = FundamentalDataProvider(engine_obj)
+        except Exception as e:
+            logging.warning(f"[模拟交易] 基本面数据提供器加载失败: {e}")
+    elif engine_obj is not None:
+        # 更新引擎引用，确保 context.current_dt 是最新的
+        _fundamental_provider._engine = engine_obj
+    return _fundamental_provider
+
 __author__ = 'InStock'
 __date__ = '2026/03/13'
 
@@ -99,18 +116,10 @@ def run_paper_trading_daily(paper_id):
             restore_portfolio(context, state_json, g)
             logging.info(f"[模拟交易] 恢复状态: 现金={context.portfolio.available_cash:.2f}, "
                          f"持仓={len(context.portfolio.positions)}只")
-        else:
-            # 首次运行，执行 initialize
-            api_ns = _create_api(context, data_proxy, g)
-            try:
-                strategy_funcs['initialize'].__globals__.update(api_ns)
-                strategy_funcs['initialize'](context)
-            except Exception as e:
-                _update_paper_error(paper_id, f'initialize 异常: {e}')
-                return {'status': 'error', 'message': f'initialize 异常: {e}'}
 
         context.current_dt = run_date_nph
-        context._engine = type('E', (), {'g': g, '_stock_data': {}, '_pending_orders': [],
+        context._engine = type('E', (), {'g': g, 'context': context, '_stock_data': {},
+                                          '_pending_orders': [],
                                           '_trade_records': [], '_log_messages': [],
                                           '_custom_records': {}})()
 
@@ -191,6 +200,20 @@ def run_paper_trading_daily(paper_id):
         api_ns['order_value'] = lambda code, value: _order_proxy(code, value=float(value))
         api_ns['order_target_value'] = lambda code, target_value: _order_proxy(
             code, value=float(target_value) - _get_current_value(code))
+        api_ns['order_target_percent'] = lambda code, percent: _order_proxy(
+            code, value=float(percent) * context.portfolio.total_value - _get_current_value(code))
+
+        # 每次都执行 initialize（注册 run_daily/run_weekly 回调 + 设置 context 参数）
+        try:
+            strategy_funcs['initialize'].__globals__.update(api_ns)
+            strategy_funcs['initialize'](context)
+        except Exception as e:
+            if not state_json:
+                # 首次运行 initialize 失败是致命的
+                _update_paper_error(paper_id, f'initialize 异常: {e}')
+                return {'status': 'error', 'message': f'initialize 异常: {e}'}
+            else:
+                logging.warning(f"[模拟交易] initialize 异常（恢复运行）: {e}")
 
         # before_trading_start
         if strategy_funcs.get('before_trading_start'):
@@ -201,17 +224,41 @@ def run_paper_trading_daily(paper_id):
                 logging.warning(f"[模拟交易] before_trading_start 异常: {e}")
 
         # handle_data
-        try:
-            strategy_funcs['handle_data'].__globals__.update(api_ns)
-            strategy_funcs['handle_data'](context, data_proxy)
-        except Exception as e:
-            logging.warning(f"[模拟交易] handle_data 异常: {e}")
+        if strategy_funcs.get('handle_data'):
+            try:
+                strategy_funcs['handle_data'].__globals__.update(api_ns)
+                strategy_funcs['handle_data'](context, data_proxy)
+            except Exception as e:
+                logging.warning(f"[模拟交易] handle_data 异常: {e}")
+
+        # 执行 run_weekly 注册的回调
+        if api_ns.get('_weekly_callbacks'):
+            py_weekday = run_date_nph.weekday() if hasattr(run_date_nph, 'weekday') else pd.Timestamp(run_date_nph).weekday()
+            jq_weekday = py_weekday + 1  # 聚宽: 1=Mon ... 5=Fri
+            for (cb, wd) in api_ns['_weekly_callbacks']:
+                if jq_weekday == wd:
+                    try:
+                        cb.__globals__.update(api_ns)
+                        cb(context)
+                    except Exception as e:
+                        cb_name = getattr(cb, '__name__', str(cb))
+                        logging.warning(f"[模拟交易] run_weekly({cb_name}) 异常: {e}")
+
+        # 执行 run_daily 注册的回调
+        for cb in api_ns.get('_daily_callbacks', []):
+            try:
+                cb.__globals__.update(api_ns)
+                cb(context)
+            except Exception as e:
+                cb_name = getattr(cb, '__name__', str(cb))
+                logging.warning(f"[模拟交易] run_daily({cb_name}) 异常: {e}")
 
         # 7. 撮合订单
         trade_records = []
         for order_info in pending_orders:
             code = order_info['code']
             if code not in today_prices:
+                logging.warning(f"[模拟交易] 股票 {code} 无当日行情数据，跳过订单")
                 continue
 
             exec_price = today_prices[code]
@@ -387,7 +434,11 @@ def run_all_paper_trading():
     results = []
     for row in rows:
         paper_id = row[0]
-        result = run_paper_trading_daily(paper_id)
+        try:
+            result = run_paper_trading_daily(paper_id)
+        except Exception as e:
+            logging.error(f"[模拟交易] #{paper_id} 执行异常", exc_info=True)
+            result = {'status': 'error', 'message': str(e)}
         results.append({'id': paper_id, **result})
         logging.info(f"[模拟交易] #{paper_id}: {result.get('status')} - {result.get('message', '')}")
 
@@ -437,12 +488,23 @@ def _create_api(context, data_proxy, g):
         return result.reset_index(drop=True)
 
     def set_order_cost(cost_obj=None, type='stock', **kwargs):
-        """兼容聚宽 set_order_cost(OrderCost(...), type='stock')"""
+        """兼容聚宽 set_order_cost(OrderCost(...), type='stock') 及关键字参数"""
         if cost_obj is not None and isinstance(cost_obj, dict):
             context.commission_rate = cost_obj.get('open_commission', 0.0003)
             context.stamp_tax_rate = cost_obj.get('close_tax', 0.001)
+        elif cost_obj is not None and hasattr(cost_obj, '_data'):
+            # _OrderCost object
+            context.commission_rate = cost_obj._data.get('open_commission', 0.0003)
+            context.stamp_tax_rate = cost_obj._data.get('close_tax', 0.001)
         elif isinstance(cost_obj, (int, float)):
             context.commission_rate = cost_obj
+        # 支持关键字参数：commission, tax, slippage
+        if 'commission' in kwargs:
+            context.commission_rate = kwargs['commission']
+        if 'tax' in kwargs:
+            context.stamp_tax_rate = kwargs['tax']
+        if 'slippage' in kwargs:
+            context.slippage_rate = kwargs['slippage']
 
     class _OrderCost:
         """聚宽 OrderCost 兼容"""
@@ -461,7 +523,7 @@ def _create_api(context, data_proxy, g):
         _daily_callbacks.append(func)
 
     def run_weekly(func, weekday=1, time='every_bar', reference_security=None):
-        _weekly_callbacks.append(func)
+        _weekly_callbacks.append((func, weekday))
 
     def run_monthly(func, monthday=1, time='every_bar', reference_security=None):
         _daily_callbacks.append(func)
@@ -481,7 +543,72 @@ def _create_api(context, data_proxy, g):
         except Exception:
             return []
 
-    return {
+    # ── 基本面数据查询 ──
+    def get_fundamentals(q, date=None):
+        provider = _get_fundamental_provider(context._engine if hasattr(context, '_engine') else None)
+        if provider is None:
+            logging.warning("[模拟交易] 基本面数据不可用，返回空 DataFrame")
+            return pd.DataFrame()
+        query_date = date or context.current_dt
+        try:
+            return provider.get_fundamentals(q, query_date)
+        except Exception as e:
+            logging.warning(f"[模拟交易] get_fundamentals 异常: {e}")
+            return pd.DataFrame()
+
+    # ── 指数成份股查询 ──
+    _INDEX_STOCKS = {
+        '399951': [
+            '601398', '601939', '601288', '601988', '600036', '601166',
+            '000001', '601328', '601818', '600016', '601009', '600000',
+            '601229', '002142', '600015', '601838', '601916', '601998',
+            '600926', '601169', '601077', '600908', '601658', '601528',
+            '601860', '601963', '601187', '002839', '002936', '002948',
+            '002966', '600919',
+        ],
+    }
+
+    def get_index_stocks(index_code, date=None):
+        clean = index_code.split('.')[0] if '.' in index_code else index_code
+        stocks = _INDEX_STOCKS.get(clean, [])
+        if not stocks:
+            logging.warning(f"[模拟交易] 未知指数 {index_code}，返回空列表")
+        return stocks
+
+    # ── get_all_securities ──
+    def get_all_securities(types=None, date=None):
+        codes = get_all_cached_stocks()
+        if codes:
+            return pd.DataFrame({'code': codes, 'display_name': codes, 'type': 'stock'}).set_index('code')
+        return pd.DataFrame(columns=['display_name', 'type'])
+
+    # ── get_current_data ──
+    def get_current_data():
+        provider = _get_fundamental_provider(context._engine if hasattr(context, '_engine') else None)
+        if provider is not None:
+            try:
+                from instock.core.backtest.fundamentals import _CurrentDataProxy
+                return _CurrentDataProxy(provider, context._engine if hasattr(context, '_engine') else None)
+            except Exception:
+                pass
+        return {}
+
+    # ── 聚宽 query DSL 对象 ──
+    try:
+        from instock.core.backtest.fundamentals import valuation, indicator, balance, cash_flow, query as jq_query
+        _valuation = valuation
+        _indicator = indicator
+        _balance = balance
+        _cash_flow = cash_flow
+        _query = jq_query
+    except Exception:
+        _valuation = None
+        _indicator = None
+        _balance = None
+        _cash_flow = None
+        _query = lambda *a, **kw: None
+
+    ns = {
         'history': history,
         'attribute_history': attribute_history,
         'get_price': get_price,
@@ -498,16 +625,25 @@ def _create_api(context, data_proxy, g):
         'order_target': lambda code, amount: None,
         'order_value': lambda code, value: None,
         'order': lambda code, amount: None,
-        'get_index_stocks': lambda *a, **kw: [],
-        'get_all_securities': lambda *a, **kw: pd.DataFrame(),
+        'order_target_percent': lambda code, percent: None,
+        'get_index_stocks': get_index_stocks,
+        'get_all_securities': get_all_securities,
         'get_all_cached_stocks': get_all_cached_stocks,
-        'get_fundamentals': lambda *a, **kw: pd.DataFrame(),
-        'get_current_data': lambda: {},
+        'get_fundamentals': get_fundamentals,
+        'get_current_data': get_current_data,
         'get_security_info': lambda code: type('Info', (), {'start_date': None, 'display_name': '', 'name': ''})(),
         'normalize_code': lambda code: code.split('.')[0] if '.' in code else code,
         '_daily_callbacks': _daily_callbacks,
         '_weekly_callbacks': _weekly_callbacks,
     }
+    # 注入聚宽 query DSL 对象
+    if _valuation is not None:
+        ns['valuation'] = _valuation
+        ns['indicator'] = _indicator
+        ns['balance'] = _balance
+        ns['cash_flow'] = _cash_flow
+        ns['query'] = _query
+    return ns
 
 
 def _update_paper_error(paper_id, message):

@@ -335,8 +335,10 @@ export function getPaperTradingList() {
 }
 
 /** 获取模拟盘详情 */
-export function getPaperTradingDetail(id: number) {
-  return request({ url: '/api/paper/detail', method: 'get', params: { id } })
+export function getPaperTradingDetail(id: number, posDate?: string) {
+  const params: any = { id }
+  if (posDate) params.pos_date = posDate
+  return request({ url: '/api/paper/detail', method: 'get', params })
 }
 
 /** 手动触发模拟盘执行 */
@@ -347,4 +349,9 @@ export function runPaperTrading(id: number) {
 /** 模拟盘多策略对比 */
 export function getPaperCompare(ids: number[]) {
   return request({ url: '/api/paper/compare', method: 'get', params: { ids: ids.join(',') } })
+}
+
+/** 删除模拟盘 */
+export function deletePaperTrading(id: number) {
+  return request({ url: '/api/paper/delete', method: 'post', data: { id } })
 }

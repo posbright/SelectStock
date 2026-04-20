@@ -103,10 +103,57 @@ class GetPaperTradingListHandler(webBase.BaseHandler, ABC):
 
             data = []
             if rows:
+                # 批量获取所有模拟盘的 NAV 数据，用于计算年化收益、最大回撤、今日收益
+                paper_ids = [r[0] for r in rows]
+                nav_map = {}  # paper_id -> [(date, total_value), ...]
+                if mdb.checkTableIsExist('cn_stock_paper_nav') and paper_ids:
+                    placeholders = ','.join(['%s'] * len(paper_ids))
+                    nav_rows = mdb.executeSqlFetch(
+                        f'SELECT paper_id, date, total_value '
+                        f'FROM cn_stock_paper_nav '
+                        f'WHERE paper_id IN ({placeholders}) '
+                        f'ORDER BY paper_id, date ASC', tuple(paper_ids))
+                    if nav_rows:
+                        for nr in nav_rows:
+                            nav_map.setdefault(nr[0], []).append((nr[1], float(nr[2]) if nr[2] else 0))
+
                 for r in rows:
                     initial = float(r[3]) if r[3] else 1000000
                     current = float(r[5]) if r[5] else initial
                     profit_rate = (current / initial - 1) * 100 if initial > 0 else 0
+
+                    # 从 NAV 序列计算年化收益、最大回撤、今日收益
+                    annual_return = 0
+                    max_drawdown = 0
+                    today_return = 0
+                    nav_list = nav_map.get(r[0], [])
+                    if len(nav_list) >= 2:
+                        first_val = nav_list[0][1]
+                        last_val = nav_list[-1][1]
+                        first_date = nav_list[0][0]
+                        last_date = nav_list[-1][0]
+                        days = (last_date - first_date).days if hasattr(first_date, '__sub__') else 0
+
+                        # 年化收益
+                        if days > 0 and first_val > 0:
+                            ann_factor = 365.0 / days
+                            annual_return = round(((last_val / first_val) ** ann_factor - 1) * 100, 2)
+
+                        # 最大回撤
+                        peak = nav_list[0][1]
+                        for _, v in nav_list:
+                            if v > peak:
+                                peak = v
+                            dd = (peak - v) / peak * 100 if peak > 0 else 0
+                            if dd > max_drawdown:
+                                max_drawdown = dd
+                        max_drawdown = round(max_drawdown, 2)
+
+                        # 今日收益（最近两个 NAV 的变化率）
+                        prev_val = nav_list[-2][1]
+                        if prev_val > 0:
+                            today_return = round((last_val / prev_val - 1) * 100, 2)
+
                     data.append({
                         'id': r[0],
                         'strategy_name': r[1] or '未知策略',
@@ -115,6 +162,9 @@ class GetPaperTradingListHandler(webBase.BaseHandler, ABC):
                         'current_cash': float(r[4]) if r[4] else initial,
                         'current_value': current,
                         'profit_rate': round(profit_rate, 2),
+                        'annual_return': annual_return,
+                        'max_drawdown': max_drawdown,
+                        'today_return': today_return,
                         'status': r[6],
                         'started_at': r[7].strftime('%Y-%m-%d') if r[7] else '',
                         'last_run_date': str(r[8]) if r[8] else '未运行',
@@ -140,6 +190,7 @@ def _compute_paper_metrics(nav_rows, trade_rows):
         'total_return': 0, 'annual_return': 0, 'max_drawdown': 0,
         'sharpe_ratio': 0, 'sortino_ratio': 0, 'win_rate': 0,
         'profit_loss_ratio': 0, 'trade_count': 0, 'running_days': 0,
+        'today_return': 0,
     }
 
     if not nav_rows or len(nav_rows) < 2:
@@ -168,6 +219,11 @@ def _compute_paper_metrics(nav_rows, trade_rows):
         if dd > max_dd:
             max_dd = dd
     metrics['max_drawdown'] = round(max_dd, 2)
+
+    # 今日收益（最近两个 NAV 的变化率）
+    prev_val = values[-2]
+    if prev_val > 0:
+        metrics['today_return'] = round((final / prev_val - 1) * 100, 2)
 
     # 日收益率
     daily_returns = []
@@ -232,6 +288,7 @@ class GetPaperTradingDetailHandler(webBase.BaseHandler, ABC):
     def get(self):
         try:
             paper_id = self.get_argument('id', None)
+            pos_date = self.get_argument('pos_date', None)
             if not paper_id:
                 self.write(json.dumps({'code': -1, 'msg': '缺少 id'}))
                 return
@@ -265,16 +322,24 @@ class GetPaperTradingDetailHandler(webBase.BaseHandler, ABC):
                 'last_run_date': str(r[8]) if r[8] else '',
             }
 
-            # 当前持仓
+            # 当前持仓（支持按日期查询历史持仓）
             positions = []
             if mdb.checkTableIsExist('cn_stock_backtest_position'):
-                pos_rows = mdb.executeSqlFetch(
-                    'SELECT code, name, amount, avg_cost, close_price, '
-                    'market_value, profit, profit_rate, weight '
-                    'FROM cn_stock_backtest_position '
-                    'WHERE paper_id = %s AND date = ('
-                    '  SELECT MAX(date) FROM cn_stock_backtest_position WHERE paper_id = %s'
-                    ') ORDER BY market_value DESC', (paper_id, paper_id))
+                if pos_date:
+                    pos_rows = mdb.executeSqlFetch(
+                        'SELECT code, name, amount, avg_cost, close_price, '
+                        'market_value, profit, profit_rate, weight '
+                        'FROM cn_stock_backtest_position '
+                        'WHERE paper_id = %s AND date = %s '
+                        'ORDER BY market_value DESC', (paper_id, pos_date))
+                else:
+                    pos_rows = mdb.executeSqlFetch(
+                        'SELECT code, name, amount, avg_cost, close_price, '
+                        'market_value, profit, profit_rate, weight '
+                        'FROM cn_stock_backtest_position '
+                        'WHERE paper_id = %s AND date = ('
+                        '  SELECT MAX(date) FROM cn_stock_backtest_position WHERE paper_id = %s'
+                        ') ORDER BY market_value DESC', (paper_id, paper_id))
                 if pos_rows:
                     for p in pos_rows:
                         positions.append({
@@ -285,7 +350,7 @@ class GetPaperTradingDetailHandler(webBase.BaseHandler, ABC):
                             'value': float(p[5]) if p[5] else 0,
                             'profit': float(p[6]) if p[6] else 0,
                             'profit_rate': round(float(p[7]) * 100, 2) if p[7] else 0,
-                            'weight': round(float(p[8]) * 100, 2) if p[8] else 0,
+                            'weight': round(float(p[8]), 2) if p[8] else 0,
                         })
 
             # 最近交易
@@ -337,6 +402,35 @@ class GetPaperTradingDetailHandler(webBase.BaseHandler, ABC):
             }, ensure_ascii=False))
         except Exception as e:
             logging.error("GetPaperTradingDetail异常", exc_info=True)
+            self.write(json.dumps({'code': -1, 'msg': str(e)}))
+
+
+class DeletePaperTradingHandler(webBase.BaseHandler, ABC):
+    """删除模拟盘及其关联数据"""
+
+    @gen.coroutine
+    def post(self):
+        try:
+            body = json.loads(self.request.body)
+            paper_id = body.get('id')
+            if not paper_id:
+                self.write(json.dumps({'code': -1, 'msg': '缺少 id'}))
+                return
+
+            with mdb.get_connection() as conn:
+                with conn.cursor() as cur:
+                    if mdb.checkTableIsExist('cn_stock_paper_nav'):
+                        cur.execute('DELETE FROM cn_stock_paper_nav WHERE paper_id=%s', (paper_id,))
+                    if mdb.checkTableIsExist('cn_stock_backtest_position'):
+                        cur.execute('DELETE FROM cn_stock_backtest_position WHERE paper_id=%s', (paper_id,))
+                    if mdb.checkTableIsExist('cn_stock_backtest_trade'):
+                        cur.execute('DELETE FROM cn_stock_backtest_trade WHERE paper_id=%s', (paper_id,))
+                    cur.execute('DELETE FROM cn_stock_paper_trading WHERE id=%s', (paper_id,))
+                conn.commit()
+
+            self.write(json.dumps({'code': 0}))
+        except Exception as e:
+            logging.error("DeletePaperTrading异常", exc_info=True)
             self.write(json.dumps({'code': -1, 'msg': str(e)}))
 
 

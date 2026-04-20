@@ -813,9 +813,10 @@ class TestRunPaperTradingDaily:
     @patch('instock.lib.trade_time.is_trade_date', return_value=True)
     @patch('instock.paper_trading.paper_engine.compile_strategy')
     @patch('instock.paper_trading.paper_engine.load_stock_data', return_value=None)
-    def test_state_saved_after_run(self, mock_load, mock_compile, mock_is_td,
+    @patch('instock.lib.database.get_connection')
+    def test_state_saved_after_run(self, mock_get_conn, mock_load, mock_compile, mock_is_td,
                                    mock_get_td, mock_fetch, mock_exec, mock_check):
-        """After successful run, state is saved via executeSql UPDATE."""
+        """After successful run, state is saved via get_connection transaction."""
         mock_get_td.return_value = (datetime.date(2026, 3, 18), datetime.date(2026, 3, 18))
         state_json = json.dumps({
             'available_cash': 1000000, 'positions': {},
@@ -831,10 +832,19 @@ class TestRunPaperTradingDaily:
             'after_trading_end': None,
         }
 
+        # Mock get_connection context manager and cursor
+        mock_cur = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cur
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__ = MagicMock(return_value=mock_conn)
+        mock_ctx.__exit__ = MagicMock(return_value=False)
+        mock_get_conn.return_value = mock_ctx
+
         run_paper_trading_daily(1)
 
-        # Check UPDATE was called with state_json
-        update_calls = [c for c in mock_exec.call_args_list
+        # Check UPDATE was called via cursor.execute
+        update_calls = [c for c in mock_cur.execute.call_args_list
                         if 'UPDATE cn_stock_paper_trading' in str(c)]
         assert len(update_calls) >= 1
 
@@ -845,7 +855,8 @@ class TestRunPaperTradingDaily:
     @patch('instock.lib.trade_time.is_trade_date', return_value=True)
     @patch('instock.paper_trading.paper_engine.compile_strategy')
     @patch('instock.paper_trading.paper_engine.load_stock_data')
-    def test_run_with_existing_position_and_prices(self, mock_load, mock_compile,
+    @patch('instock.lib.database.get_connection')
+    def test_run_with_existing_position_and_prices(self, mock_get_conn, mock_load, mock_compile,
                                                     mock_is_td, mock_get_td,
                                                     mock_fetch, mock_exec, mock_check):
         """Run with an existing position; prices are loaded and portfolio updated."""
@@ -890,6 +901,15 @@ class TestRunPaperTradingDaily:
             'before_trading_start': None,
             'after_trading_end': None,
         }
+
+        # Mock get_connection context manager and cursor
+        mock_cur = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cur
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__ = MagicMock(return_value=mock_conn)
+        mock_ctx.__exit__ = MagicMock(return_value=False)
+        mock_get_conn.return_value = mock_ctx
 
         result = run_paper_trading_daily(1)
         assert result['status'] == 'ok'
