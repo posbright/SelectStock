@@ -353,9 +353,27 @@
               <!-- ──── 日志 ──── -->
               <el-tab-pane name="log">
                 <template #label><el-icon><Notebook /></el-icon><span>日志</span></template>
+                <!-- 执行日志 -->
                 <div class="jq-section">
+                  <div class="jq-section-title">执行日志</div>
                   <div class="jq-log-area">
-                    <div class="jq-log-entry" v-for="(t, i) in (detailData.trades || []).slice(0, 50)" :key="i">
+                    <div class="jq-exec-log-entry" v-for="(el, i) in (detailData.execution_logs || [])" :key="'el-' + i">
+                      <span class="jq-log-date">{{ el.trade_date }}</span>
+                      <el-tag :type="el.status === 'success' ? 'success' : el.status === 'error' ? 'danger' : el.status === 'skipped' ? 'warning' : 'info'"
+                              size="small" style="margin-right: 8px;">{{ el.status }}</el-tag>
+                      <span class="jq-exec-log-msg">{{ el.message || '--' }}</span>
+                      <span v-if="el.trade_count" class="jq-exec-log-extra">{{ el.trade_count }}笔交易</span>
+                      <span v-if="el.total_value" class="jq-exec-log-extra">总资产 ¥{{ Number(el.total_value).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}</span>
+                      <span class="jq-exec-log-time">{{ el.started_at?.slice(11, 19) || '' }} ~ {{ el.finished_at?.slice(11, 19) || '' }}</span>
+                    </div>
+                    <div v-if="!detailData.execution_logs?.length" class="jq-log-empty">暂无执行日志</div>
+                  </div>
+                </div>
+                <!-- 交易记录 -->
+                <div class="jq-section" style="margin-top: 16px;">
+                  <div class="jq-section-title">交易记录</div>
+                  <div class="jq-log-area">
+                    <div class="jq-log-entry" v-for="(t, i) in (detailData.trades || []).slice(0, 50)" :key="'t-' + i">
                       <span class="jq-log-date">{{ t.date }}</span>
                       <span :style="{ color: t.direction === 'buy' ? '#f56c6c' : '#67c23a' }">
                         {{ t.direction === 'buy' ? '买入' : '卖出' }}
@@ -364,7 +382,7 @@
                       <span>{{ Number(t.amount ?? 0).toLocaleString() }}股</span>
                       <span>@{{ (t.price ?? 0).toFixed(2) }}</span>
                     </div>
-                    <div v-if="!detailData.trades?.length" class="jq-log-empty">暂无运行日志</div>
+                    <div v-if="!detailData.trades?.length" class="jq-log-empty">暂无交易记录</div>
                   </div>
                 </div>
               </el-tab-pane>
@@ -1008,6 +1026,14 @@ onUnmounted(() => {
   display: flex; gap: 12px; padding: 6px 0; font-size: 13px; color: #303133;
   border-bottom: 1px solid #f5f5f5;
 }
+.jq-exec-log-entry {
+  display: flex; align-items: center; gap: 8px; padding: 8px 0; font-size: 13px; color: #303133;
+  border-bottom: 1px solid #f5f5f5;
+}
+.jq-exec-log-msg { flex: 1; color: #606266; }
+.jq-exec-log-extra { color: #909399; font-size: 12px; }
+.jq-exec-log-time { color: #c0c4cc; font-size: 12px; flex-shrink: 0; }
+.jq-section-title { font-size: 14px; font-weight: 600; color: #303133; margin-bottom: 10px; }
 .jq-log-date { color: #909399; flex-shrink: 0; }
 .jq-log-empty { padding: 40px; text-align: center; color: #909399; }
 
