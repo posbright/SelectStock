@@ -13,6 +13,9 @@ interface ColumnDef {
   caption: string     // 中文名
   width: number       // 列宽
   dataType?: string   // 数据类型: 'numeric' | 'bigint' | 'datetime' | 'string'
+  format?: string     // 格式化提示: 'pct' | 'price' | 'vol' | 'money' | 'ratio' | 'int'
+  color?: boolean     // 涨跌着色
+  group?: string      // 列分组: 'ind' = 筛选指标列
   headerStyle?: any
   conditionalFormats?: any[]
 }
@@ -63,6 +66,24 @@ const dynamicColumns = computed(() => {
 const hasCodeField = computed(() => {
   return columnDefs.value.some(col => col.value === 'code')
 })
+
+// 是否为策略表（启用指标列分组视觉效果）
+const isStrategyTable = computed(() => tableName.value.includes('strategy'))
+
+// 指标列（策略筛选条件）
+const indicatorColumns = computed(() =>
+  dynamicColumns.value.filter(col => col.group === 'ind')
+)
+
+// 回测收益列
+const rateColumns = computed(() =>
+  dynamicColumns.value.filter(col => col.value.startsWith('rate_'))
+)
+
+// 其他动态列（非指标、非回测）
+const otherDynamicColumns = computed(() =>
+  dynamicColumns.value.filter(col => col.group !== 'ind' && !col.value.startsWith('rate_'))
+)
 
 // 搜索关键词
 const searchKeyword = ref('')
@@ -177,12 +198,6 @@ const handleAttention = async (row: any) => {
   }
 }
 
-// 根据列定义获取字段的数据类型
-const getFieldDataType = (fieldName: string): string => {
-  const col = columnDefs.value.find(c => c.value === fieldName)
-  return col?.dataType || 'string'
-}
-
 // 格式化大数值为亿/万
 const formatLargeNumber = (value: number): string => {
   if (Math.abs(value) >= 100000000) {
@@ -202,30 +217,36 @@ const monetaryAmountFields = new Set([
 const wanyuanSpotTables = new Set(['cn_stock_spot', 'cn_etf_spot', 'cn_index_spot'])
 const wanyuanFields = new Set(['total_market_cap', 'free_cap'])
 
-// 不应显示为百分比的字段（虽然名称中含有 rate/ratio）
+// 不应显示为百分比的字段（用于无 format 元数据的旧表后备逻辑）
 const nonPercentFields = new Set([
-  'volume_ratio',       // 量比，是一个倍数而非百分比
-  'vol_ratio',          // 策略量比（当日成交量/5日均量），是倍数而非百分比
-  'per_netcash_operate', // 每股经营现金流
-  'equity_multiplier',  // 权益乘数
-  'current_ratio',      // 流动比率
-  'speed_ratio',        // 速动比率
-  'equity_ratio',       // 产权比率
-  'ma30_ratio',         // MA30增长比，是倍数
-  'back_ratio',         // 回踩比，是小数比率
-  'rise_ratio',         // 涨幅倍数
+  'volume_ratio', 'vol_ratio', 'per_netcash_operate', 'equity_multiplier',
+  'current_ratio', 'speed_ratio', 'equity_ratio',
+  'ma30_ratio', 'back_ratio', 'rise_ratio',
 ])
 
-// 格式化单元格值
-const formatCellValue = (value: any, fieldName: string) => {
+// 格式化单元格值（优先使用后端 format 元数据，后备使用字段名启发式）
+const formatCellValue = (value: any, col: ColumnDef) => {
   if (value === null || value === undefined) return '-'
-  
-  const dataType = getFieldDataType(fieldName)
-  
-  // bigint 类型：大数值字段（成交额、市值、净利润、营业收入、股本等），转换为亿/万
+
+  // ===== 优先：后端 format 元数据驱动 =====
+  if (col.format && typeof value === 'number') {
+    switch (col.format) {
+      case 'pct': return value.toFixed(2) + '%'
+      case 'price': return value.toFixed(2)
+      case 'vol': return formatLargeNumber(value)
+      case 'money': return formatLargeNumber(value)
+      case 'ratio': return value.toFixed(2)
+      case 'int': return Math.round(value).toString()
+    }
+  }
+
+  // ===== 后备：无元数据的旧表，使用字段名启发式 =====
+  const fieldName = col.value
+  const dataType = col.dataType || 'string'
+
+  // bigint 类型：大数值字段（成交额、市值等）
   if (dataType === 'bigint') {
     if (typeof value === 'number') {
-      // stock_spot / etf_spot 中的市值字段原始单位为万元，先转为元再格式化
       if (wanyuanSpotTables.has(tableName.value) && wanyuanFields.has(fieldName)) {
         return formatLargeNumber(value * 10000)
       }
@@ -233,27 +254,17 @@ const formatCellValue = (value: any, fieldName: string) => {
     }
     return value
   }
-  
-  // 已知金额字段（元）：即使 dataType 不是 bigint，也做亿/万格式化
+
+  // 已知金额字段
   if (monetaryAmountFields.has(fieldName)) {
     return typeof value === 'number' ? formatLargeNumber(value) : value
   }
-  
-  // 成交量转换为万
-  if (fieldName === 'volume' || fieldName === 'vol_ma5' || fieldName === 'vol_ma20') {
-    return typeof value === 'number' ? (value / 10000).toFixed(2) + '万' : value
-  }
-  
-  // 百分比类字段：涨跌幅、换手率、振幅、各类比率/占比/增长率等
-  // 但排除量比、流动比率等非百分比字段
+
+  // 百分比类字段
   if (!nonPercentFields.has(fieldName)) {
     if (fieldName.includes('rate') || fieldName.includes('ratio') ||
         fieldName === 'amplitude' || fieldName === 'turnoverrate' ||
-        fieldName === 'p_change' || fieldName === 'limitup_pchange' ||
-        fieldName === 'deviation' || fieldName === 'total_return' ||
-        fieldName === 'max_single_drop' || fieldName === 'max_2day_drop' ||
-        fieldName === 'ma20_dev' || fieldName === 'pct_change' ||
-        fieldName === 'range_ratio' ||
+        fieldName === 'p_change' ||
         fieldName.includes('yield') || fieldName.includes('growthrate') ||
         fieldName === 'sale_gpr' || fieldName === 'sale_npr' ||
         fieldName === 'roe_weight' || fieldName === 'jroa' || fieldName === 'roic' ||
@@ -261,21 +272,26 @@ const formatCellValue = (value: any, fieldName: string) => {
       return typeof value === 'number' ? value.toFixed(2) + '%' : value
     }
   }
-  
+
   // 浮点数保留2位小数
   if (typeof value === 'number' && !Number.isInteger(value)) {
     return value.toFixed(2)
   }
-  
+
   return value
 }
 
-// 获取单元格样式类
-const getCellClass = (value: any, fieldName: string) => {
-  // 涨跌相关字段使用颜色
-  if (fieldName === 'change_rate' || fieldName === 'ups_downs' || fieldName === 'p_change' ||
-      fieldName === 'total_return' || fieldName === 'max_single_drop' || fieldName === 'max_2day_drop' ||
-      fieldName === 'deviation' || fieldName === 'pct_change' || fieldName === 'limitup_pchange' ||
+// 获取单元格样式类（优先使用后端 color 元数据）
+const getCellClass = (value: any, col: ColumnDef) => {
+  // 后端 color 元数据
+  if (col.color && typeof value === 'number') {
+    if (value > 0) return 'text-up'
+    if (value < 0) return 'text-down'
+    return ''
+  }
+  // 后备：旧表的字段名启发式
+  const fieldName = col.value
+  if (fieldName === 'change_rate' || fieldName === 'ups_downs' ||
       fieldName.includes('change') || fieldName.includes('ranking_after')) {
     if (typeof value === 'number') {
       if (value > 0) return 'text-up'
@@ -447,34 +463,136 @@ onMounted(async () => {
         <!-- 固定列：名称 -->
         <el-table-column prop="name" label="名称" width="100" fixed="left" />
         
-        <!-- 动态列：根据后端返回的列定义动态生成，使用 min-width 自适应撑满表格 -->
-        <el-table-column
-          v-for="col in dynamicColumns"
-          :key="col.value"
-          :prop="col.value"
-          :label="col.caption"
-          :min-width="getColumnWidth(col)"
-          :align="col.dataType === 'string' ? 'left' : 'right'"
-          :show-overflow-tooltip="true"
-        >          <template #header>
-            <el-tooltip
-              v-if="getColumnTooltip(col.value, tableName)"
-              :content="getColumnTooltip(col.value, tableName)"
-              placement="top"
-              :show-after="300"
-              :hide-after="0"
-              effect="dark"
-              :popper-options="{ modifiers: [{ name: 'computeStyles', options: { adaptive: false } }] }"
+        <!-- 策略表：分组显示（筛选指标 + 回测收益） -->
+        <template v-if="isStrategyTable && indicatorColumns.length > 0">
+          <!-- 筛选指标列组 -->
+          <el-table-column label="筛选指标" align="center" header-class-name="indicator-group-header">
+            <el-table-column
+              v-for="col in indicatorColumns"
+              :key="col.value"
+              :prop="col.value"
+              :min-width="getColumnWidth(col)"
+              align="right"
+              :show-overflow-tooltip="true"
+              header-class-name="indicator-header"
+              class-name="indicator-col"
             >
-              <span class="header-with-tooltip">{{ col.caption }} ⓘ</span>
-            </el-tooltip>
-            <span v-else>{{ col.caption }}</span>
-          </template>          <template #default="{ row }">
-            <span :class="getCellClass(row[col.value], col.value)">
-              {{ formatCellValue(row[col.value], col.value) }}
-            </span>
-          </template>
-        </el-table-column>
+              <template #header>
+                <el-tooltip
+                  v-if="getColumnTooltip(col.value, tableName)"
+                  :content="getColumnTooltip(col.value, tableName)"
+                  placement="top"
+                  :show-after="300"
+                  :hide-after="0"
+                  effect="dark"
+                  :popper-options="{ modifiers: [{ name: 'computeStyles', options: { adaptive: false } }] }"
+                >
+                  <span class="header-with-tooltip">{{ col.caption }} ⓘ</span>
+                </el-tooltip>
+                <span v-else>{{ col.caption }}</span>
+              </template>
+              <template #default="{ row }">
+                <span :class="getCellClass(row[col.value], col)">
+                  {{ formatCellValue(row[col.value], col) }}
+                </span>
+              </template>
+            </el-table-column>
+          </el-table-column>
+          
+          <!-- 回测收益列组 -->
+          <el-table-column v-if="rateColumns.length > 0" label="回测收益" align="center">
+            <el-table-column
+              v-for="col in rateColumns"
+              :key="col.value"
+              :prop="col.value"
+              :min-width="getColumnWidth(col)"
+              align="right"
+              :show-overflow-tooltip="true"
+            >
+              <template #header>
+                <el-tooltip
+                  v-if="getColumnTooltip(col.value, tableName)"
+                  :content="getColumnTooltip(col.value, tableName)"
+                  placement="top"
+                  :show-after="300"
+                  :hide-after="0"
+                  effect="dark"
+                  :popper-options="{ modifiers: [{ name: 'computeStyles', options: { adaptive: false } }] }"
+                >
+                  <span class="header-with-tooltip">{{ col.caption }} ⓘ</span>
+                </el-tooltip>
+                <span v-else>{{ col.caption }}</span>
+              </template>
+              <template #default="{ row }">
+                <span :class="getCellClass(row[col.value], col)">
+                  {{ formatCellValue(row[col.value], col) }}
+                </span>
+              </template>
+            </el-table-column>
+          </el-table-column>
+          
+          <!-- 其他列 -->
+          <el-table-column
+            v-for="col in otherDynamicColumns"
+            :key="col.value"
+            :prop="col.value"
+            :min-width="getColumnWidth(col)"
+            :align="col.dataType === 'string' ? 'left' : 'right'"
+            :show-overflow-tooltip="true"
+          >
+            <template #header>
+              <el-tooltip
+                v-if="getColumnTooltip(col.value, tableName)"
+                :content="getColumnTooltip(col.value, tableName)"
+                placement="top"
+                :show-after="300"
+                :hide-after="0"
+                effect="dark"
+                :popper-options="{ modifiers: [{ name: 'computeStyles', options: { adaptive: false } }] }"
+              >
+                <span class="header-with-tooltip">{{ col.caption }} ⓘ</span>
+              </el-tooltip>
+              <span v-else>{{ col.caption }}</span>
+            </template>
+            <template #default="{ row }">
+              <span :class="getCellClass(row[col.value], col)">
+                {{ formatCellValue(row[col.value], col) }}
+              </span>
+            </template>
+          </el-table-column>
+        </template>
+        
+        <!-- 非策略表：平铺显示所有动态列 -->
+        <template v-else>
+          <el-table-column
+            v-for="col in dynamicColumns"
+            :key="col.value"
+            :prop="col.value"
+            :min-width="getColumnWidth(col)"
+            :align="col.dataType === 'string' ? 'left' : 'right'"
+            :show-overflow-tooltip="true"
+          >
+            <template #header>
+              <el-tooltip
+                v-if="getColumnTooltip(col.value, tableName)"
+                :content="getColumnTooltip(col.value, tableName)"
+                placement="top"
+                :show-after="300"
+                :hide-after="0"
+                effect="dark"
+                :popper-options="{ modifiers: [{ name: 'computeStyles', options: { adaptive: false } }] }"
+              >
+                <span class="header-with-tooltip">{{ col.caption }} ⓘ</span>
+              </el-tooltip>
+              <span v-else>{{ col.caption }}</span>
+            </template>
+            <template #default="{ row }">
+              <span :class="getCellClass(row[col.value], col)">
+                {{ formatCellValue(row[col.value], col) }}
+              </span>
+            </template>
+          </el-table-column>
+        </template>
         
         <!-- 固定列：操作 -->
         <el-table-column v-if="hasCodeField || isBacktestSummary" label="操作" width="140" fixed="right" align="center">
@@ -623,5 +741,20 @@ onMounted(async () => {
 .header-with-tooltip {
   cursor: help;
   border-bottom: 1px dashed #909399;
+}
+
+// 筛选指标列组的视觉区分
+:deep(.indicator-group-header) {
+  background-color: #ecf5ff !important;
+  color: #409eff !important;
+  font-weight: 600 !important;
+}
+
+:deep(.indicator-header) {
+  background-color: #f5f7ff !important;
+}
+
+:deep(.indicator-col) {
+  background-color: #fafbff;
 }
 </style>

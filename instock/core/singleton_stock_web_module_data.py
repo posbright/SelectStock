@@ -225,6 +225,8 @@ class stock_web_module_data(metaclass=singleton_type):
         )]
 
         for table in tbs.TABLE_CN_STOCK_STRATEGIES:
+            # 计算指标列（排除外键列和回测列）
+            _ind_keys = set(table['columns'].keys()) - set(tbs.TABLE_CN_STOCK_FOREIGN_KEY['columns'].keys()) - set(tbs.TABLE_CN_STOCK_BACKTEST_DATA['columns'].keys())
             self.data_list.append(
                 wmd.web_module_data(
                     mode="query",
@@ -233,7 +235,7 @@ class stock_web_module_data(metaclass=singleton_type):
                     name=table['cn'],
                     table_name=table['name'],
                     columns=tuple(table['columns']),
-                    column_names=tbs.get_field_cns(table['columns']),
+                    column_names=tbs.get_field_cns(table['columns'], format_hints=tbs.FIELD_FORMAT_MAP, indicator_keys=_ind_keys),
                     primary_key=[],
                     is_realtime=False,
                     order_columns=f"(SELECT `datetime` FROM `{tbs.TABLE_CN_STOCK_ATTENTION['name']}` WHERE `code`=`{table['name']}`.`code`) AS `cdatetime`",

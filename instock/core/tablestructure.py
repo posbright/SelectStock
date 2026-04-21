@@ -325,6 +325,59 @@ CN_STOCK_HIST_DATA = {'name': 'fund_etf_hist_em', 'cn': '基金某时间段的�
                                   'ups_downs': {'type': FLOAT, 'cn': '涨跌额'},
                                   'turnover': {'type': FLOAT, 'cn': '换手率'}}}
 
+# 字段格式化元数据：用于前端列展示格式化和着色
+# fmt: 'pct'=百分比(+%), 'price'=价格(2位小数), 'vol'=成交量(亿/万), 'money'=金额(亿/万), 'ratio'=比率(2位小数), 'int'=整数
+# color: True=涨跌着色(红涨绿跌)
+FIELD_FORMAT_MAP = {
+    # 通用指标字段
+    'p_change': {'fmt': 'pct', 'color': True},
+    'close': {'fmt': 'price'},
+    'volume': {'fmt': 'vol'},
+    'amount': {'fmt': 'money'},
+    'vol_ma5': {'fmt': 'vol'},
+    'vol_ma20': {'fmt': 'vol'},
+    'vol_ratio': {'fmt': 'ratio'},
+    # 均线多头
+    'ma30': {'fmt': 'price'},
+    'ma30_start': {'fmt': 'price'},
+    'ma30_ratio': {'fmt': 'ratio'},
+    # 停机坪
+    'limitup_price': {'fmt': 'price'},
+    'limitup_pchange': {'fmt': 'pct', 'color': True},
+    # 回踩年线
+    'ma250': {'fmt': 'price'},
+    'highest_close': {'fmt': 'price'},
+    'lowest_close': {'fmt': 'price'},
+    'back_ratio': {'fmt': 'ratio'},
+    'date_diff': {'fmt': 'int'},
+    # 突破平台 / 趋势回调
+    'ma60': {'fmt': 'price'},
+    'deviation': {'fmt': 'pct', 'color': True},
+    'ma20': {'fmt': 'price'},
+    'ma20_dev': {'fmt': 'pct'},
+    'rsi14': {'fmt': 'ratio'},
+    # 无大幅回撤
+    'total_return': {'fmt': 'pct', 'color': True},
+    'max_single_drop': {'fmt': 'pct', 'color': True},
+    'max_2day_drop': {'fmt': 'pct', 'color': True},
+    # 海龟交易法则
+    'high_60d': {'fmt': 'price'},
+    # 高而窄旗形
+    'period_low': {'fmt': 'price'},
+    'rise_ratio': {'fmt': 'ratio'},
+    # 低ATR
+    'atr': {'fmt': 'ratio'},
+    'range_ratio': {'fmt': 'pct'},
+    # 超跌反弹
+    'boll_lower': {'fmt': 'price'},
+    # 突破确认
+    'amplitude': {'fmt': 'pct'},
+    'period_max': {'fmt': 'price'},
+    'pct_change': {'fmt': 'pct', 'color': True},
+    # 回测收益率列
+    **{('rate_%s' % i): {'fmt': 'pct', 'color': True} for i in range(1, RATE_FIELDS_COUNT + 1, 1)},
+}
+
 TABLE_CN_STOCK_FOREIGN_KEY = {'name': 'cn_stock_foreign_key', 'cn': '股票外键',
                               'columns': {'date': {'type': DATE, 'cn': '日期', 'size': 0},
                                           'code': {'type': VARCHAR(6, _COLLATE), 'cn': '代码', 'size': 60},
@@ -1287,7 +1340,7 @@ def get_field_cn(key, table):
     return f.get('cn')
 
 
-def get_field_cns(cols):
+def get_field_cns(cols, format_hints=None, indicator_keys=None):
     data = []
     for k in cols:
         # 根据列的实际类型确定数据类型标识
@@ -1300,6 +1353,16 @@ def get_field_cns(cols):
         entry = {"value": k, "caption": cols[k]['cn'], "width": cols[k]['size'],
                  "dataType": data_type,
                  "headerStyle": {"font": "bold 9pt Calibri", "wordWrap": "true"}}
+        # 格式化元数据（从 FIELD_FORMAT_MAP 注入）
+        if format_hints:
+            fmt_info = format_hints.get(k, {})
+            if 'fmt' in fmt_info:
+                entry['format'] = fmt_info['fmt']
+            if fmt_info.get('color'):
+                entry['color'] = True
+        # 指标列分组标记
+        if indicator_keys and k in indicator_keys:
+            entry['group'] = 'ind'
         if k == 'code':
             entry["style"] = ""
         elif k == 'change_rate':
