@@ -1875,10 +1875,17 @@ class RunPortfolioBacktestHandler(webBase.BaseHandler, ABC):
             _running_tasks[task_id] = {'engine': engine, 'status': 'running', 'result': None}
 
             def _run():
-                return engine.run(
-                    strategy_code, start_date, end_date,
-                    initial_cash=initial_cash, benchmark=benchmark,
-                    commission=commission, tax=tax, slippage=slippage)
+                try:
+                    return engine.run(
+                        strategy_code, start_date, end_date,
+                        initial_cash=initial_cash, benchmark=benchmark,
+                        commission=commission, tax=tax, slippage=slippage)
+                finally:
+                    try:
+                        import instock.lib.database as _mdb
+                        _mdb.close_thread_connection()
+                    except Exception:
+                        pass
 
             # 在线程池中运行回测，不阻塞 Tornado IOLoop
             result = yield IOLoop.current().run_in_executor(
@@ -2006,6 +2013,12 @@ class StartPortfolioBacktestHandler(webBase.BaseHandler, ABC):
                         task['status'] = 'done'
                         task['result'] = {'status': 'error', 'message': str(e)}
                     logging.error(f"异步回测异常: {e}", exc_info=True)
+                finally:
+                    try:
+                        import instock.lib.database as _mdb
+                        _mdb.close_thread_connection()
+                    except Exception:
+                        pass
 
             # 提交到线程池 — 不 yield 等待
             self._get_executor().submit(_run_and_finish)

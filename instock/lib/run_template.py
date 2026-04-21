@@ -10,6 +10,7 @@ import sys
 import time
 import instock.lib.trade_time as trd
 import instock.lib.envconfig as _cfg
+import instock.lib.database as mdb
 
 __author__ = 'InStock'
 __date__ = '2026/02/14'
@@ -59,6 +60,8 @@ def run_with_args(run_fun, *args):
                         future.result()
                     except Exception as e:
                         logging.error(f"run_template批量任务异常：{run_fun}", exc_info=True)
+            # 线程池退出后清理残留 DB 连接，防止 MySQL Too many connections
+            mdb.close_thread_connection()
         except Exception as e:
             logging.error(f"run_template.run_with_args处理异常：{run_fun}{sys.argv}", exc_info=True)
             sys.exit(1)
@@ -82,6 +85,8 @@ def run_with_args(run_fun, *args):
                         future.result()
                     except Exception as e:
                         logging.error(f"run_template批量任务异常：{run_fun}", exc_info=True)
+            # 线程池退出后清理残留 DB 连接
+            mdb.close_thread_connection()
         except Exception as e:
             logging.error(f"run_template.run_with_args处理异常：{run_fun}{sys.argv}", exc_info=True)
             sys.exit(1)

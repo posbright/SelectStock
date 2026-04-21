@@ -116,6 +116,23 @@ def _invalidate_shared_conn():
         _thread_local.conn = None
 
 
+def close_thread_connection():
+    """关闭当前线程的数据库连接。供 ThreadPoolExecutor 工作线程结束时调用，
+    避免线程池中的连接泄露导致 MySQL 'Too many connections' (1040) 错误。
+
+    用法示例::
+
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [executor.submit(my_task, arg) for arg in args]
+            for f in as_completed(futures):
+                f.result()
+        # 线程池关闭后，清理残留连接
+        # 或在 worker 函数内 try/finally 调用
+    """
+    _invalidate_shared_conn()
+
+
 def get_connection():
     """获取数据库连接。优先复用当前线程已有连接（ping 检测存活），失败则新建。
     返回 _ReusableConnection 包装器，with 语句不会关闭底层连接。

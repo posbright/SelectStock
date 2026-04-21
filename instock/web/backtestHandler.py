@@ -539,6 +539,12 @@ def _compute_batch_backtest_onthefly(strategy_func, strategy_cn, strategy_name, 
                 except Exception:
                     logging.warning(f"批量回测线程结果异常：{future_map.get(future, '?')}", exc_info=True)
                     continue
+        # 线程池退出后清理残留 DB 连接
+        try:
+            import instock.lib.database as _mdb
+            _mdb.close_thread_connection()
+        except Exception:
+            pass
 
     # 7. 聚合结果
     details = []

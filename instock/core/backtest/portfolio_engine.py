@@ -100,6 +100,7 @@ class PortfolioBacktestEngine:
         start_time = time.time()
         logging.info(f"[回测引擎] 开始回测: {start_date} ~ {end_date}, 初始资金={initial_cash}")
         self._strategy_errors = []  # 收集策略运行时错误
+        self._error_counts = {}  # 相同错误计数，用于抑制重复日志
 
         # 0. 参数校验
         if initial_cash is None or initial_cash <= 0:
@@ -615,14 +616,22 @@ class PortfolioBacktestEngine:
         func(*args)
 
     def _record_error(self, context_desc, exception):
-        """记录策略运行时错误（含完整traceback）"""
+        """记录策略运行时错误（含完整traceback）。
+        相同错误消息超过 3 次后抑制日志输出，避免日志膨胀。"""
         import traceback
         tb = traceback.format_exception(type(exception), exception, exception.__traceback__)
         # 过滤掉引擎内部帧，只保留策略相关帧
         strategy_tb = [line for line in tb if '<strategy>' in line or not line.startswith('  File')]
         full_msg = ''.join(tb)
-        short_msg = f"[回测] {context_desc} 异常: {exception}"
-        logging.warning(f"{short_msg}\n{''.join(strategy_tb)}")
+        error_key = str(exception)
+        self._error_counts[error_key] = self._error_counts.get(error_key, 0) + 1
+        count = self._error_counts[error_key]
+        _MAX_REPEATED_LOGS = 3
+        if count <= _MAX_REPEATED_LOGS:
+            short_msg = f"[回测] {context_desc} 异常: {exception}"
+            logging.warning(f"{short_msg}\n{''.join(strategy_tb)}")
+            if count == _MAX_REPEATED_LOGS:
+                logging.warning(f"[回测] 相同错误 '{error_key}' 已出现 {count} 次，后续不再重复记录日志")
         self._strategy_errors.append({
             'context': context_desc,
             'error': str(exception),
