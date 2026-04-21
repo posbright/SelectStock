@@ -45,7 +45,13 @@ def check_high_tight(code_name, data, date=None, threshold=60, istop=False):
         # 单日跌幅超7%；高开低走7%；两日累计跌幅10%；两日高开低走累计10%
         if _p_change >= 9.5:
             if previous_p_change >= 9.5:
-                return True
+                last_p_change = data.iloc[-1]['p_change'] if 'p_change' in data.columns else 0.0
+                return {
+                    'p_change': round(float(last_p_change), 2),
+                    'close': round(float(current_close), 2),
+                    'period_low': round(float(low), 2),
+                    'rise_ratio': round(float(ratio_increase), 2),
+                }
             else:
                 previous_p_change = _p_change
         else:

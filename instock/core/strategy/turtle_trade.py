@@ -38,6 +38,11 @@ def check_enter(code_name, data, date=None, threshold=60):
     last_close = data.iloc[-1]['close']
 
     if last_close >= max_price:
-        return True
+        p_change = data.iloc[-1]['p_change'] if 'p_change' in data.columns else 0.0
+        return {
+            'p_change': round(float(p_change), 2),
+            'close': round(float(last_close), 2),
+            'high_60d': round(float(max_price), 2),
+        }
 
     return False

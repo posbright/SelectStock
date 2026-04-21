@@ -38,6 +38,13 @@ def check(code_name, data, date=None, threshold=30):
 
     if data.iloc[0]['ma30'] < data.iloc[step1]['ma30'] < \
             data.iloc[step2]['ma30'] < data.iloc[-1]['ma30'] and data.iloc[-1]['ma30'] > 1.2 * data.iloc[0]['ma30']:
-        return True
+        p_change = data.iloc[-1]['p_change'] if 'p_change' in data.columns else 0.0
+        return {
+            'p_change': round(float(p_change), 2),
+            'close': round(float(data.iloc[-1]['close']), 2),
+            'ma30': round(float(data.iloc[-1]['ma30']), 2),
+            'ma30_start': round(float(data.iloc[0]['ma30']), 2),
+            'ma30_ratio': round(float(data.iloc[-1]['ma30'] / data.iloc[0]['ma30']), 2),
+        }
     else:
         return False

@@ -63,6 +63,14 @@ def check_low_increase(code_name, data, date=None, ma_short=30, ma_long=250, thr
     ratio = (highest_row - lowest_row) / lowest_row
 
     if ratio > 0.1:
-        return True
+        p_change = data.iloc[-1]['p_change'] if 'p_change' in data.columns else 0.0
+        return {
+            'p_change': round(float(p_change), 2),
+            'close': round(float(data.iloc[-1]['close']), 2),
+            'atr': round(float(atr), 2),
+            'highest_close': round(float(highest_row), 2),
+            'lowest_close': round(float(lowest_row), 2),
+            'range_ratio': round(float(ratio * 100), 2),
+        }
 
     return False

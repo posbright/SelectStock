@@ -94,7 +94,17 @@ class TrendPullbackStrategy(TechnicalStrategy):
             if last_vol >= last_vol_ma20 * 0.8:
                 return False
             
-            return True
+            p_change = data.iloc[-1]['p_change'] if 'p_change' in data.columns else 0.0
+            return {
+                'p_change': round(float(p_change), 2),
+                'close': round(float(last_close), 2),
+                'ma20': round(float(last_ma20), 2),
+                'ma60': round(float(last_ma60), 2),
+                'ma20_dev': round(float(ma20_deviation * 100), 2),
+                'rsi14': round(float(last_rsi), 2),
+                'volume': int(last_vol),
+                'vol_ma20': int(round(last_vol_ma20)),
+            }
             
         except Exception:
             return False
@@ -186,7 +196,15 @@ class OversoldReboundStrategy(TechnicalStrategy):
             if last_vol < last_vol_ma5 * 1.2:
                 return False
             
-            return True
+            p_change = data.iloc[-1]['p_change'] if 'p_change' in data.columns else 0.0
+            return {
+                'p_change': round(float(p_change), 2),
+                'close': round(float(last_close), 2),
+                'rsi14': round(float(last_rsi), 2),
+                'boll_lower': round(float(last_lower), 2),
+                'volume': int(last_vol),
+                'vol_ma5': int(round(last_vol_ma5)),
+            }
             
         except Exception:
             return False
@@ -286,7 +304,17 @@ class BreakoutConfirmStrategy(TechnicalStrategy):
             if last_close <= last_ma60:
                 return False
             
-            return True
+            p_change_val = data.iloc[-1]['p_change'] if 'p_change' in data.columns else 0.0
+            return {
+                'p_change': round(float(p_change_val), 2),
+                'close': round(float(last_close), 2),
+                'ma60': round(float(last_ma60), 2),
+                'amplitude': round(float(amplitude * 100), 2),
+                'period_max': round(float(period_max_close), 2),
+                'pct_change': round(float(pct_change), 2),
+                'volume': int(last_vol),
+                'vol_ma20': int(round(last_vol_ma20)),
+            }
             
         except Exception:
             return False

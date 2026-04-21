@@ -372,7 +372,7 @@ class TestLowAtrBugFixes:
         stock = ('2026-03-02', '000001', '平安银行')
         # ratio = (56-50)/50 = 0.12 > 0.1 ✓, ATR = sum(changes)/10 ≈ 1.22 < 10 ✓
         result = check_low_increase(stock, data, date=datetime.datetime(2026, 3, 2))
-        assert result is True, "12%涨幅且低ATR应返回True"
+        assert isinstance(result, dict), "12%涨幅且低ATR应返回dict"
 
     def test_ratio_threshold_is_10_percent(self):
         """验证 ratio 阈值已从 1.1 (110%) 修正为 0.1 (10%)"""
@@ -392,7 +392,7 @@ class TestLowAtrBugFixes:
         stock = ('2026-03-02', '000001', '平安银行')
         # ratio = (55.5-50)/50 = 0.11 > 0.1 ✓
         result = check_low_increase(stock, data, date=datetime.datetime(2026, 3, 2))
-        assert result is True, "11%涨幅应满足0.1阈值"
+        assert isinstance(result, dict), "11%涨幅应满足0.1阈值"
 
 
 # ==================== GPT筛选逐层通过率诊断 ====================

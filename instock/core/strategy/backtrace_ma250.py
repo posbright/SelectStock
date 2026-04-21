@@ -92,4 +92,14 @@ def check(code_name, data, date=None, threshold=60):
     if not (vol_ratio > 2 and back_ratio < 0.8):
         return False
 
-    return True
+    p_change = data.iloc[-1]['p_change'] if 'p_change' in data.columns else 0.0
+    return {
+        'p_change': round(float(p_change), 2),
+        'close': round(float(data.iloc[-1]['close']), 2),
+        'ma250': round(float(data.iloc[-1]['ma250']), 2),
+        'highest_close': round(float(highest_row[0]), 2),
+        'lowest_close': round(float(recent_lowest_row[0]), 2),
+        'vol_ratio': round(float(vol_ratio), 2),
+        'back_ratio': round(float(back_ratio), 2),
+        'date_diff': int(date_diff.days),
+    }

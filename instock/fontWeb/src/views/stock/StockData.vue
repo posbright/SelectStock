@@ -211,6 +211,9 @@ const nonPercentFields = new Set([
   'current_ratio',      // 流动比率
   'speed_ratio',        // 速动比率
   'equity_ratio',       // 产权比率
+  'ma30_ratio',         // MA30增长比，是倍数
+  'back_ratio',         // 回踩比，是小数比率
+  'rise_ratio',         // 涨幅倍数
 ])
 
 // 格式化单元格值
@@ -237,7 +240,7 @@ const formatCellValue = (value: any, fieldName: string) => {
   }
   
   // 成交量转换为万
-  if (fieldName === 'volume' || fieldName === 'vol_ma5') {
+  if (fieldName === 'volume' || fieldName === 'vol_ma5' || fieldName === 'vol_ma20') {
     return typeof value === 'number' ? (value / 10000).toFixed(2) + '万' : value
   }
   
@@ -246,7 +249,11 @@ const formatCellValue = (value: any, fieldName: string) => {
   if (!nonPercentFields.has(fieldName)) {
     if (fieldName.includes('rate') || fieldName.includes('ratio') ||
         fieldName === 'amplitude' || fieldName === 'turnoverrate' ||
-        fieldName === 'p_change' ||
+        fieldName === 'p_change' || fieldName === 'limitup_pchange' ||
+        fieldName === 'deviation' || fieldName === 'total_return' ||
+        fieldName === 'max_single_drop' || fieldName === 'max_2day_drop' ||
+        fieldName === 'ma20_dev' || fieldName === 'pct_change' ||
+        fieldName === 'range_ratio' ||
         fieldName.includes('yield') || fieldName.includes('growthrate') ||
         fieldName === 'sale_gpr' || fieldName === 'sale_npr' ||
         fieldName === 'roe_weight' || fieldName === 'jroa' || fieldName === 'roic' ||
@@ -267,6 +274,8 @@ const formatCellValue = (value: any, fieldName: string) => {
 const getCellClass = (value: any, fieldName: string) => {
   // 涨跌相关字段使用颜色
   if (fieldName === 'change_rate' || fieldName === 'ups_downs' || fieldName === 'p_change' ||
+      fieldName === 'total_return' || fieldName === 'max_single_drop' || fieldName === 'max_2day_drop' ||
+      fieldName === 'deviation' || fieldName === 'pct_change' || fieldName === 'limitup_pchange' ||
       fieldName.includes('change') || fieldName.includes('ranking_after')) {
     if (typeof value === 'number') {
       if (value > 0) return 'text-up'

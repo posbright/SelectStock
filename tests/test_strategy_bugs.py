@@ -195,7 +195,7 @@ class TestHighTightFlag(unittest.TestCase):
         # 关键：如果还在用 data.iloc[-1]['high']（切片后 = day[-11]），
         # ratio 会不同于用 current_close 的结果
         # 这里主要验证不崩溃且逻辑正确
-        self.assertIsInstance(result, bool)
+        self.assertIsInstance(result, (bool, dict))
 
 
 # ===========================================================================

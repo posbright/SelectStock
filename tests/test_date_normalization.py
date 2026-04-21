@@ -55,7 +55,7 @@ class TestOldStrategies:
         data = make_test_data()
         # 不应抛出 TypeError
         result = check_enter(CODE_NAME, data)
-        assert isinstance(result, bool)
+        assert isinstance(result, (bool, dict))
 
     def test_climax_limitdown(self):
         from instock.core.strategy.climax_limitdown import check
@@ -91,25 +91,25 @@ class TestOldStrategies:
         from instock.core.strategy.low_backtrace_increase import check
         data = make_test_data()
         result = check(CODE_NAME, data)
-        assert isinstance(result, bool)
+        assert isinstance(result, (bool, dict))
 
     def test_backtrace_ma250(self):
         from instock.core.strategy.backtrace_ma250 import check
         data = make_test_data()
         result = check(CODE_NAME, data)
-        assert isinstance(result, bool)
+        assert isinstance(result, (bool, dict))
 
     def test_breakthrough_platform(self):
         from instock.core.strategy.breakthrough_platform import check
         data = make_test_data()
         result = check(CODE_NAME, data)
-        assert isinstance(result, bool)
+        assert isinstance(result, (bool, dict))
 
     def test_parking_apron(self):
         from instock.core.strategy.parking_apron import check
         data = make_test_data()
         result = check(CODE_NAME, data)
-        assert isinstance(result, bool)
+        assert isinstance(result, (bool, dict))
 
 
 # ============================================================
@@ -167,25 +167,25 @@ class TestStringDates:
         from instock.core.strategy.turtle_trade import check_enter
         data = make_test_data(use_date_objects=False)
         result = check_enter(CODE_NAME, data)
-        assert isinstance(result, bool)
+        assert isinstance(result, (bool, dict))
 
     def test_backtrace_ma250_str(self):
         from instock.core.strategy.backtrace_ma250 import check
         data = make_test_data(use_date_objects=False)
         result = check(CODE_NAME, data)
-        assert isinstance(result, bool)
+        assert isinstance(result, (bool, dict))
 
     def test_breakthrough_platform_str(self):
         from instock.core.strategy.breakthrough_platform import check
         data = make_test_data(use_date_objects=False)
         result = check(CODE_NAME, data)
-        assert isinstance(result, bool)
+        assert isinstance(result, (bool, dict))
 
     def test_parking_apron_str(self):
         from instock.core.strategy.parking_apron import check
         data = make_test_data(use_date_objects=False)
         result = check(CODE_NAME, data)
-        assert isinstance(result, bool)
+        assert isinstance(result, (bool, dict))
 
 
 if __name__ == '__main__':

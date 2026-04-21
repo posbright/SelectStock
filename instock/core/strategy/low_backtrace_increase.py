@@ -34,7 +34,13 @@ def check(code_name, data, date=None, threshold=60):
     # 允许有一次“洗盘”
     previous_p_change = 100.0
     previous_open = data.iloc[0]['open']  # 用首日开盘价初始化，避免-1000000导致首次迭代永远返回False
+    max_single_drop = 0.0
+    max_2day_drop = 0.0
     for _p_change, _close, _open in zip(data['p_change'].values, data['close'].values, data['open'].values):
+        single_drop = min(float(_p_change), (_close - _open) / _open * 100 if _open != 0 else 0)
+        two_day_drop = min(float(previous_p_change + _p_change), (_close - previous_open) / previous_open * 100 if previous_open != 0 else 0)
+        max_single_drop = min(max_single_drop, single_drop)
+        max_2day_drop = min(max_2day_drop, two_day_drop)
         # 单日跌幅超7%；高开低走7%；两日累计跌幅10%；两日高开低走累计10%
         if _p_change < -7 or (_close - _open) / _open * 100 < -7 \
                 or previous_p_change + _p_change < -10 \
@@ -42,4 +48,11 @@ def check(code_name, data, date=None, threshold=60):
             return False
         previous_p_change = _p_change
         previous_open = _open
-    return True
+    p_change = data.iloc[-1]['p_change'] if 'p_change' in data.columns else 0.0
+    return {
+        'p_change': round(float(p_change), 2),
+        'close': round(float(data.iloc[-1]['close']), 2),
+        'total_return': round(float(ratio_increase * 100), 2),
+        'max_single_drop': round(float(max_single_drop), 2),
+        'max_2day_drop': round(float(max_2day_drop), 2),
+    }

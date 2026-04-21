@@ -199,13 +199,105 @@ export const strategyDescriptions: Record<string, string> = {
   cn_stock_strategy_gpt_value: 'GPT综合选股：基于财务安全、盈利能力、成长质量、估值约束四层过滤，综合评分越高越好',
 }
 
-// 放量上涨策略指标列说明（含筛选阈值）
-export const enterStrategyColumnDescriptions: Record<string, string> = {
-  p_change: '涨跌幅(%)：筛选阈值 ≥ 2%，且收盘价 > 开盘价(收阳线)',
-  volume: '当日成交量(股)',
-  vol_ma5: '5日平均成交量(股)：近5个交易日的成交量均值',
-  vol_ratio: '量比：筛选阈值 ≥ 2.0。当日成交量 / 5日均量，反映当日放量程度',
-  amount: '成交额(元)：筛选阈值 ≥ 2亿。收盘价 × 成交量',
+// 各策略指标列说明（含筛选阈值）
+export const strategyColumnDescriptions: Record<string, Record<string, string>> = {
+  cn_stock_strategy_enter: {
+    p_change: '涨跌幅(%)：筛选阈值 ≥ 2%，且收盘价 > 开盘价(收阳线)',
+    volume: '当日成交量(股)',
+    vol_ma5: '5日平均成交量(股)：近5个交易日的成交量均值',
+    vol_ratio: '量比：筛选阈值 ≥ 2.0。当日成交量 / 5日均量，反映当日放量程度',
+    amount: '成交额(元)：筛选阈值 ≥ 2亿。收盘价 × 成交量',
+  },
+  cn_stock_strategy_keep_increasing: {
+    p_change: '涨跌幅(%)',
+    close: '当日收盘价',
+    ma30: '当日30日均线',
+    ma30_start: '30日前的30日均线值',
+    ma30_ratio: 'MA30增长比：筛选阈值 > 1.2。当日MA30 / 30日前MA30',
+  },
+  cn_stock_strategy_parking_apron: {
+    p_change: '涨跌幅(%)',
+    close: '当日收盘价',
+    limitup_price: '涨停日收盘价：最近15日内涨幅>9.5%的那天收盘价',
+    limitup_pchange: '涨停日涨幅(%)：筛选阈值 > 9.5%',
+  },
+  cn_stock_strategy_backtrace_ma250: {
+    p_change: '涨跌幅(%)',
+    close: '当日收盘价',
+    ma250: '250日均线（年线）',
+    highest_close: '60日区间最高收盘价',
+    lowest_close: '后段近期最低收盘价',
+    vol_ratio: '缩量比：筛选阈值 > 2。最高价日成交量/最低价日成交量',
+    back_ratio: '回踩比：筛选阈值 < 0.8。最低价/最高价',
+    date_diff: '回踩天数：筛选阈值 10~50天。最高价日到最低价日的天数',
+  },
+  cn_stock_strategy_breakthrough_platform: {
+    p_change: '涨跌幅(%)',
+    close: '当日收盘价',
+    ma60: '60日均线',
+    deviation: '偏离度(%)：收盘价与MA60的偏离百分比。筛选阈值 -5%~+20%',
+  },
+  cn_stock_strategy_low_backtrace_increase: {
+    p_change: '涨跌幅(%)',
+    close: '当日收盘价',
+    total_return: '60日涨幅(%)：筛选阈值 ≥ 60%',
+    max_single_drop: '最大单日跌幅(%)：筛选阈值 > -7%',
+    max_2day_drop: '最大两日累计跌幅(%)：筛选阈值 > -10%',
+  },
+  cn_stock_strategy_turtle_trade: {
+    p_change: '涨跌幅(%)',
+    close: '当日收盘价',
+    high_60d: '60日最高收盘价：筛选条件 当日收盘价 ≥ 此值',
+  },
+  cn_stock_strategy_high_tight_flag: {
+    p_change: '涨跌幅(%)',
+    close: '当日收盘价',
+    period_low: '区间最低价：24~10日前的最低价',
+    rise_ratio: '涨幅倍数：筛选阈值 ≥ 1.9。当日收盘价/区间最低价',
+  },
+  cn_stock_strategy_climax_limitdown: {
+    p_change: '涨跌幅(%)：筛选阈值 ≤ -9.5%',
+    volume: '当日成交量(股)',
+    vol_ma5: '5日平均成交量(股)',
+    vol_ratio: '量比：筛选阈值 ≥ 4.0。当日成交量 / 5日均量',
+    amount: '成交额(元)：筛选阈值 ≥ 2亿',
+  },
+  cn_stock_strategy_low_atr: {
+    p_change: '涨跌幅(%)',
+    close: '当日收盘价',
+    atr: '平均波动：筛选阈值 ≤ 10。近10日平均涨跌幅绝对值之和/天数',
+    highest_close: '近10日最高收盘价',
+    lowest_close: '近10日最低收盘价',
+    range_ratio: '振幅比(%)：筛选阈值 > 10%。(最高-最低)/最低×100',
+  },
+  cn_stock_strategy_trend_pullback: {
+    p_change: '涨跌幅(%)',
+    close: '当日收盘价',
+    ma20: '20日均线：筛选条件 MA20 > MA60',
+    ma60: '60日均线',
+    ma20_dev: 'MA20偏离(%)：筛选阈值 ≤ 3%。|收盘价-MA20|/MA20×100',
+    rsi14: 'RSI(14)：筛选阈值 35~55。相对强弱指标',
+    volume: '当日成交量(股)',
+    vol_ma20: '20日均量(股)：筛选条件 成交量 < 均量×80%（缩量）',
+  },
+  cn_stock_strategy_oversold_rebound: {
+    p_change: '涨跌幅(%)',
+    close: '当日收盘价：筛选条件 收盘>开盘(阳线) 且 收盘>布林下轨',
+    rsi14: 'RSI(14)：筛选阈值 < 30（超卖）',
+    boll_lower: '布林下轨：筛选条件 近5日曾触及下轨',
+    volume: '当日成交量(股)',
+    vol_ma5: '5日均量(股)：筛选条件 成交量 > 均量×1.2（放量）',
+  },
+  cn_stock_strategy_breakout_confirm: {
+    p_change: '涨跌幅(%)',
+    close: '当日收盘价：筛选条件 收盘 > MA60',
+    ma60: '60日均线',
+    amplitude: '40日振幅(%)：筛选阈值 ≤ 25%（整理形态）',
+    period_max: '40日最高收盘价：筛选条件 当日收盘 > 此值（创新高）',
+    pct_change: '突破涨幅(%)：筛选阈值 > 2%',
+    volume: '当日成交量(股)',
+    vol_ma20: '20日均量(股)：筛选条件 成交量 ≥ 均量×1.5（放量突破）',
+  },
 }
 
 // GPT综合选股指标列说明（含筛选阈值）
@@ -285,11 +377,11 @@ export function getColumnTooltip(fieldName: string, tableName: string): string {
     }
     return ''
   }
-  // 策略表 — 列只有 date/code/name/rate_N，显示回测列说明
-  // GPT综合选股和放量上涨有额外的指标列
+  // 策略表 — 检查策略专用指标列
   if (tableName.includes('strategy')) {
-    if (tableName === 'cn_stock_strategy_enter') {
-      return enterStrategyColumnDescriptions[fieldName] || gptValueColumnDescriptions[fieldName] || commonColumnDescriptions[fieldName] || ''
+    const stratCols = strategyColumnDescriptions[tableName]
+    if (stratCols && stratCols[fieldName]) {
+      return stratCols[fieldName]
     }
     return gptValueColumnDescriptions[fieldName] || commonColumnDescriptions[fieldName] || ''
   }

@@ -301,7 +301,7 @@ class TestKeepIncreasing:
         end = df.iloc[-1]["date"].strftime("%Y-%m-%d")
         code_name = (end, "600000")
         result = check(code_name, df, threshold=30)
-        assert result is True
+        assert isinstance(result, dict)
 
     def test_not_increasing(self):
         from instock.core.strategy.keep_increasing import check
@@ -435,7 +435,7 @@ class TestLowBacktraceIncrease:
         end = df.iloc[-1]["date"].strftime("%Y-%m-%d")
         code_name = (end, "600000")
         result = check(code_name, df, threshold=60)
-        assert result is True
+        assert isinstance(result, dict)
 
     def test_big_drawdown_rejected(self):
         from instock.core.strategy.low_backtrace_increase import check
@@ -475,7 +475,7 @@ class TestClimaxLimitdown:
         end = df.iloc[-1]["date"].strftime("%Y-%m-%d")
         code_name = (end, "600000")
         result = check(code_name, df, threshold=60)
-        assert result is True
+        assert isinstance(result, dict)
 
     def test_no_limitdown(self):
         from instock.core.strategy.climax_limitdown import check
@@ -497,7 +497,7 @@ class TestTurtleTrade:
         df.loc[df.index[-1], "close"] = max_c + 1
         end = df.iloc[-1]["date"].strftime("%Y-%m-%d")
         code_name = (end, "600000")
-        assert check_enter(code_name, df, threshold=60) is True
+        assert isinstance(check_enter(code_name, df, threshold=60), dict)
 
     def test_no_breakout(self):
         from instock.core.strategy.turtle_trade import check_enter
@@ -534,7 +534,7 @@ class TestLowAtr:
         end = df.iloc[-1]["date"].strftime("%Y-%m-%d")
         code_name = (end, "600000")
         result = check_low_increase(code_name, df, threshold=10)
-        assert result is True
+        assert isinstance(result, dict)
 
     def test_insufficient_history(self):
         from instock.core.strategy.low_atr import check_low_increase
@@ -589,7 +589,7 @@ class TestHighTightFlag:
 
         code_name = (df.iloc[-1]["date"].strftime("%Y-%m-%d"), "600000")
         result = check_high_tight(code_name, df, threshold=60, istop=True)
-        assert result is True
+        assert isinstance(result, dict)
 
 
 # =========================================================================

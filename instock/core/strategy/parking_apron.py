@@ -39,7 +39,13 @@ def check(code_name, data, date=None, threshold=15):
                 limitup_row[0] = _close
                 limitup_row[1] = _date
                 if check_internal(data, limitup_row):
-                    return True
+                    last_p_change = data.iloc[-1]['p_change'] if 'p_change' in data.columns else 0.0
+                    return {
+                        'p_change': round(float(last_p_change), 2),
+                        'close': round(float(data.iloc[-1]['close']), 2),
+                        'limitup_price': round(float(_close), 2),
+                        'limitup_pchange': round(float(_p_change), 2),
+                    }
     return False
 
 def check_internal(data, limitup_row):

@@ -53,4 +53,13 @@ def check(code_name, data, date=None, threshold=60):
         if not (-0.05 < deviation < 0.2):
             return False
 
-    return True
+    p_change = data.iloc[-1]['p_change'] if 'p_change' in data.columns else 0.0
+    last_close = data.iloc[-1]['close']
+    last_ma60 = data.iloc[-1]['ma60']
+    last_deviation = (last_close - last_ma60) / last_ma60 if last_ma60 != 0 else 0
+    return {
+        'p_change': round(float(p_change), 2),
+        'close': round(float(last_close), 2),
+        'ma60': round(float(last_ma60), 2),
+        'deviation': round(float(last_deviation * 100), 2),
+    }

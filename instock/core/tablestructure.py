@@ -428,6 +428,144 @@ _enter_columns.update({
 })
 _enter_columns.update(TABLE_CN_STOCK_BACKTEST_DATA['columns'])
 
+# 均线多头策略专用列
+_keep_increasing_columns = TABLE_CN_STOCK_FOREIGN_KEY['columns'].copy()
+_keep_increasing_columns.update({
+    'p_change': {'type': FLOAT, 'cn': '涨跌幅(%)', 'size': 90},
+    'close': {'type': FLOAT, 'cn': '收盘价', 'size': 80},
+    'ma30': {'type': FLOAT, 'cn': '30日均线', 'size': 90},
+    'ma30_start': {'type': FLOAT, 'cn': '30日前MA30', 'size': 90},
+    'ma30_ratio': {'type': FLOAT, 'cn': 'MA30增长比', 'size': 90},
+})
+_keep_increasing_columns.update(TABLE_CN_STOCK_BACKTEST_DATA['columns'])
+
+# 停机坪策略专用列
+_parking_apron_columns = TABLE_CN_STOCK_FOREIGN_KEY['columns'].copy()
+_parking_apron_columns.update({
+    'p_change': {'type': FLOAT, 'cn': '涨跌幅(%)', 'size': 90},
+    'close': {'type': FLOAT, 'cn': '收盘价', 'size': 80},
+    'limitup_price': {'type': FLOAT, 'cn': '涨停价', 'size': 90},
+    'limitup_pchange': {'type': FLOAT, 'cn': '涨停日涨幅(%)', 'size': 100},
+})
+_parking_apron_columns.update(TABLE_CN_STOCK_BACKTEST_DATA['columns'])
+
+# 回踩年线策略专用列
+_backtrace_ma250_columns = TABLE_CN_STOCK_FOREIGN_KEY['columns'].copy()
+_backtrace_ma250_columns.update({
+    'p_change': {'type': FLOAT, 'cn': '涨跌幅(%)', 'size': 90},
+    'close': {'type': FLOAT, 'cn': '收盘价', 'size': 80},
+    'ma250': {'type': FLOAT, 'cn': '年线', 'size': 90},
+    'highest_close': {'type': FLOAT, 'cn': '区间最高价', 'size': 90},
+    'lowest_close': {'type': FLOAT, 'cn': '近期最低价', 'size': 90},
+    'vol_ratio': {'type': FLOAT, 'cn': '缩量比', 'size': 80},
+    'back_ratio': {'type': FLOAT, 'cn': '回踩比', 'size': 80},
+    'date_diff': {'type': BIGINT, 'cn': '回踩天数', 'size': 80},
+})
+_backtrace_ma250_columns.update(TABLE_CN_STOCK_BACKTEST_DATA['columns'])
+
+# 突破平台策略专用列
+_breakthrough_platform_columns = TABLE_CN_STOCK_FOREIGN_KEY['columns'].copy()
+_breakthrough_platform_columns.update({
+    'p_change': {'type': FLOAT, 'cn': '涨跌幅(%)', 'size': 90},
+    'close': {'type': FLOAT, 'cn': '收盘价', 'size': 80},
+    'ma60': {'type': FLOAT, 'cn': '60日均线', 'size': 90},
+    'deviation': {'type': FLOAT, 'cn': '偏离度(%)', 'size': 90},
+})
+_breakthrough_platform_columns.update(TABLE_CN_STOCK_BACKTEST_DATA['columns'])
+
+# 无大幅回撤策略专用列
+_low_backtrace_increase_columns = TABLE_CN_STOCK_FOREIGN_KEY['columns'].copy()
+_low_backtrace_increase_columns.update({
+    'p_change': {'type': FLOAT, 'cn': '涨跌幅(%)', 'size': 90},
+    'close': {'type': FLOAT, 'cn': '收盘价', 'size': 80},
+    'total_return': {'type': FLOAT, 'cn': '60日涨幅(%)', 'size': 100},
+    'max_single_drop': {'type': FLOAT, 'cn': '最大单日跌幅(%)', 'size': 110},
+    'max_2day_drop': {'type': FLOAT, 'cn': '最大两日跌幅(%)', 'size': 110},
+})
+_low_backtrace_increase_columns.update(TABLE_CN_STOCK_BACKTEST_DATA['columns'])
+
+# 海龟交易法则策略专用列
+_turtle_trade_columns = TABLE_CN_STOCK_FOREIGN_KEY['columns'].copy()
+_turtle_trade_columns.update({
+    'p_change': {'type': FLOAT, 'cn': '涨跌幅(%)', 'size': 90},
+    'close': {'type': FLOAT, 'cn': '收盘价', 'size': 80},
+    'high_60d': {'type': FLOAT, 'cn': '60日最高价', 'size': 90},
+})
+_turtle_trade_columns.update(TABLE_CN_STOCK_BACKTEST_DATA['columns'])
+
+# 高而窄的旗形策略专用列
+_high_tight_flag_columns = TABLE_CN_STOCK_FOREIGN_KEY['columns'].copy()
+_high_tight_flag_columns.update({
+    'p_change': {'type': FLOAT, 'cn': '涨跌幅(%)', 'size': 90},
+    'close': {'type': FLOAT, 'cn': '收盘价', 'size': 80},
+    'period_low': {'type': FLOAT, 'cn': '区间最低价', 'size': 90},
+    'rise_ratio': {'type': FLOAT, 'cn': '涨幅倍数', 'size': 90},
+})
+_high_tight_flag_columns.update(TABLE_CN_STOCK_BACKTEST_DATA['columns'])
+
+# 放量跌停策略专用列
+_climax_limitdown_columns = TABLE_CN_STOCK_FOREIGN_KEY['columns'].copy()
+_climax_limitdown_columns.update({
+    'p_change': {'type': FLOAT, 'cn': '涨跌幅(%)', 'size': 90},
+    'volume': {'type': BIGINT, 'cn': '成交量', 'size': 100},
+    'vol_ma5': {'type': BIGINT, 'cn': '5日均量', 'size': 100},
+    'vol_ratio': {'type': FLOAT, 'cn': '量比', 'size': 70},
+    'amount': {'type': BIGINT, 'cn': '成交额', 'size': 110},
+})
+_climax_limitdown_columns.update(TABLE_CN_STOCK_BACKTEST_DATA['columns'])
+
+# 低ATR成长策略专用列
+_low_atr_columns = TABLE_CN_STOCK_FOREIGN_KEY['columns'].copy()
+_low_atr_columns.update({
+    'p_change': {'type': FLOAT, 'cn': '涨跌幅(%)', 'size': 90},
+    'close': {'type': FLOAT, 'cn': '收盘价', 'size': 80},
+    'atr': {'type': FLOAT, 'cn': '平均波动', 'size': 80},
+    'highest_close': {'type': FLOAT, 'cn': '区间最高价', 'size': 90},
+    'lowest_close': {'type': FLOAT, 'cn': '区间最低价', 'size': 90},
+    'range_ratio': {'type': FLOAT, 'cn': '振幅比(%)', 'size': 90},
+})
+_low_atr_columns.update(TABLE_CN_STOCK_BACKTEST_DATA['columns'])
+
+# 趋势回调策略专用列
+_trend_pullback_columns = TABLE_CN_STOCK_FOREIGN_KEY['columns'].copy()
+_trend_pullback_columns.update({
+    'p_change': {'type': FLOAT, 'cn': '涨跌幅(%)', 'size': 90},
+    'close': {'type': FLOAT, 'cn': '收盘价', 'size': 80},
+    'ma20': {'type': FLOAT, 'cn': '20日均线', 'size': 90},
+    'ma60': {'type': FLOAT, 'cn': '60日均线', 'size': 90},
+    'ma20_dev': {'type': FLOAT, 'cn': 'MA20偏离(%)', 'size': 90},
+    'rsi14': {'type': FLOAT, 'cn': 'RSI(14)', 'size': 80},
+    'volume': {'type': BIGINT, 'cn': '成交量', 'size': 100},
+    'vol_ma20': {'type': BIGINT, 'cn': '20日均量', 'size': 100},
+})
+_trend_pullback_columns.update(TABLE_CN_STOCK_BACKTEST_DATA['columns'])
+
+# 超跌反弹策略专用列
+_oversold_rebound_columns = TABLE_CN_STOCK_FOREIGN_KEY['columns'].copy()
+_oversold_rebound_columns.update({
+    'p_change': {'type': FLOAT, 'cn': '涨跌幅(%)', 'size': 90},
+    'close': {'type': FLOAT, 'cn': '收盘价', 'size': 80},
+    'rsi14': {'type': FLOAT, 'cn': 'RSI(14)', 'size': 80},
+    'boll_lower': {'type': FLOAT, 'cn': '布林下轨', 'size': 90},
+    'volume': {'type': BIGINT, 'cn': '成交量', 'size': 100},
+    'vol_ma5': {'type': BIGINT, 'cn': '5日均量', 'size': 100},
+})
+_oversold_rebound_columns.update(TABLE_CN_STOCK_BACKTEST_DATA['columns'])
+
+# 突破确认策略专用列
+_breakout_confirm_columns = TABLE_CN_STOCK_FOREIGN_KEY['columns'].copy()
+_breakout_confirm_columns.update({
+    'p_change': {'type': FLOAT, 'cn': '涨跌幅(%)', 'size': 90},
+    'close': {'type': FLOAT, 'cn': '收盘价', 'size': 80},
+    'ma60': {'type': FLOAT, 'cn': '60日均线', 'size': 90},
+    'amplitude': {'type': FLOAT, 'cn': '振幅(%)', 'size': 80},
+    'period_max': {'type': FLOAT, 'cn': '40日最高价', 'size': 90},
+    'pct_change': {'type': FLOAT, 'cn': '突破涨幅(%)', 'size': 100},
+    'volume': {'type': BIGINT, 'cn': '成交量', 'size': 100},
+    'vol_ma20': {'type': BIGINT, 'cn': '20日均量', 'size': 100},
+})
+_breakout_confirm_columns.update(TABLE_CN_STOCK_BACKTEST_DATA['columns'])
+
 TABLE_CN_STOCK_INDICATORS_BUY = {'name': 'cn_stock_indicators_buy', 'cn': '股票指标买入',
                                  'columns': _tmp_columns}
 
@@ -462,36 +600,36 @@ TABLE_CN_STOCK_STRATEGIES = [
     {'name': 'cn_stock_strategy_enter', 'cn': '放量上涨', 'size': 70, 'func': enter.check_volume,
      'columns': _enter_columns},
     {'name': 'cn_stock_strategy_keep_increasing', 'cn': '均线多头', 'size': 70, 'func': keep_increasing.check,
-     'columns': _tmp_columns},
+     'columns': _keep_increasing_columns},
     {'name': 'cn_stock_strategy_parking_apron', 'cn': '停机坪', 'size': 70, 'func': parking_apron.check,
-     'columns': _tmp_columns},
+     'columns': _parking_apron_columns},
     {'name': 'cn_stock_strategy_backtrace_ma250', 'cn': '回踩年线', 'size': 70, 'func': backtrace_ma250.check,
-     'columns': _tmp_columns},
+     'columns': _backtrace_ma250_columns},
     {'name': 'cn_stock_strategy_breakthrough_platform', 'cn': '突破平台', 'size': 70,
      'func': breakthrough_platform.check,
-     'columns': _tmp_columns},
+     'columns': _breakthrough_platform_columns},
     {'name': 'cn_stock_strategy_low_backtrace_increase', 'cn': '无大幅回撤', 'size': 70,
      'func': low_backtrace_increase.check,
-     'columns': _tmp_columns},
+     'columns': _low_backtrace_increase_columns},
     {'name': 'cn_stock_strategy_turtle_trade', 'cn': '海龟交易法则', 'size': 70, 'func': turtle_trade.check_enter,
-     'columns': _tmp_columns},
+     'columns': _turtle_trade_columns},
     {'name': 'cn_stock_strategy_high_tight_flag', 'cn': '高而窄的旗形', 'size': 70,
      'func': high_tight_flag.check_high_tight,
-     'columns': _tmp_columns},
+     'columns': _high_tight_flag_columns},
     {'name': 'cn_stock_strategy_climax_limitdown', 'cn': '放量跌停', 'size': 70, 'func': climax_limitdown.check,
-     'columns': _tmp_columns},
+     'columns': _climax_limitdown_columns},
     {'name': 'cn_stock_strategy_low_atr', 'cn': '低ATR成长', 'size': 70, 'func': low_atr.check_low_increase,
-     'columns': _tmp_columns},
+     'columns': _low_atr_columns},
     # 长期价值投资策略组
     {'name': 'cn_stock_strategy_trend_pullback', 'cn': '趋势回调', 'size': 70,
      'func': value_invest_strategies.check_trend_pullback,
-     'columns': _tmp_columns},
+     'columns': _trend_pullback_columns},
     {'name': 'cn_stock_strategy_oversold_rebound', 'cn': '超跌反弹', 'size': 70,
      'func': value_invest_strategies.check_oversold_rebound,
-     'columns': _tmp_columns},
+     'columns': _oversold_rebound_columns},
     {'name': 'cn_stock_strategy_breakout_confirm', 'cn': '突破确认', 'size': 70,
      'func': value_invest_strategies.check_breakout_confirm,
-     'columns': _tmp_columns}
+     'columns': _breakout_confirm_columns}
 ]
 
 # GPT综合选股（基本面策略，不走K线策略框架，有独立的 gpt_value_data_job）
