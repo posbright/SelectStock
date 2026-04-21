@@ -114,17 +114,16 @@ class PaperTradingScheduler:
                 errors = sum(1 for r in results if r.get('status') == 'error')
                 log.info("[模拟交易调度] 完成: %d 成功, %d 跳过, %d 错误 (共 %d 个)",
                          ok, skipped, errors, len(results))
-                # 记录每个模拟盘的执行日志
-                self._save_execution_logs(results, trade_date, started_at)
+                # 每个模拟盘的执行日志已由 run_paper_trading_daily 自行记录
             else:
                 log.info("[模拟交易调度] 无运行中的模拟盘")
-                self._save_execution_log(
+                _save_execution_log(
                     None, trade_date, started_at, 'skipped', '无运行中的模拟盘')
         except Exception as e:
             log.error("[模拟交易调度] 执行异常", exc_info=True)
             # 出错后清除标记，允许下次重试
             self._last_run_date = None
-            self._save_execution_log(
+            _save_execution_log(
                 None, trade_date, started_at, 'error', str(e))
         finally:
             self._running = False
@@ -138,28 +137,31 @@ class PaperTradingScheduler:
             message = r.get('message', '')
             trades = r.get('trades', 0)
             total_value = r.get('total_value')
-            PaperTradingScheduler._save_execution_log(
+            _save_execution_log(
                 paper_id, trade_date, started_at, status, message,
                 trades=trades, total_value=total_value)
 
-    @staticmethod
-    def _save_execution_log(paper_id, trade_date, started_at, status, message,
-                            trades=0, total_value=None):
-        """保存单条执行日志到数据库"""
-        try:
-            import instock.lib.database as mdb
-            _ensure_execution_log_table()
-            finished_at = datetime.datetime.now()
-            mdb.executeSql(
-                'INSERT INTO cn_stock_paper_execution_log '
-                '(paper_id, trade_date, status, message, trade_count, '
-                'total_value, started_at, finished_at) '
-                'VALUES (%s,%s,%s,%s,%s,%s,%s,%s)',
-                (paper_id, str(trade_date), status,
-                 (message or '')[:500], trades, total_value,
-                 started_at, finished_at))
-        except Exception as e:
-            log.warning("[模拟交易调度] 保存执行日志失败: %s", e)
+    # 保持类方法兼容（已有测试引用）
+    _save_execution_log = staticmethod(lambda *a, **kw: _save_execution_log(*a, **kw))
+
+
+def _save_execution_log(paper_id, trade_date, started_at, status, message,
+                        trades=0, total_value=None):
+    """保存单条执行日志到数据库（模块级函数，供 paper_engine 等外部调用）"""
+    try:
+        import instock.lib.database as mdb
+        _ensure_execution_log_table()
+        finished_at = datetime.datetime.now()
+        mdb.executeSql(
+            'INSERT INTO cn_stock_paper_execution_log '
+            '(paper_id, trade_date, status, message, trade_count, '
+            'total_value, started_at, finished_at) '
+            'VALUES (%s,%s,%s,%s,%s,%s,%s,%s)',
+            (paper_id, str(trade_date), status,
+             (message or '')[:500], trades, total_value,
+             started_at, finished_at))
+    except Exception as e:
+        log.warning("[模拟交易调度] 保存执行日志失败: %s", e)
 
 
 _log_table_ensured = False

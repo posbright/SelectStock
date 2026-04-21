@@ -63,11 +63,16 @@ def run_paper_trading_daily(paper_id):
     import instock.lib.database as mdb
     import instock.lib.trade_time as trd
 
+    started_at = datetime.datetime.now()
+    result = None
+    date_str = None
+
     try:
         # 1. 获取当前交易日
         run_date, run_date_nph = trd.get_trade_date_last()
         if not trd.is_trade_date(run_date_nph):
-            return {'status': 'skipped', 'message': '非交易日'}
+            result = {'status': 'skipped', 'message': '非交易日'}
+            return result
 
         date_str = run_date_nph.strftime('%Y-%m-%d')
 
@@ -81,7 +86,8 @@ def run_paper_trading_daily(paper_id):
             'WHERE pt.id = %s', (paper_id,))
 
         if not rows:
-            return {'status': 'error', 'message': f'模拟盘 {paper_id} 不存在'}
+            result = {'status': 'error', 'message': f'模拟盘 {paper_id} 不存在'}
+            return result
 
         row = rows[0]
         status = row[3]
@@ -91,11 +97,13 @@ def run_paper_trading_daily(paper_id):
         initial_cash = float(row[2]) if row[2] else 1000000
 
         if status != 'running':
-            return {'status': 'skipped', 'message': f'模拟盘状态为 {status}'}
+            result = {'status': 'skipped', 'message': f'模拟盘状态为 {status}'}
+            return result
 
         # 防止重复运行
         if last_run_date and str(last_run_date) >= date_str:
-            return {'status': 'skipped', 'message': f'今日已运行 ({last_run_date})'}
+            result = {'status': 'skipped', 'message': f'今日已运行 ({last_run_date})'}
+            return result
 
         logging.info(f"[模拟交易] 执行模拟盘 #{paper_id}，日期 {date_str}")
 
@@ -104,7 +112,8 @@ def run_paper_trading_daily(paper_id):
             strategy_funcs = compile_strategy(strategy_code)
         except Exception as e:
             _update_paper_error(paper_id, str(e))
-            return {'status': 'error', 'message': f'策略编译失败: {e}'}
+            result = {'status': 'error', 'message': f'策略编译失败: {e}'}
+            return result
 
         # 4. 初始化/恢复上下文
         context = Context(initial_cash)
@@ -447,16 +456,33 @@ def run_paper_trading_daily(paper_id):
                      f"交易 {len(trade_records)} 笔, "
                      f"总资产 {context.portfolio.total_value:.2f}")
 
-        return {
+        result = {
             'status': 'ok',
             'message': f'执行完成，{len(trade_records)} 笔交易',
             'trades': len(trade_records),
             'total_value': round(context.portfolio.total_value, 2),
         }
+        return result
 
     except Exception as e:
         logging.error(f"[模拟交易] 模拟盘 #{paper_id} 异常", exc_info=True)
-        return {'status': 'error', 'message': str(e)}
+        result = {'status': 'error', 'message': str(e)}
+        return result
+
+    finally:
+        # 无论成功/失败/跳过，都记录执行日志到 DB
+        if result is not None:
+            try:
+                from instock.paper_trading.scheduler import (
+                    _ensure_execution_log_table, _save_execution_log)
+                _save_execution_log(
+                    paper_id, date_str or str(datetime.date.today()),
+                    started_at, result.get('status', 'unknown'),
+                    result.get('message', ''),
+                    trades=result.get('trades', 0),
+                    total_value=result.get('total_value'))
+            except Exception:
+                logging.debug("[模拟交易] 记录执行日志失败", exc_info=True)
 
 
 def run_all_paper_trading():

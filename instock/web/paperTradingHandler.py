@@ -396,9 +396,34 @@ class GetPaperTradingDetailHandler(webBase.BaseHandler, ABC):
             metrics = _compute_paper_metrics(nav_rows_raw, trade_rows_raw)
             info.update(metrics)
 
+            # 执行日志
+            execution_logs = []
+            if mdb.checkTableIsExist('cn_stock_paper_execution_log'):
+                elog_rows = mdb.executeSqlFetch(
+                    'SELECT trade_date, status, message, trade_count, '
+                    'total_value, started_at, finished_at '
+                    'FROM cn_stock_paper_execution_log '
+                    'WHERE paper_id = %s ORDER BY trade_date DESC, id DESC '
+                    'LIMIT 50', (paper_id,))
+                if elog_rows:
+                    for el in elog_rows:
+                        execution_logs.append({
+                            'trade_date': str(el[0]) if el[0] else '',
+                            'status': el[1] or '',
+                            'message': el[2] or '',
+                            'trade_count': el[3] or 0,
+                            'total_value': float(el[4]) if el[4] else None,
+                            'started_at': el[5].strftime('%Y-%m-%d %H:%M:%S') if el[5] else '',
+                            'finished_at': el[6].strftime('%Y-%m-%d %H:%M:%S') if el[6] else '',
+                        })
+
             self.write(json.dumps({
                 'code': 0,
-                'data': {'info': info, 'positions': positions, 'trades': trades, 'nav': nav}
+                'data': {
+                    'info': info, 'positions': positions,
+                    'trades': trades, 'nav': nav,
+                    'execution_logs': execution_logs,
+                }
             }, ensure_ascii=False))
         except Exception as e:
             logging.error("GetPaperTradingDetail异常", exc_info=True)
@@ -446,24 +471,9 @@ class RunPaperTradingHandler(webBase.BaseHandler, ABC):
                 self.write(json.dumps({'code': -1, 'msg': '缺少 id'}))
                 return
 
-            started_at = datetime.datetime.now()
             from instock.paper_trading.paper_engine import run_paper_trading_daily
             result = run_paper_trading_daily(paper_id)
-
-            # 记录执行日志
-            try:
-                from instock.paper_trading.scheduler import PaperTradingScheduler
-                import instock.lib.trade_time as trd
-                _, run_date_nph = trd.get_trade_date_last()
-                PaperTradingScheduler._save_execution_log(
-                    paper_id, run_date_nph, started_at,
-                    result.get('status', 'unknown'),
-                    result.get('message', ''),
-                    trades=result.get('trades', 0),
-                    total_value=result.get('total_value'))
-            except Exception:
-                logging.warning("记录手动执行日志失败", exc_info=True)
-
+            # 执行日志已由 paper_engine 的 finally 块自动记录
             self.write(json.dumps({'code': 0, 'data': result}, ensure_ascii=False, default=str))
         except Exception as e:
             self.write(json.dumps({'code': -1, 'msg': str(e)}))

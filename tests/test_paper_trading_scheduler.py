@@ -132,10 +132,9 @@ class TestSchedulerExecution:
         from instock.paper_trading.scheduler import PaperTradingScheduler
         return PaperTradingScheduler()
 
-    @patch('instock.paper_trading.scheduler.PaperTradingScheduler._save_execution_logs')
     @patch('instock.paper_trading.paper_engine.run_all_paper_trading')
-    def test_execute_success(self, mock_run_all, mock_save_logs):
-        """成功执行后记录日志"""
+    def test_execute_success(self, mock_run_all):
+        """成功执行后记录日志（每个模拟盘的日志由 engine 自行记录）"""
         mock_run_all.return_value = [
             {'id': 1, 'status': 'ok', 'message': '执行完成', 'trades': 3, 'total_value': 1050000},
             {'id': 2, 'status': 'skipped', 'message': '今日已运行'},
@@ -145,10 +144,9 @@ class TestSchedulerExecution:
         s._execute_paper_trading(trade_date)
 
         mock_run_all.assert_called_once()
-        mock_save_logs.assert_called_once()
         assert s._running is False
 
-    @patch('instock.paper_trading.scheduler.PaperTradingScheduler._save_execution_log')
+    @patch('instock.paper_trading.scheduler._save_execution_log')
     @patch('instock.paper_trading.paper_engine.run_all_paper_trading')
     def test_execute_no_papers(self, mock_run_all, mock_save_log):
         """无运行中的模拟盘"""
@@ -161,7 +159,7 @@ class TestSchedulerExecution:
             'skipped', '无运行中的模拟盘')
         assert s._running is False
 
-    @patch('instock.paper_trading.scheduler.PaperTradingScheduler._save_execution_log')
+    @patch('instock.paper_trading.scheduler._save_execution_log')
     @patch('instock.paper_trading.paper_engine.run_all_paper_trading',
            side_effect=Exception('DB exploded'))
     def test_execute_error_clears_last_run(self, mock_run_all, mock_save_log):
@@ -205,7 +203,7 @@ class TestSchedulerExecution:
             1, datetime.date(2026, 4, 21),
             datetime.datetime.now(), 'ok', 'test')
 
-    @patch('instock.paper_trading.scheduler.PaperTradingScheduler._save_execution_log')
+    @patch('instock.paper_trading.scheduler._save_execution_log')
     def test_save_execution_logs_batch(self, mock_save_one):
         """_save_execution_logs 为每个结果调用一次"""
         from instock.paper_trading.scheduler import PaperTradingScheduler
@@ -497,37 +495,53 @@ class TestSchedulerCheckAndRun:
 # ===========================================================================
 
 class TestRunPaperTradingWithLog:
-    """Test that manual paper trading execution records execution log."""
+    """Test that paper trading execution records execution log via engine's finally block."""
 
-    @patch('instock.paper_trading.scheduler.PaperTradingScheduler._save_execution_log')
+    @patch('instock.paper_trading.scheduler._save_execution_log')
+    @patch('instock.paper_trading.paper_engine._ensure_paper_table')
+    @patch('instock.lib.database.executeSqlFetch')
     @patch('instock.lib.trade_time.get_trade_date_last',
            return_value=(datetime.date(2026, 4, 20), datetime.date(2026, 4, 21)))
-    @patch('instock.paper_trading.paper_engine.run_paper_trading_daily')
-    def test_manual_run_saves_log(self, mock_run, mock_trd, mock_save_log):
-        """手动触发后记录执行日志"""
-        mock_run.return_value = {
-            'status': 'ok', 'message': '2 trades', 'trades': 2, 'total_value': 105000,
-        }
-
-        # Simulate handler logic
-        import instock.lib.trade_time as trd
-        from instock.paper_trading.scheduler import PaperTradingScheduler
+    @patch('instock.lib.trade_time.is_trade_date', return_value=True)
+    def test_engine_records_log_on_skip(self, _td, _trd, mock_fetch, _tbl, mock_save_log):
+        """引擎 skip 时也记录执行日志"""
         from instock.paper_trading.paper_engine import run_paper_trading_daily
+        mock_fetch.return_value = [
+            (2, 29, 100000, 'running', datetime.date(2026, 4, 21),
+             '{}', 'def initialize(ctx): pass')]
+        result = run_paper_trading_daily(2)
+        assert result['status'] == 'skipped'
+        # finally 块应该调用 _save_execution_log
+        mock_save_log.assert_called_once()
+        args = mock_save_log.call_args[0]
+        assert args[0] == 2  # paper_id
+        assert args[3] == 'skipped'  # status
 
-        paper_id = 2
-        started_at = datetime.datetime(2026, 4, 21, 10, 30, 0)
-        result = run_paper_trading_daily(paper_id)
-        _, run_date_nph = trd.get_trade_date_last()
-        PaperTradingScheduler._save_execution_log(
-            paper_id, run_date_nph, started_at,
-            result.get('status', 'unknown'),
-            result.get('message', ''),
-            trades=result.get('trades', 0),
-            total_value=result.get('total_value'))
+    @patch('instock.paper_trading.scheduler._save_execution_log')
+    @patch('instock.lib.trade_time.get_trade_date_last',
+           return_value=(datetime.date(2026, 4, 20), datetime.date(2026, 4, 21)))
+    @patch('instock.lib.trade_time.is_trade_date', return_value=True)
+    def test_engine_records_log_on_not_found(self, _td, _trd, mock_save_log):
+        """模拟盘不存在也记录执行日志"""
+        from instock.paper_trading.paper_engine import run_paper_trading_daily
+        with patch('instock.paper_trading.paper_engine._ensure_paper_table'), \
+             patch('instock.lib.database.executeSqlFetch', return_value=[]):
+            result = run_paper_trading_daily(999)
+        assert result['status'] == 'error'
+        mock_save_log.assert_called_once()
+        assert mock_save_log.call_args[0][3] == 'error'
 
-        mock_save_log.assert_called_once_with(
-            2, datetime.date(2026, 4, 21), started_at,
-            'ok', '2 trades', trades=2, total_value=105000)
+    @patch('instock.paper_trading.scheduler._save_execution_log')
+    @patch('instock.lib.trade_time.get_trade_date_last',
+           return_value=(datetime.date(2026, 4, 20), datetime.date(2026, 4, 21)))
+    @patch('instock.lib.trade_time.is_trade_date', return_value=False)
+    def test_engine_records_log_on_non_trade_day(self, _td, _trd, mock_save_log):
+        """非交易日也记录执行日志"""
+        from instock.paper_trading.paper_engine import run_paper_trading_daily
+        result = run_paper_trading_daily(2)
+        assert result['status'] == 'skipped'
+        mock_save_log.assert_called_once()
+        assert mock_save_log.call_args[0][3] == 'skipped'
 
 
 # ===========================================================================
@@ -825,7 +839,7 @@ class TestSchedulerConcurrencySafety:
         assert should is False
         assert reason == 'already_running'
 
-    @patch('instock.paper_trading.scheduler.PaperTradingScheduler._save_execution_log')
+    @patch('instock.paper_trading.scheduler._save_execution_log')
     @patch('instock.paper_trading.paper_engine.run_all_paper_trading',
            side_effect=Exception('boom'))
     def test_running_flag_cleared_on_error(self, _run, _save):
