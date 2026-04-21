@@ -60,6 +60,12 @@ def check_volume(code_name, data, date=None, threshold=60):
 
     vol_ratio = last_vol / mean_vol
     if vol_ratio >= 2:
-        return True
+        return {
+            'p_change': round(p_change, 2),
+            'volume': int(last_vol),
+            'vol_ma5': int(round(mean_vol)),
+            'vol_ratio': round(vol_ratio, 2),
+            'amount': round(amount, 2),
+        }
     else:
         return False

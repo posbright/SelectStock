@@ -199,6 +199,15 @@ export const strategyDescriptions: Record<string, string> = {
   cn_stock_strategy_gpt_value: 'GPT综合选股：基于财务安全、盈利能力、成长质量、估值约束四层过滤，综合评分越高越好',
 }
 
+// 放量上涨策略指标列说明（含筛选阈值）
+export const enterStrategyColumnDescriptions: Record<string, string> = {
+  p_change: '涨跌幅(%)：筛选阈值 ≥ 2%，且收盘价 > 开盘价(收阳线)',
+  volume: '当日成交量(股)',
+  vol_ma5: '5日平均成交量(股)：近5个交易日的成交量均值',
+  vol_ratio: '量比：筛选阈值 ≥ 2.0。当日成交量 / 5日均量，反映当日放量程度',
+  amount: '成交额(元)：筛选阈值 ≥ 2亿。收盘价 × 成交量',
+}
+
 // GPT综合选股指标列说明（含筛选阈值）
 export const gptValueColumnDescriptions: Record<string, string> = {
   gpt_score: '综合评分(0~100)：基于财务安全(20分)+盈利能力(30分)+成长质量(30分)+估值优势(20分)',
@@ -277,8 +286,11 @@ export function getColumnTooltip(fieldName: string, tableName: string): string {
     return ''
   }
   // 策略表 — 列只有 date/code/name/rate_N，显示回测列说明
-  // GPT综合选股有额外的指标列
+  // GPT综合选股和放量上涨有额外的指标列
   if (tableName.includes('strategy')) {
+    if (tableName === 'cn_stock_strategy_enter') {
+      return enterStrategyColumnDescriptions[fieldName] || gptValueColumnDescriptions[fieldName] || commonColumnDescriptions[fieldName] || ''
+    }
     return gptValueColumnDescriptions[fieldName] || commonColumnDescriptions[fieldName] || ''
   }
   // 通用列（综合选股、股票行情、资金流向等）

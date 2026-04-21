@@ -266,7 +266,13 @@ class TestEnter:
         df = self._build_trigger_df()
         end = df.iloc[-1]["date"].strftime("%Y-%m-%d")
         code_name = (end, "600000")
-        assert check_volume(code_name, df, threshold=60) is True
+        result = check_volume(code_name, df, threshold=60)
+        assert result  # truthy (dict with metrics)
+        assert isinstance(result, dict)
+        assert 'p_change' in result
+        assert 'vol_ratio' in result
+        assert result['vol_ratio'] >= 2
+        assert result['p_change'] >= 2
 
     def test_check_volume_no_trigger_low_change(self):
         from instock.core.strategy.enter import check_volume

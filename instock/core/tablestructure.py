@@ -417,6 +417,17 @@ TABLE_CN_STOCK_INDICATORS['columns'].update(STOCK_STATS_DATA['columns'])
 _tmp_columns = TABLE_CN_STOCK_FOREIGN_KEY['columns'].copy()
 _tmp_columns.update(TABLE_CN_STOCK_BACKTEST_DATA['columns'])
 
+# 放量上涨策略专用列（在 _tmp_columns 基础上增加筛选指标列）
+_enter_columns = TABLE_CN_STOCK_FOREIGN_KEY['columns'].copy()
+_enter_columns.update({
+    'p_change': {'type': FLOAT, 'cn': '涨跌幅(%)', 'size': 90},
+    'volume': {'type': BIGINT, 'cn': '成交量', 'size': 100},
+    'vol_ma5': {'type': BIGINT, 'cn': '5日均量', 'size': 100},
+    'vol_ratio': {'type': FLOAT, 'cn': '量比', 'size': 70},
+    'amount': {'type': BIGINT, 'cn': '成交额', 'size': 110},
+})
+_enter_columns.update(TABLE_CN_STOCK_BACKTEST_DATA['columns'])
+
 TABLE_CN_STOCK_INDICATORS_BUY = {'name': 'cn_stock_indicators_buy', 'cn': '股票指标买入',
                                  'columns': _tmp_columns}
 
@@ -449,7 +460,7 @@ TABLE_CN_STOCK_FINANCIAL = {'name': 'cn_stock_financial', 'cn': '个股财务数
 
 TABLE_CN_STOCK_STRATEGIES = [
     {'name': 'cn_stock_strategy_enter', 'cn': '放量上涨', 'size': 70, 'func': enter.check_volume,
-     'columns': _tmp_columns},
+     'columns': _enter_columns},
     {'name': 'cn_stock_strategy_keep_increasing', 'cn': '均线多头', 'size': 70, 'func': keep_increasing.check,
      'columns': _tmp_columns},
     {'name': 'cn_stock_strategy_parking_apron', 'cn': '停机坪', 'size': 70, 'func': parking_apron.check,

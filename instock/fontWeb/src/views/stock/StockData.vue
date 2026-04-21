@@ -205,6 +205,7 @@ const wanyuanFields = new Set(['total_market_cap', 'free_cap'])
 // 不应显示为百分比的字段（虽然名称中含有 rate/ratio）
 const nonPercentFields = new Set([
   'volume_ratio',       // 量比，是一个倍数而非百分比
+  'vol_ratio',          // 策略量比（当日成交量/5日均量），是倍数而非百分比
   'per_netcash_operate', // 每股经营现金流
   'equity_multiplier',  // 权益乘数
   'current_ratio',      // 流动比率
@@ -236,7 +237,7 @@ const formatCellValue = (value: any, fieldName: string) => {
   }
   
   // 成交量转换为万
-  if (fieldName === 'volume') {
+  if (fieldName === 'volume' || fieldName === 'vol_ma5') {
     return typeof value === 'number' ? (value / 10000).toFixed(2) + '万' : value
   }
   
@@ -245,6 +246,7 @@ const formatCellValue = (value: any, fieldName: string) => {
   if (!nonPercentFields.has(fieldName)) {
     if (fieldName.includes('rate') || fieldName.includes('ratio') ||
         fieldName === 'amplitude' || fieldName === 'turnoverrate' ||
+        fieldName === 'p_change' ||
         fieldName.includes('yield') || fieldName.includes('growthrate') ||
         fieldName === 'sale_gpr' || fieldName === 'sale_npr' ||
         fieldName === 'roe_weight' || fieldName === 'jroa' || fieldName === 'roic' ||
@@ -264,7 +266,7 @@ const formatCellValue = (value: any, fieldName: string) => {
 // 获取单元格样式类
 const getCellClass = (value: any, fieldName: string) => {
   // 涨跌相关字段使用颜色
-  if (fieldName === 'change_rate' || fieldName === 'ups_downs' ||
+  if (fieldName === 'change_rate' || fieldName === 'ups_downs' || fieldName === 'p_change' ||
       fieldName.includes('change') || fieldName.includes('ranking_after')) {
     if (typeof value === 'number') {
       if (value > 0) return 'text-up'

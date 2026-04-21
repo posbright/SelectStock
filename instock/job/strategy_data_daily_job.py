@@ -33,7 +33,7 @@ def prepare(date, strategy):
             return
         table_name = strategy['name']
         strategy_func = strategy['func']
-        results = run_check(strategy_func, table_name, stocks_data, date)
+        results, extras = run_check(strategy_func, table_name, stocks_data, date)
         if results is None:
             return
 
@@ -43,13 +43,26 @@ def prepare(date, strategy):
             mdb.executeSql(del_sql, (date,))
             cols_type = None
         else:
-            cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_STRATEGIES[0]['columns'])
+            cols_type = tbs.get_field_types(strategy['columns'])
 
         data = pd.DataFrame(results)
         columns = tuple(tbs.TABLE_CN_STOCK_FOREIGN_KEY['columns'])
         data.columns = columns
+
+        # 合并策略返回的额外指标列（如放量上涨的 p_change, volume, vol_ratio 等）
+        extra_keys = set()
+        if extras:
+            for stock_key, metrics in extras.items():
+                extra_keys.update(metrics.keys())
+            for key in extra_keys:
+                data[key] = data.apply(
+                    lambda row: extras.get((row['date'], row['code'], row['name']), {}).get(key),
+                    axis=1
+                )
+
         _columns_backtest = list(tbs.TABLE_CN_STOCK_BACKTEST_DATA['columns'])
-        data = data.reindex(columns=list(columns) + _columns_backtest)
+        all_columns = list(columns) + sorted(extra_keys) + _columns_backtest
+        data = data.reindex(columns=all_columns)
         # 单例，时间段循环必须改时间
         date_str = date.strftime("%Y-%m-%d")
         if date.strftime("%Y-%m-%d") != data.iloc[0]['date']:
@@ -67,6 +80,7 @@ def run_check(strategy_fun, table_name, stocks, date, workers=_STRATEGY_WORKERS)
         if stock_tops is not None:
             is_check_high_tight = True
     data = []
+    extras = {}  # stock_key -> metrics dict (for strategies that return enriched data)
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             if is_check_high_tight:
@@ -76,16 +90,20 @@ def run_check(strategy_fun, table_name, stocks, date, workers=_STRATEGY_WORKERS)
             for future in concurrent.futures.as_completed(future_to_data):
                 stock = future_to_data[future]
                 try:
-                    if future.result():
+                    result = future.result()
+                    if result:
                         data.append(stock)
+                        if isinstance(result, dict):
+                            extras[stock] = result
                 except Exception as e:
                     logging.error(f"strategy_data_daily_job.run_check处理异常：{stock[1]}代码策略{table_name}", exc_info=True)
     except Exception as e:
         logging.error(f"strategy_data_daily_job.run_check处理异常策略{table_name}", exc_info=True)
     if not data:
-        return None
+        return None, {}
     else:
-        return data
+        return data, extras
+
 
 
 def main():

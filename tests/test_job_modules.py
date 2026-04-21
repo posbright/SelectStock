@@ -920,17 +920,31 @@ class TestStrategyDataDailyJob(unittest.TestCase):
         fn = MagicMock(return_value=False, __name__='check_test')
         stock_key = (TEST_DATE_STR, '000001', 'Test')
         stocks = {stock_key: pd.DataFrame({'close': [10.0]})}
-        result = m.run_check(fn, 'tbl', stocks, TEST_DATE, workers=1)
+        result, extras = m.run_check(fn, 'tbl', stocks, TEST_DATE, workers=1)
         self.assertIsNone(result)
+        self.assertEqual(extras, {})
 
     def test_run_check_match_returns_list(self):
         m = self._mod()
         fn = MagicMock(return_value=True, __name__='check_test')
         stock_key = (TEST_DATE_STR, '000001', 'Test')
         stocks = {stock_key: pd.DataFrame({'close': [10.0]})}
-        result = m.run_check(fn, 'tbl', stocks, TEST_DATE, workers=1)
+        result, extras = m.run_check(fn, 'tbl', stocks, TEST_DATE, workers=1)
         self.assertIsNotNone(result)
         self.assertEqual(len(result), 1)
+        self.assertEqual(extras, {})
+
+    def test_run_check_dict_result_captures_extras(self):
+        m = self._mod()
+        metrics = {'p_change': 3.5, 'vol_ratio': 2.5}
+        fn = MagicMock(return_value=metrics, __name__='check_test')
+        stock_key = (TEST_DATE_STR, '000001', 'Test')
+        stocks = {stock_key: pd.DataFrame({'close': [10.0]})}
+        result, extras = m.run_check(fn, 'tbl', stocks, TEST_DATE, workers=1)
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 1)
+        self.assertIn(stock_key, extras)
+        self.assertEqual(extras[stock_key]['p_change'], 3.5)
 
 
 # ============================================================================
