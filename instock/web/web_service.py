@@ -115,6 +115,7 @@ class Application(tornado.web.Application):
             (r"/instock/api/paper/list", paperTradingHandler.GetPaperTradingListHandler),
             (r"/instock/api/paper/detail", paperTradingHandler.GetPaperTradingDetailHandler),
             (r"/instock/api/paper/run", paperTradingHandler.RunPaperTradingHandler),
+            (r"/instock/api/paper/execution_log", paperTradingHandler.GetPaperExecutionLogHandler),
             (r"/instock/api/paper/compare", paperTradingHandler.GetPaperCompareHandler),
             (r"/instock/api/paper/delete", paperTradingHandler.DeletePaperTradingHandler),
             # ── Vue SPA 路由 ──
@@ -182,6 +183,14 @@ def main():
 
     logging.info(f"服务已启动，web地址 : http://localhost:{port}/")
     print(f"服务已启动，web地址 : http://localhost:{port}/")  # 控制台通知运维人员
+
+    # 启动模拟交易自动调度器（每个交易日收盘后自动执行）
+    try:
+        from instock.paper_trading.scheduler import PaperTradingScheduler
+        _paper_scheduler = PaperTradingScheduler()
+        _paper_scheduler.start()
+    except Exception as e:
+        logging.warning(f"模拟交易调度器启动失败（不影响其他功能）: {e}")
 
     tornado.ioloop.IOLoop.current().start()
 

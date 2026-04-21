@@ -446,9 +446,72 @@ class RunPaperTradingHandler(webBase.BaseHandler, ABC):
                 self.write(json.dumps({'code': -1, 'msg': '缺少 id'}))
                 return
 
+            started_at = datetime.datetime.now()
             from instock.paper_trading.paper_engine import run_paper_trading_daily
             result = run_paper_trading_daily(paper_id)
+
+            # 记录执行日志
+            try:
+                from instock.paper_trading.scheduler import PaperTradingScheduler
+                import instock.lib.trade_time as trd
+                _, run_date_nph = trd.get_trade_date_last()
+                PaperTradingScheduler._save_execution_log(
+                    paper_id, run_date_nph, started_at,
+                    result.get('status', 'unknown'),
+                    result.get('message', ''),
+                    trades=result.get('trades', 0),
+                    total_value=result.get('total_value'))
+            except Exception:
+                logging.warning("记录手动执行日志失败", exc_info=True)
+
             self.write(json.dumps({'code': 0, 'data': result}, ensure_ascii=False, default=str))
+        except Exception as e:
+            self.write(json.dumps({'code': -1, 'msg': str(e)}))
+
+
+class GetPaperExecutionLogHandler(webBase.BaseHandler, ABC):
+    """查询模拟盘执行日志"""
+
+    @gen.coroutine
+    def get(self):
+        try:
+            paper_id = self.get_argument('id', None)
+            limit = int(self.get_argument('limit', '50'))
+            limit = min(limit, 200)
+
+            from instock.paper_trading.scheduler import _ensure_execution_log_table
+            _ensure_execution_log_table()
+
+            if paper_id:
+                rows = mdb.executeSqlFetch(
+                    'SELECT id, paper_id, trade_date, status, message, '
+                    'trade_count, total_value, started_at, finished_at '
+                    'FROM cn_stock_paper_execution_log '
+                    'WHERE paper_id = %s ORDER BY trade_date DESC, id DESC '
+                    'LIMIT %s', (paper_id, limit))
+            else:
+                rows = mdb.executeSqlFetch(
+                    'SELECT id, paper_id, trade_date, status, message, '
+                    'trade_count, total_value, started_at, finished_at '
+                    'FROM cn_stock_paper_execution_log '
+                    'ORDER BY trade_date DESC, id DESC LIMIT %s', (limit,))
+
+            data = []
+            if rows:
+                for r in rows:
+                    data.append({
+                        'id': r[0],
+                        'paper_id': r[1],
+                        'trade_date': str(r[2]) if r[2] else '',
+                        'status': r[3],
+                        'message': r[4] or '',
+                        'trade_count': r[5] or 0,
+                        'total_value': float(r[6]) if r[6] else None,
+                        'started_at': r[7].strftime('%Y-%m-%d %H:%M:%S') if r[7] else '',
+                        'finished_at': r[8].strftime('%Y-%m-%d %H:%M:%S') if r[8] else '',
+                    })
+
+            self.write(json.dumps({'code': 0, 'data': data}, ensure_ascii=False))
         except Exception as e:
             self.write(json.dumps({'code': -1, 'msg': str(e)}))
 
