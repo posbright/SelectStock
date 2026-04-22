@@ -18,8 +18,9 @@ def is_trade_date(date=None):
         date = datetime.date.today()
     trade_date = stock_trade_date().get_data()
     if trade_date is None:
-        logging.warning("is_trade_date: 交易日历不可用（API或单例加载失败），默认返回 False")
-        return False
+        # 降级为工作日判断：周一~周五视为交易日（偶尔在节假日误判远比跳过所有交易日好）
+        logging.warning("is_trade_date: 交易日历不可用，降级为工作日判断")
+        return date.weekday() < 5  # 0=Mon ... 4=Fri
     if date in trade_date:
         return True
     else:
@@ -37,8 +38,14 @@ def get_previous_trade_date(date, count=1):
 def get_one_previous_trade_date(date):
     trade_date = stock_trade_date().get_data()
     if trade_date is None:
-        logging.warning(f"get_one_previous_trade_date: 交易日历不可用，返回原始日期 {date}（可能不正确）")
-        return date
+        # 降级：找最近的前一个工作日
+        logging.warning(f"get_one_previous_trade_date: 交易日历不可用，降级为工作日查找")
+        tmp_date = date
+        for _ in range(10):
+            tmp_date += datetime.timedelta(days=-1)
+            if tmp_date.weekday() < 5:
+                return tmp_date
+        return date + datetime.timedelta(days=-1)
     tmp_date = date
     for _ in range(365):  # 最多向前找1年
         tmp_date += datetime.timedelta(days=-1)
@@ -51,8 +58,14 @@ def get_one_previous_trade_date(date):
 def get_next_trade_date(date):
     trade_date = stock_trade_date().get_data()
     if trade_date is None:
-        logging.warning(f"get_next_trade_date: 交易日历不可用，返回原始日期 {date}（可能不正确）")
-        return date
+        # 降级：找最近的下一个工作日
+        logging.warning(f"get_next_trade_date: 交易日历不可用，降级为工作日查找")
+        tmp_date = date
+        for _ in range(10):
+            tmp_date += datetime.timedelta(days=1)
+            if tmp_date.weekday() < 5:
+                return tmp_date
+        return date + datetime.timedelta(days=1)
     tmp_date = date
     for _ in range(365):  # 最多向后找1年
         tmp_date += datetime.timedelta(days=1)

@@ -200,6 +200,7 @@ def streaming_analysis(date):
     indicator_results = {}      # {(date, code, name): pd.Series}
     kline_results = {}          # {(date, code, name): pd.Series}
     strategy_results = {s['name']: [] for s in strategies}  # {table_name: [(date, code, name)]}
+    strategy_extras = {s['name']: {} for s in strategies}   # {table_name: {(date, code, name): {field: value}}}
 
     processed = 0
     skipped = 0
@@ -214,7 +215,7 @@ def streaming_analysis(date):
         result = {
             'indicator': None,
             'kline': None,
-            'strategies': {},  # {table_name: True/False}
+            'strategies': {},  # {table_name: True/dict}
             'stale': False,    # 缓存不含目标日期
         }
 
@@ -257,7 +258,7 @@ def streaming_analysis(date):
                 else:
                     matched = func(stock, hist_data, date=date)
                 if matched:
-                    result['strategies'][strategy['name']] = True
+                    result['strategies'][strategy['name']] = matched
             except Exception as e:
                 logging.info(f"策略检测异常：{code} {strategy['name']} - {e}")
 
@@ -291,6 +292,8 @@ def streaming_analysis(date):
                     for s_name, matched in result['strategies'].items():
                         if matched:
                             strategy_results[s_name].append(stock)
+                            if isinstance(matched, dict):
+                                strategy_extras[s_name][stock] = matched
 
                     processed += 1
 
@@ -299,11 +302,13 @@ def streaming_analysis(date):
                     logging.error(f"流式分析处理异常：{code} -", exc_info=True)
 
         # 每批处理完后：写入数据库 + 释放内存
-        _flush_results(indicator_results, kline_results, strategy_results, date_str, strategies, tables_cleaned)
+        _flush_results(indicator_results, kline_results, strategy_results, strategy_extras, date_str, strategies, tables_cleaned)
         indicator_results.clear()
         kline_results.clear()
         for k in strategy_results:
             strategy_results[k] = []
+        for k in strategy_extras:
+            strategy_extras[k] = {}
         gc.collect()
         logging.info(f"流式分析进度：{processed}/{total_stocks}（跳过 {skipped}，过期缓存 {stale_cache}，错误 {errors}）")
 
@@ -384,7 +389,7 @@ def _ensure_table_schema(table_name, expected_columns):
         logging.error(f"检查表 {table_name} schema 异常（后续写入可能失败）", exc_info=True)
 
 
-def _flush_results(indicator_results, kline_results, strategy_results, date_str, strategies, tables_cleaned):
+def _flush_results(indicator_results, kline_results, strategy_results, strategy_extras, date_str, strategies, tables_cleaned):
     """将缓冲区中的分析结果批量写入数据库"""
 
     # --- 写入指标数据 ---
@@ -407,7 +412,8 @@ def _flush_results(indicator_results, kline_results, strategy_results, date_str,
         matched_stocks = strategy_results.get(table_name, [])
         if matched_stocks:
             try:
-                _write_strategy_results(matched_stocks, table_name, date_str, tables_cleaned)
+                extras = strategy_extras.get(table_name, {})
+                _write_strategy_results(matched_stocks, table_name, date_str, tables_cleaned, extras)
             except Exception as e:
                 logging.error(f"写入策略数据异常：{table_name} -", exc_info=True)
 
@@ -453,18 +459,37 @@ def _write_kline_results(results, date_str, tables_cleaned):
     mdb.insert_db_from_df(data, table_name, cols_type, False, "`date`,`code`")
 
 
-def _write_strategy_results(matched_stocks, table_name, date_str, tables_cleaned):
-    """写入策略选股结果"""
+def _write_strategy_results(matched_stocks, table_name, date_str, tables_cleaned, extras=None):
+    """写入策略选股结果（含策略指标数据）"""
     _clean_table_if_needed(table_name, date_str, tables_cleaned)
+    # 查找该表对应的列定义
+    strategy_def = None
+    for s in tbs.TABLE_CN_STOCK_STRATEGIES:
+        if s['name'] == table_name:
+            strategy_def = s
+            break
     cols_type = None
     if not mdb.checkTableIsExist(table_name):
-        cols_type = tbs.get_field_types(tbs.TABLE_CN_STOCK_STRATEGIES[0]['columns'])
+        cols_type = tbs.get_field_types(strategy_def['columns'] if strategy_def else tbs.TABLE_CN_STOCK_STRATEGIES[0]['columns'])
 
     data = pd.DataFrame(matched_stocks)
     columns = tuple(tbs.TABLE_CN_STOCK_FOREIGN_KEY['columns'])
     data.columns = columns
+
+    # 合并策略返回的额外指标列（如放量上涨的 p_change, volume, vol_ratio 等）
+    extra_keys = set()
+    if extras:
+        for stock_key, metrics in extras.items():
+            extra_keys.update(metrics.keys())
+        for key in extra_keys:
+            data[key] = data.apply(
+                lambda row, k=key: extras.get((row['date'], row['code'], row['name']), {}).get(k),
+                axis=1
+            )
+
     _columns_backtest = list(tbs.TABLE_CN_STOCK_BACKTEST_DATA['columns'])
-    data = data.reindex(columns=list(columns) + _columns_backtest)
+    all_columns = list(columns) + sorted(extra_keys) + _columns_backtest
+    data = data.reindex(columns=all_columns)
     if date_str != data.iloc[0]['date']:
         data['date'] = date_str
     mdb.insert_db_from_df(data, table_name, cols_type, False, "`date`,`code`")

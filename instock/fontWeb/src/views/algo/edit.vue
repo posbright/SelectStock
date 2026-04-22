@@ -34,7 +34,7 @@
         <span class="param-label">元</span>
         <el-button type="primary" @click="doRun" :loading="running" :icon="CaretRight">运行回测</el-button>
         <el-button @click="doCreatePaper" :icon="Monitor" :disabled="!strategy.id">创建模拟</el-button>
-        <el-button text @click="$router.push('/algo/backtests')">回测历史</el-button>
+        <el-button text @click="$router.push({ path: '/algo/backtests', query: strategy.id ? { strategy_id: strategy.id } : {} })">回测历史</el-button>
       </div>
     </div>
 

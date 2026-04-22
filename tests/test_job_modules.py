@@ -773,7 +773,7 @@ class TestStreamingAnalysisJob(unittest.TestCase):
         m = self._mod()
         cleaned = set()
         with patch(f'{_mdb}.insert_db_from_df') as mock_insert:
-            m._flush_results({}, {}, {}, TEST_DATE_STR, [], cleaned)
+            m._flush_results({}, {}, {}, {}, TEST_DATE_STR, [], cleaned)
             mock_insert.assert_not_called()
 
     @patch(f'{_mdb}.checkTableIsExist', return_value=False)

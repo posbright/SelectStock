@@ -74,7 +74,15 @@ def process(table, date_start, date_end, backtest_column):
         subset = subset.astype({'date': 'string'})
         stocks = [tuple(x) for x in subset.values]
 
-        results = run_check(stocks, date_start, date_end, backtest_column)
+        # 海龟交易使用带止损/止盈退出机制的回测
+        rate_func = None
+        if table_name == 'cn_stock_strategy_turtle_trade':
+            from functools import partial
+            rate_func = partial(rate.get_rates_with_exit,
+                                trailing_exit_days=20, stop_loss_pct=10)
+
+        results = run_check(stocks, date_start, date_end, backtest_column,
+                            rate_func=rate_func)
         if results is None:
             return
 
@@ -92,7 +100,8 @@ def process(table, date_start, date_end, backtest_column):
 _INNER_WORKERS = _cfg.get_int('INSTOCK_BACKTEST_INNER_WORKERS', 2)
 
 
-def run_check(stocks, date_start, date_end, backtest_column, workers=_INNER_WORKERS):
+def run_check(stocks, date_start, date_end, backtest_column, workers=_INNER_WORKERS,
+              rate_func=None):
     """
     逐只股票从缓存读取历史数据并计算回测收益率
     
@@ -101,7 +110,12 @@ def run_check(stocks, date_start, date_end, backtest_column, workers=_INNER_WORK
     - 新版：从磁盘缓存按需读取 read_stock_hist_from_cache(code, ...)
     
     注意：缓存读取在线程内部执行，避免主线程一次性加载所有数据到内存
+    
+    参数:
+        rate_func: 自定义收益率计算函数，签名同 rate.get_rates。默认使用 rate.get_rates。
     """
+    if rate_func is None:
+        rate_func = rate.get_rates
     data = {}
 
     def _process_stock(stock):
@@ -110,7 +124,7 @@ def run_check(stocks, date_start, date_end, backtest_column, workers=_INNER_WORK
         hist_data = stf.read_stock_hist_from_cache(code, date_start, date_end)
         if hist_data is None or len(hist_data) == 0:
             return None
-        return rate.get_rates(stock, hist_data, backtest_column, len(backtest_column) - 1)
+        return rate_func(stock, hist_data, backtest_column, len(backtest_column) - 1)
 
     # 分批提交（时间换空间）：每批 50 只股票，避免一次创建大量 Future 对象
     _CHUNK = 50

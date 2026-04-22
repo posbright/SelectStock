@@ -116,12 +116,13 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onActivated } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { DataAnalysis, Delete } from '@element-plus/icons-vue'
 import { getPortfolioBacktestListPage, getStrategyCodeList, deleteBacktests } from '@/api/stock'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const router = useRouter()
+const route = useRoute()
 const list = ref<any[]>([])
 const strategies = ref<any[]>([])
 const loading = ref(false)
@@ -249,7 +250,12 @@ async function loadStrategies() {
   } catch (_e) { /* ignore */ }
 }
 
-onMounted(() => { loadData(); loadStrategies() })
+onMounted(() => {
+  // 从路由 query 初始化策略筛选（从编辑页"回测历史"跳转时携带）
+  const qsId = Number(route.query.strategy_id)
+  if (qsId) filterStrategyId.value = qsId
+  loadData(); loadStrategies()
+})
 
 // keep-alive 激活时刷新列表数据（从详情/对比页返回时获取最新数据）
 onActivated(() => { loadData() })

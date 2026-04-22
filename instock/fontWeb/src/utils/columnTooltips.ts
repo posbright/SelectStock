@@ -248,6 +248,7 @@ export const strategyColumnDescriptions: Record<string, Record<string, string>> 
     p_change: '涨跌幅(%)',
     close: '当日收盘价',
     high_60d: '60日最高收盘价：筛选条件 当日收盘价 ≥ 此值',
+    low_20d: '20日最低价：经典海龟System2退出参考线，跌破则止损/止盈退出',
   },
   cn_stock_strategy_high_tight_flag: {
     p_change: '涨跌幅(%)',

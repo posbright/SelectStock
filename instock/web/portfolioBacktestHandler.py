@@ -1904,6 +1904,8 @@ class RunPortfolioBacktestHandler(webBase.BaseHandler, ABC):
                     _ensure_backtest_table()
                     m = result.get('metrics', {})
                     now = datetime.datetime.now()
+                    # 将策略代码快照存入 result_json，避免策略修改后历史回测丢失原始代码
+                    result['strategy_code_snapshot'] = strategy_code
                     bt_id = _insert_and_get_id(
                         'INSERT INTO cn_stock_backtest_portfolio '
                         '(strategy_id, start_date, end_date, initial_cash, status, '
@@ -1991,6 +1993,8 @@ class StartPortfolioBacktestHandler(webBase.BaseHandler, ABC):
                                 _ensure_backtest_table()
                                 m = result.get('metrics', {})
                                 now = datetime.datetime.now()
+                                # 将策略代码快照存入 result_json
+                                result['strategy_code_snapshot'] = strategy_code
                                 bt_id = _insert_and_get_id(
                                     'INSERT INTO cn_stock_backtest_portfolio '
                                     '(strategy_id, start_date, end_date, initial_cash, status, '
@@ -2255,6 +2259,7 @@ class GetPortfolioBacktestDetailHandler(webBase.BaseHandler, ABC):
             info['trades'] = full_data.get('trades', [])
             info['positions'] = full_data.get('positions', [])
             info['logs'] = full_data.get('logs', [])
+            info['strategy_code'] = full_data.get('strategy_code_snapshot', '')
 
             self.write(json.dumps({'code': 0, 'data': info}, ensure_ascii=False, default=str))
         except Exception as e:
@@ -2331,7 +2336,7 @@ class GetBacktestCompareHandler(webBase.BaseHandler, ABC):
                     'metrics': metrics,
                     'nav': full_data.get('nav', []),
                     'trades': full_data.get('trades', []),
-                    'strategy_code': r[17] or '',
+                    'strategy_code': full_data.get('strategy_code_snapshot') or r[17] or '',
                     'completed_at': r[15].strftime('%Y-%m-%d %H:%M:%S') if r[15] else '',
                     'params': full_data.get('params', {}),
                 }

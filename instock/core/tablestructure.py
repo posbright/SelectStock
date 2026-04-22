@@ -362,6 +362,7 @@ FIELD_FORMAT_MAP = {
     'max_2day_drop': {'fmt': 'pct', 'color': True},
     # 海龟交易法则
     'high_60d': {'fmt': 'price'},
+    'low_20d': {'fmt': 'price'},
     # 高而窄旗形
     'period_low': {'fmt': 'price'},
     'rise_ratio': {'fmt': 'ratio'},
@@ -543,6 +544,7 @@ _turtle_trade_columns.update({
     'p_change': {'type': FLOAT, 'cn': '涨跌幅(%)', 'size': 90},
     'close': {'type': FLOAT, 'cn': '收盘价', 'size': 80},
     'high_60d': {'type': FLOAT, 'cn': '60日最高价', 'size': 90},
+    'low_20d': {'type': FLOAT, 'cn': '20日最低价', 'size': 90},
 })
 _turtle_trade_columns.update(TABLE_CN_STOCK_BACKTEST_DATA['columns'])
 
