@@ -62,7 +62,7 @@ class PortfolioBacktestEngine:
         self.data_proxy = None
         self.g = None
         self._strategy_funcs = None
-        self._stock_data = {}          # {code: DataFrame}
+        self._stock_data = {}          # {code: DatetimeIndex-indexed DataFrame}
         self._benchmark_data = None    # DataFrame
         self._nav_records = []         # [NavRecord]
         self._trade_records = []       # [TradeRecord]
@@ -352,12 +352,14 @@ class PortfolioBacktestEngine:
         def history(code, count, field='close'):
             """获取最近 N 个交易日的数据"""
             clean = _nc(code)
-            df = engine._stock_data.get(clean)
-            if df is None:
-                return pd.Series(dtype=float)
-            current_date = engine.context.current_dt
-            mask = df['date'] <= pd.Timestamp(current_date)
-            subset = df.loc[mask].tail(count)
+            idx_df = engine._stock_data.get(clean)
+            if idx_df is None:
+                engine._ensure_stock_loaded(clean)
+                idx_df = engine._stock_data.get(clean)
+                if idx_df is None:
+                    return pd.Series(dtype=float)
+            current_date = pd.Timestamp(engine.context.current_dt)
+            subset = idx_df.loc[:current_date].iloc[-count:]
             if field in subset.columns:
                 return subset[field].reset_index(drop=True)
             return pd.Series(dtype=float)
@@ -370,14 +372,13 @@ class PortfolioBacktestEngine:
             """
             clean = _nc(security)
             engine._ensure_stock_loaded(clean)
-            stock_df = engine._stock_data.get(clean)
-            if stock_df is None:
+            idx_df = engine._stock_data.get(clean)
+            if idx_df is None:
                 if fields:
                     return pd.DataFrame(columns=fields)
                 return pd.DataFrame()
-            current_date = engine.context.current_dt
-            mask = stock_df['date'] <= pd.Timestamp(current_date)
-            subset = stock_df.loc[mask].tail(count)
+            current_date = pd.Timestamp(engine.context.current_dt)
+            subset = idx_df.loc[:current_date].iloc[-count:]
             if fields is None:
                 fields = ['open', 'close', 'high', 'low', 'volume', 'money']
             result_cols = {}
@@ -391,7 +392,7 @@ class PortfolioBacktestEngine:
                         result_cols['money'] = [0] * len(subset)
                 else:
                     result_cols[f] = [0] * len(subset)
-            result = pd.DataFrame(result_cols, index=subset['date'].values)
+            result = pd.DataFrame(result_cols, index=subset.index)
             return result
 
         def get_price(code, start_date=None, end_date=None, count=None,
@@ -399,19 +400,19 @@ class PortfolioBacktestEngine:
             """获取历史数据（兼容聚宽 count/end_date 模式和 start_date/end_date 模式）"""
             clean = _nc(code)
             engine._ensure_stock_loaded(clean)
-            df = engine._stock_data.get(clean)
-            if df is None:
+            idx_df = engine._stock_data.get(clean)
+            if idx_df is None:
                 return pd.DataFrame()
-            result = df.copy()
+            result = idx_df
             if end_date:
-                result = result[result['date'] <= pd.Timestamp(end_date)]
+                result = result.loc[:pd.Timestamp(end_date)]
             elif count:
-                # 无 end_date 时默认截到当前回测日期
-                result = result[result['date'] <= pd.Timestamp(engine.context.current_dt)]
+                result = result.loc[:pd.Timestamp(engine.context.current_dt)]
             if start_date:
-                result = result[result['date'] >= pd.Timestamp(start_date)]
+                result = result.loc[pd.Timestamp(start_date):]
             if count and count > 0:
-                result = result.tail(count)
+                result = result.iloc[-count:]
+            result = result.reset_index()  # bring 'date' back as column
             if fields:
                 # 兼容聚宽 fields 含 'money'（映射到 deal_amount 或 volume*close）
                 cols = ['date']
@@ -422,7 +423,6 @@ class PortfolioBacktestEngine:
                         elif 'amount' in result.columns:
                             result['money'] = result['amount']
                         elif 'volume' in result.columns and 'close' in result.columns:
-                            # volume 单位是手(=100股)，需要 ×100 转为股数再乘价格
                             result['money'] = result['volume'] * result['close'] * 100
                     if f == 'paused' and 'paused' not in result.columns:
                         result['paused'] = 0
@@ -725,23 +725,22 @@ class PortfolioBacktestEngine:
 
     def _update_stock_day_price(self, code, date):
         """更新指定股票的当日行情到 data_proxy 和 _current_day_prices"""
-        df = self._stock_data.get(code)
-        if df is None:
+        idx_df = self._stock_data.get(code)
+        if idx_df is None:
             return
         ts_date = pd.Timestamp(date)
-        mask = df['date'] == ts_date
-        if not mask.any():
+        if ts_date not in idx_df.index:
             return
-        row = df.loc[mask].iloc[0]
-        exec_price = row['close']
+        row = idx_df.loc[ts_date]
+        exec_price = float(row['close'])
         self._current_day_prices[code] = exec_price
         bar = {
-            'open': row.get('open', exec_price),
-            'high': row.get('high', exec_price),
-            'low': row.get('low', exec_price),
+            'open': float(row.get('open', exec_price)),
+            'high': float(row.get('high', exec_price)),
+            'low': float(row.get('low', exec_price)),
             'close': exec_price,
-            'volume': row.get('volume', 0),
-            'pre_close': row.get('pre_close', exec_price),
+            'volume': int(row.get('volume', 0)),
+            'pre_close': float(row.get('pre_close', exec_price)),
         }
         self.data_proxy._set_current(code, bar)
 
@@ -762,13 +761,12 @@ class PortfolioBacktestEngine:
             return
 
         # 涨跌停检测
-        df = self._stock_data.get(code)
-        if df is not None:
-            today_row = df[df['date'] == pd.Timestamp(date)]
-            if len(today_row) > 0:
-                row = today_row.iloc[0]
-                exec_price = row['close']
-                pre_close = row.get('pre_close', exec_price)
+        idx_df = self._stock_data.get(code)
+        ts_date = pd.Timestamp(date)
+        if idx_df is not None and ts_date in idx_df.index:
+                row = idx_df.loc[ts_date]
+                exec_price = float(row['close'])
+                pre_close = float(row.get('pre_close', exec_price))
                 if pre_close and pre_close > 0:
                     change_pct = (exec_price - pre_close) / pre_close
                     limit_pct = 0.195 if code.startswith(('688', '300')) else 0.095
@@ -899,13 +897,12 @@ class PortfolioBacktestEngine:
                 continue
 
             # 涨跌停检测
-            df = self._stock_data.get(code)
-            if df is not None:
-                today_row = df[df['date'] == pd.Timestamp(date)]
-                if len(today_row) > 0:
-                    row = today_row.iloc[0]
-                    exec_price = row['close']
-                    pre_close = row.get('pre_close', exec_price)
+            idx_df = self._stock_data.get(code)
+            ts_date_order = pd.Timestamp(date)
+            if idx_df is not None and ts_date_order in idx_df.index:
+                    row = idx_df.loc[ts_date_order]
+                    exec_price = float(row['close'])
+                    pre_close = float(row.get('pre_close', exec_price))
                     if pre_close and pre_close > 0:
                         change_pct = (exec_price - pre_close) / pre_close
                         # 涨跌停阈值：科创板(688)/创业板(300)=20%，其他=10%
@@ -1054,8 +1051,21 @@ class PortfolioBacktestEngine:
 
         if codes:
             logging.info(f"[回测引擎] 预加载 {len(codes)} 只股票数据")
-            self._stock_data = load_multiple_stocks(codes, pre_start, end_date)
+            raw_data = load_multiple_stocks(codes, pre_start, end_date)
             self._all_codes = codes
+
+            # 转为 DatetimeIndex 格式并降精度（节省内存）
+            self._stock_data = {}
+            for code, df in raw_data.items():
+                self._stock_data[code] = self._to_indexed_df(df)
+            del raw_data  # 立即释放原始数据
+
+            # 内存估算与警告
+            total_mem = sum(df.memory_usage(deep=True).sum() for df in self._stock_data.values())
+            mem_mb = total_mem / 1024 / 1024
+            logging.info(f"[回测引擎] 股票数据内存: {mem_mb:.0f} MB ({len(self._stock_data)} 只)")
+            if mem_mb > 500:
+                logging.warning(f"[回测引擎] 股票数据占用 {mem_mb:.0f}MB，低内存服务器可能出现 OOM")
 
             # 批量加载股票名称
             self._load_stock_names_batch(codes)
@@ -1074,29 +1084,46 @@ class PortfolioBacktestEngine:
             pre_start = (pd.Timestamp(self.context.current_dt) - pd.Timedelta(days=400)).strftime('%Y-%m-%d')
         df = load_stock_data(code, start_date=pre_start)
         if df is not None:
-            self._stock_data[code] = df
-            self.data_proxy._set_history(code, df)
+            self._stock_data[code] = self._to_indexed_df(df)
+            self.data_proxy._set_history(code, self._stock_data[code])
 
     # 聚宽兼容别名
     _ensure_stock_loaded = _load_single_stock
+
+    @staticmethod
+    def _to_indexed_df(df):
+        """将 DataFrame 转为 DatetimeIndex 格式并降低内存占用"""
+        idx_df = df.set_index('date').sort_index()
+        # 降精度：float64 → float32（节省约 50% 内存）
+        float_cols = idx_df.select_dtypes(include=['float64']).columns
+        if len(float_cols) > 0:
+            idx_df[float_cols] = idx_df[float_cols].astype(np.float32)
+        int_cols = idx_df.select_dtypes(include=['int64']).columns
+        if len(int_cols) > 0:
+            idx_df[int_cols] = idx_df[int_cols].astype(np.int32)
+        return idx_df
+
+    def _build_date_index(self, code, df):
+        """将原始 DataFrame 转为 DatetimeIndex 格式并存入 _stock_data"""
+        self._stock_data[code] = self._to_indexed_df(df)
 
     def _load_day_prices(self, date):
         """加载当日所有股票的收盘价，更新 data_proxy"""
         prices = {}
         ts_date = pd.Timestamp(date)
 
-        for code, df in self._stock_data.items():
-            mask = df['date'] == ts_date
-            if mask.any():
-                row = df.loc[mask].iloc[0]
-                prices[code] = row['close']
+        for code, idx_df in self._stock_data.items():
+            if ts_date in idx_df.index:
+                row = idx_df.loc[ts_date]
+                close = float(row['close'])
+                prices[code] = close
                 bar = {
-                    'open': row.get('open', row['close']),
-                    'high': row.get('high', row['close']),
-                    'low': row.get('low', row['close']),
-                    'close': row['close'],
-                    'volume': row.get('volume', 0),
-                    'pre_close': row.get('pre_close', row['close']),
+                    'open': float(row.get('open', close)),
+                    'high': float(row.get('high', close)),
+                    'low': float(row.get('low', close)),
+                    'close': close,
+                    'volume': int(row.get('volume', 0)),
+                    'pre_close': float(row.get('pre_close', close)),
                 }
                 self.data_proxy._set_current(code, bar)
 

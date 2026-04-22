@@ -14,6 +14,7 @@ import os
 import logging
 import datetime
 import time
+import concurrent.futures
 import pandas as pd
 import numpy as np
 
@@ -321,7 +322,7 @@ def _normalize_cache_df(df):
 
 def load_multiple_stocks(codes, start_date=None, end_date=None):
     """
-    批量加载多只股票数据。
+    批量加载多只股票数据（多线程并行）。
 
     Args:
         codes: 股票代码列表
@@ -332,10 +333,21 @@ def load_multiple_stocks(codes, start_date=None, end_date=None):
         dict: {code: DataFrame}，无数据的股票不包含
     """
     result = {}
-    for code in codes:
-        df = load_stock_data(code, start_date, end_date)
-        if df is not None and len(df) > 0:
-            result[code] = df
+    # 低内存环境限制并发数，减少同时驻留的 DataFrame 数量
+    max_workers = min(8, len(codes)) if codes else 1
+
+    def _load_one(code):
+        return code, load_stock_data(code, start_date, end_date)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_load_one, code): code for code in codes}
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                code, df = future.result()
+                if df is not None and len(df) > 0:
+                    result[code] = df
+            except Exception as e:
+                logging.debug(f"加载股票 {futures[future]} 失败: {e}")
     return result
 
 

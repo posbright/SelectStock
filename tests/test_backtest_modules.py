@@ -1494,7 +1494,7 @@ class TestPortfolioEngineEdgeCases(unittest.TestCase):
             'volume': [100000, 200000],
             'pre_close': [10.0, 10.5],
         })
-        engine._stock_data = {'000001': df}
+        engine._build_date_index('000001', df)
         prices = engine._load_day_prices(datetime.date(2025, 1, 2))
         self.assertIn('000001', prices)
         self.assertAlmostEqual(prices['000001'], 10.5)
@@ -1570,7 +1570,7 @@ class TestTradeRecordPnlInEngine(unittest.TestCase):
             'volume': [100000],
             'pre_close': [close_price * 0.98],
         })
-        engine._stock_data = {code: df}
+        engine._build_date_index(code, df)
         engine.data_proxy._set_current(code, {
             'open': close_price, 'high': close_price,
             'low': close_price, 'close': close_price,
@@ -1635,7 +1635,7 @@ class TestTradeRecordPnlInEngine(unittest.TestCase):
             'open': [10.0], 'high': [10.0], 'low': [10.0],
             'close': [10.0], 'volume': [100000], 'pre_close': [9.8],
         })
-        engine._stock_data = {'000001': df}
+        engine._build_date_index('000001', df)
         engine.data_proxy._set_current('000001', {
             'open': 10.0, 'high': 10.0, 'low': 10.0,
             'close': 10.0, 'volume': 100000, 'pre_close': 9.8,
@@ -1674,7 +1674,7 @@ class TestTradeRecordPnlInEngine(unittest.TestCase):
             'open': [10.0], 'high': [10.0], 'low': [10.0],
             'close': [10.0], 'volume': [100000], 'pre_close': [9.8],
         })
-        engine._stock_data = {'999999': df}
+        engine._build_date_index('999999', df)
         engine.data_proxy._set_current('999999', {
             'open': 10.0, 'high': 10.0, 'low': 10.0,
             'close': 10.0, 'volume': 100000, 'pre_close': 9.8,
