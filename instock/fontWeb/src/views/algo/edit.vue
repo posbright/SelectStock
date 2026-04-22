@@ -330,6 +330,7 @@ async function doRun() {
     const res = await startPortfolioBacktest({
       code: strategy.value.code,
       strategy_id: strategy.value.id || undefined,
+      strategy_name: strategy.value.name || undefined,
       start_date: btStartDate.value,
       end_date: btEndDate.value,
       initial_cash: btCash.value,

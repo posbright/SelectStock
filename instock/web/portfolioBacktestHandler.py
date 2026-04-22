@@ -1866,6 +1866,7 @@ class RunPortfolioBacktestHandler(webBase.BaseHandler, ABC):
             body = json.loads(self.request.body)
             strategy_code = body.get('code', '')
             strategy_id = body.get('strategy_id')
+            strategy_name = body.get('strategy_name', '')
             start_date = body.get('start_date', '')
             end_date = body.get('end_date', '')
             initial_cash = body.get('initial_cash', 1000000)
@@ -1873,6 +1874,16 @@ class RunPortfolioBacktestHandler(webBase.BaseHandler, ABC):
             commission = body.get('commission_rate', 0.0003)
             tax = body.get('stamp_tax_rate', 0.001)
             slippage = body.get('slippage', 0.002)
+
+            # 如果前端未传名称，尝试从 DB 查
+            if not strategy_name and strategy_id:
+                try:
+                    _name_rows = mdb.executeSqlFetch(
+                        'SELECT name FROM cn_stock_strategy_code WHERE id=%s', (strategy_id,))
+                    if _name_rows and _name_rows[0][0]:
+                        strategy_name = _name_rows[0][0]
+                except Exception:
+                    pass
 
             if not strategy_code or not start_date or not end_date:
                 self.write(json.dumps({'code': -1, 'msg': '缺少必填参数'}, ensure_ascii=False))
@@ -1920,12 +1931,12 @@ class RunPortfolioBacktestHandler(webBase.BaseHandler, ABC):
                     result['strategy_code_snapshot'] = strategy_code
                     bt_id = _insert_and_get_id(
                         'INSERT INTO cn_stock_backtest_portfolio '
-                        '(strategy_id, start_date, end_date, initial_cash, status, '
+                        '(strategy_id, strategy_name, start_date, end_date, initial_cash, status, '
                         'started_at, completed_at, total_return, annual_return, '
                         'max_drawdown, sharpe_ratio, alpha, beta, win_rate, trade_count, '
                         'result_json) '
-                        'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
-                        (strategy_id, start_date, end_date, initial_cash, 'completed',
+                        'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                        (strategy_id, strategy_name or None, start_date, end_date, initial_cash, 'completed',
                          now, now, m.get('total_return'), m.get('annual_return'),
                          m.get('max_drawdown'), m.get('sharpe_ratio'),
                          m.get('alpha'), m.get('beta'),
@@ -1968,6 +1979,7 @@ class StartPortfolioBacktestHandler(webBase.BaseHandler, ABC):
             body = json.loads(self.request.body)
             strategy_code = body.get('code', '')
             strategy_id = body.get('strategy_id')
+            strategy_name = body.get('strategy_name', '')
             start_date = body.get('start_date', '')
             end_date = body.get('end_date', '')
             initial_cash = body.get('initial_cash', 1000000)
@@ -1975,6 +1987,16 @@ class StartPortfolioBacktestHandler(webBase.BaseHandler, ABC):
             commission = body.get('commission_rate', 0.0003)
             tax = body.get('stamp_tax_rate', 0.001)
             slippage = body.get('slippage', 0.002)
+
+            # 如果前端未传名称，尝试从 DB 查
+            if not strategy_name and strategy_id:
+                try:
+                    _name_rows = mdb.executeSqlFetch(
+                        'SELECT name FROM cn_stock_strategy_code WHERE id=%s', (strategy_id,))
+                    if _name_rows and _name_rows[0][0]:
+                        strategy_name = _name_rows[0][0]
+                except Exception:
+                    pass
 
             if not strategy_code or not start_date or not end_date:
                 self.write(json.dumps({'code': -1, 'msg': '缺少必填参数'}, ensure_ascii=False))
@@ -2009,12 +2031,12 @@ class StartPortfolioBacktestHandler(webBase.BaseHandler, ABC):
                                 result['strategy_code_snapshot'] = strategy_code
                                 bt_id = _insert_and_get_id(
                                     'INSERT INTO cn_stock_backtest_portfolio '
-                                    '(strategy_id, start_date, end_date, initial_cash, status, '
+                                    '(strategy_id, strategy_name, start_date, end_date, initial_cash, status, '
                                     'started_at, completed_at, total_return, annual_return, '
                                     'max_drawdown, sharpe_ratio, alpha, beta, win_rate, trade_count, '
                                     'result_json) '
-                                    'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
-                                    (strategy_id, start_date, end_date, initial_cash, 'completed',
+                                    'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                                    (strategy_id, strategy_name or None, start_date, end_date, initial_cash, 'completed',
                                      now, now, m.get('total_return'), m.get('annual_return'),
                                      m.get('max_drawdown'), m.get('sharpe_ratio'),
                                      m.get('alpha'), m.get('beta'),
@@ -2154,7 +2176,7 @@ class GetPortfolioBacktestListHandler(webBase.BaseHandler, ABC):
                 params.append(int(strategy_id))
 
             rows = mdb.executeSqlFetch(
-                f'SELECT bp.id, bp.strategy_id, sc.name as strategy_name, '
+                f'SELECT bp.id, bp.strategy_id, COALESCE(bp.strategy_name, sc.name) as strategy_name, '
                 f'bp.start_date, bp.end_date, bp.initial_cash, bp.status, '
                 f'bp.total_return, bp.annual_return, bp.max_drawdown, '
                 f'bp.sharpe_ratio, bp.alpha, bp.beta, bp.win_rate, '
@@ -2221,7 +2243,7 @@ class GetPortfolioBacktestDetailHandler(webBase.BaseHandler, ABC):
 
             _ensure_backtest_table()
             rows = mdb.executeSqlFetch(
-                'SELECT bp.id, bp.strategy_id, sc.name, bp.start_date, bp.end_date, '
+                'SELECT bp.id, bp.strategy_id, COALESCE(bp.strategy_name, sc.name), bp.start_date, bp.end_date, '
                 'bp.initial_cash, bp.status, bp.total_return, bp.annual_return, '
                 'bp.max_drawdown, bp.sharpe_ratio, bp.alpha, bp.beta, bp.win_rate, '
                 'bp.trade_count, bp.completed_at, bp.result_json '
@@ -2301,7 +2323,7 @@ class GetBacktestCompareHandler(webBase.BaseHandler, ABC):
             _ensure_backtest_table()
             placeholders = ','.join(['%s'] * len(bt_ids))
             rows = mdb.executeSqlFetch(
-                f'SELECT bp.id, bp.strategy_id, sc.name, bp.start_date, bp.end_date, '
+                f'SELECT bp.id, bp.strategy_id, COALESCE(bp.strategy_name, sc.name), bp.start_date, bp.end_date, '
                 f'bp.initial_cash, bp.status, bp.total_return, bp.annual_return, '
                 f'bp.max_drawdown, bp.sharpe_ratio, bp.alpha, bp.beta, bp.win_rate, '
                 f'bp.trade_count, bp.completed_at, bp.result_json, sc.code as strategy_code '
@@ -2432,7 +2454,7 @@ class GetPortfolioBacktestListPageHandler(webBase.BaseHandler, ABC):
 
             order_clause = f'ORDER BY bp.{sort_by} {sort_order.upper()}'
             rows = mdb.executeSqlFetch(
-                f'SELECT bp.id, bp.strategy_id, sc.name as strategy_name, '
+                f'SELECT bp.id, bp.strategy_id, COALESCE(bp.strategy_name, sc.name) as strategy_name, '
                 f'bp.start_date, bp.end_date, bp.initial_cash, bp.status, '
                 f'bp.total_return, bp.annual_return, bp.max_drawdown, '
                 f'bp.sharpe_ratio, bp.alpha, bp.beta, bp.win_rate, '
@@ -2709,6 +2731,7 @@ def _ensure_backtest_table():
             CREATE TABLE IF NOT EXISTS `cn_stock_backtest_portfolio` (
                 `id` INT AUTO_INCREMENT PRIMARY KEY,
                 `strategy_id` INT,
+                `strategy_name` VARCHAR(200) DEFAULT NULL COMMENT '策略名称快照（写入时冻结）',
                 `start_date` DATE,
                 `end_date` DATE,
                 `initial_cash` DECIMAL(15,2),
@@ -2744,6 +2767,17 @@ def _ensure_backtest_table():
                         cur.execute('ALTER TABLE cn_stock_backtest_portfolio '
                                     'ADD COLUMN `result_json` LONGTEXT AFTER `trade_count`')
                         logging.info("成功添加列：cn_stock_backtest_portfolio.result_json")
+                    # 添加 strategy_name 列（增量迁移）
+                    cur.execute(
+                        "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS "
+                        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cn_stock_backtest_portfolio' "
+                        "AND COLUMN_NAME = 'strategy_name'")
+                    if cur.fetchone() is None:
+                        cur.execute('ALTER TABLE cn_stock_backtest_portfolio '
+                                    'ADD COLUMN `strategy_name` VARCHAR(200) DEFAULT NULL '
+                                    'COMMENT %s AFTER `strategy_id`',
+                                    ('策略名称快照（写入时冻结）',))
+                        logging.info("成功添加列：cn_stock_backtest_portfolio.strategy_name")
         except Exception as e:
             logging.warning(f"ALTER TABLE cn_stock_backtest_portfolio 异常：{e}")
     _backtest_table_ready = True

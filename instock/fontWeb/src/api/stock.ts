@@ -261,6 +261,7 @@ export function deleteFolder(id: number) {
 export function runPortfolioBacktest(data: {
   code: string
   strategy_id?: number
+  strategy_name?: string
   start_date: string
   end_date: string
   initial_cash?: number
@@ -276,6 +277,7 @@ export function runPortfolioBacktest(data: {
 export function startPortfolioBacktest(data: {
   code: string
   strategy_id?: number
+  strategy_name?: string
   start_date: string
   end_date: string
   initial_cash?: number
