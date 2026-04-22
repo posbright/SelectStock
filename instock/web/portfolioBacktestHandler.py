@@ -305,11 +305,12 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票（统一为聚宽格式 XXXXXX.XSHG/XSHE）
     try:
-        g.stocks = get_all_cached_stocks()
+        _raw = get_all_cached_stocks()
+        g.stocks = [c + ('.XSHG' if c[0] == '6' else '.XSHE') for c in _raw]
     except Exception:
-        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
+        g.stocks = list(get_all_securities().index)
     g.entry_window = 60
     g.exit_window = 20
     g.max_positions = 5
@@ -375,11 +376,12 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票（统一为聚宽格式 XXXXXX.XSHG/XSHE）
     try:
-        g.stocks = get_all_cached_stocks()
+        _raw = get_all_cached_stocks()
+        g.stocks = [c + ('.XSHG' if c[0] == '6' else '.XSHE') for c in _raw]
     except Exception:
-        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
+        g.stocks = list(get_all_securities().index)
     g.max_positions = 5
     g.take_profit = 0.15
     g.stop_loss = -0.07
@@ -471,11 +473,12 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票（统一为聚宽格式 XXXXXX.XSHG/XSHE）
     try:
-        g.stocks = get_all_cached_stocks()
+        _raw = get_all_cached_stocks()
+        g.stocks = [c + ('.XSHG' if c[0] == '6' else '.XSHE') for c in _raw]
     except Exception:
-        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
+        g.stocks = list(get_all_securities().index)
     g.max_positions = 5
     g.take_profit = 0.15
     g.stop_loss = -0.07
@@ -579,11 +582,12 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票（统一为聚宽格式 XXXXXX.XSHG/XSHE）
     try:
-        g.stocks = get_all_cached_stocks()
+        _raw = get_all_cached_stocks()
+        g.stocks = [c + ('.XSHG' if c[0] == '6' else '.XSHE') for c in _raw]
     except Exception:
-        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
+        g.stocks = list(get_all_securities().index)
     g.max_positions = 5
     g.take_profit = 0.10
     g.stop_loss = -0.05
@@ -701,11 +705,12 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票（统一为聚宽格式 XXXXXX.XSHG/XSHE）
     try:
-        g.stocks = get_all_cached_stocks()
+        _raw = get_all_cached_stocks()
+        g.stocks = [c + ('.XSHG' if c[0] == '6' else '.XSHE') for c in _raw]
     except Exception:
-        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
+        g.stocks = list(get_all_securities().index)
     g.max_positions = 5
     g.take_profit = 0.20
     g.stop_loss = -0.10
@@ -805,11 +810,12 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票（统一为聚宽格式 XXXXXX.XSHG/XSHE）
     try:
-        g.stocks = get_all_cached_stocks()
+        _raw = get_all_cached_stocks()
+        g.stocks = [c + ('.XSHG' if c[0] == '6' else '.XSHE') for c in _raw]
     except Exception:
-        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
+        g.stocks = list(get_all_securities().index)
     g.max_positions = 5
     g.take_profit = 0.20
     g.stop_loss = -0.10
@@ -907,11 +913,12 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票（统一为聚宽格式 XXXXXX.XSHG/XSHE）
     try:
-        g.stocks = get_all_cached_stocks()
+        _raw = get_all_cached_stocks()
+        g.stocks = [c + ('.XSHG' if c[0] == '6' else '.XSHE') for c in _raw]
     except Exception:
-        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
+        g.stocks = list(get_all_securities().index)
     g.max_positions = 5
     g.take_profit = 0.15
     g.stop_loss = -0.07
@@ -1030,11 +1037,12 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票（统一为聚宽格式 XXXXXX.XSHG/XSHE）
     try:
-        g.stocks = get_all_cached_stocks()
+        _raw = get_all_cached_stocks()
+        g.stocks = [c + ('.XSHG' if c[0] == '6' else '.XSHE') for c in _raw]
     except Exception:
-        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
+        g.stocks = list(get_all_securities().index)
     g.max_positions = 5
     g.take_profit = 0.20
     g.stop_loss = -0.10
@@ -1161,11 +1169,12 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票（统一为聚宽格式 XXXXXX.XSHG/XSHE）
     try:
-        g.stocks = get_all_cached_stocks()
+        _raw = get_all_cached_stocks()
+        g.stocks = [c + ('.XSHG' if c[0] == '6' else '.XSHE') for c in _raw]
     except Exception:
-        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
+        g.stocks = list(get_all_securities().index)
     g.max_positions = 5
     g.take_profit = 0.15
     g.stop_loss = -0.07
@@ -1276,11 +1285,12 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票（统一为聚宽格式 XXXXXX.XSHG/XSHE）
     try:
-        g.stocks = get_all_cached_stocks()
+        _raw = get_all_cached_stocks()
+        g.stocks = [c + ('.XSHG' if c[0] == '6' else '.XSHE') for c in _raw]
     except Exception:
-        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
+        g.stocks = list(get_all_securities().index)
     g.max_positions = 5
     g.take_profit = 0.15
     g.stop_loss = -0.07
@@ -1371,11 +1381,12 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票（统一为聚宽格式 XXXXXX.XSHG/XSHE）
     try:
-        g.stocks = get_all_cached_stocks()
+        _raw = get_all_cached_stocks()
+        g.stocks = [c + ('.XSHG' if c[0] == '6' else '.XSHE') for c in _raw]
     except Exception:
-        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
+        g.stocks = list(get_all_securities().index)
     g.max_positions = 5
     g.take_profit = 0.20
     g.stop_loss = -0.10
@@ -1479,11 +1490,12 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
                              open_commission=0.0003, close_commission=0.0003,
                              close_today_commission=0, min_commission=5), type='stock')
-    # 动态股票池：从本地缓存/聚宽获取全部可用股票
+    # 动态股票池：从本地缓存/聚宽获取全部可用股票（统一为聚宽格式 XXXXXX.XSHG/XSHE）
     try:
-        g.stocks = get_all_cached_stocks()
+        _raw = get_all_cached_stocks()
+        g.stocks = [c + ('.XSHG' if c[0] == '6' else '.XSHE') for c in _raw]
     except Exception:
-        g.stocks = [s.split('.')[0] for s in list(get_all_securities().index)]
+        g.stocks = list(get_all_securities().index)
     g.max_positions = 5
     g.take_profit = 0.20
     g.stop_loss = -0.08
