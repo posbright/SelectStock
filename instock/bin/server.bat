@@ -67,7 +67,7 @@ for /f %%p in ('powershell -NoProfile -Command "(Get-NetTCPConnection -LocalPort
 )
 echo [Backend] Starting Web service ...
 start /b "" python "%PROJECT_ROOT%\instock\web\web_service.py" > "%WEB_LOG%" 2>&1
-timeout /t 4 /nobreak >nul
+timeout /t 8 /nobreak >nul
 for /f %%p in ('powershell -NoProfile -Command "(Get-NetTCPConnection -LocalPort %WEB_PORT% -State Listen -EA SilentlyContinue | Select -First 1).OwningProcess"') do (
     if "%%p" NEQ "" (
         echo [Backend] Started OK  PID=%%p  http://localhost:%WEB_PORT%/
