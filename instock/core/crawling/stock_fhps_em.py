@@ -58,7 +58,8 @@ def stock_fhps_em(date: str = "20231231") -> pd.DataFrame:
     r = fetcher.make_request(url, params=params)
     data_json = r.json()
     total_pages = int(data_json["result"]["pages"])
-    big_df = pd.DataFrame()
+    # 累积到 list 后一次性 concat，避免循环内反复 concat 导致 O(n²) 内存抖动
+    parts = []
     for page in tqdm(range(1, total_pages + 1), leave=False, disable=_tqdm_disabled):
         # 添加随机延迟，避免爬取过快
         time.sleep(random.uniform(1, 1.5))
@@ -67,7 +68,11 @@ def stock_fhps_em(date: str = "20231231") -> pd.DataFrame:
         data_json = r.json()
         temp_df = pd.DataFrame(data_json["result"]["data"])
         if not temp_df.empty:
-            big_df = pd.concat(objs=[big_df, temp_df], ignore_index=True)
+            parts.append(temp_df)
+
+    if not parts:
+        return pd.DataFrame()
+    big_df = pd.concat(parts, ignore_index=True)
 
     big_df.columns = [
         "_",
