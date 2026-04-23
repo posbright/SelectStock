@@ -632,10 +632,10 @@ class FundamentalDataProvider:
 
         result = df.copy()
 
-        # 收集查询中使用的所有非 valuation 字段名
+        # 收集查询中使用的所有缺失字段名（含 valuation 中未预计算的字段如 pe_ratio）
         needed_fields = set()
         for field_expr in q._fields:
-            if isinstance(field_expr, _FieldExpr) and field_expr._table != 'valuation':
+            if isinstance(field_expr, _FieldExpr) and field_expr._name not in result.columns:
                 needed_fields.add(field_expr._name)
         for f in q._filters:
             if isinstance(f, tuple):
@@ -732,6 +732,8 @@ class FundamentalDataProvider:
         'inc_revenue_year_on_year': (18.0, 12.0),
         'roe': (12.0, 6.0),
         'eps': (0.8, 0.5),
+        'pe_ratio': (25.0, 15.0),
+        'circulating_market_cap': (80.0, 50.0),
         'net_profit_margin': (10.0, 8.0),
         'gross_profit_margin': (30.0, 15.0),
         'total_liability': (5e9, 3e9),
@@ -841,6 +843,25 @@ class FundamentalDataProvider:
                                 real_val = ta * (float(alr) / 100)
                             except (TypeError, ValueError, ZeroDivisionError):
                                 pass
+                    elif fname == 'pe_ratio':
+                        # pe_ratio = close_price / eps
+                        eps_val = rd.get('eps')
+                        if eps_val is not None:
+                            try:
+                                eps_f = float(eps_val)
+                                if eps_f > 0 and date_str:
+                                    prices = self._price_lookup.get(code)
+                                    close = prices.get(date_str, 0) if prices else 0
+                                    if close > 0:
+                                        real_val = close / eps_f
+                            except (TypeError, ValueError, ZeroDivisionError):
+                                pass
+                    elif fname == 'circulating_market_cap':
+                        # circulating_market_cap ≈ market_cap（无流通股数据时近似）
+                        if 'market_cap' in df.columns:
+                            idx = df.index[df['code'] == code]
+                            if len(idx) > 0:
+                                real_val = df.loc[idx[0], 'market_cap']
                     elif fname == 'net_operate_cash_flow':
                         ocfps = rd.get('ocfps')
                         if ocfps is not None and self._stock_info is not None:
