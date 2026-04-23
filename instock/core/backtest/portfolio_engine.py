@@ -57,6 +57,13 @@ class PortfolioBacktestEngine:
         )
     """
 
+    # 常见指数代码，用于区分股票和指数（history/get_price 需要不同数据源）
+    _INDEX_CODES = {
+        '000002', '000003', '000016', '000300', '000688',
+        '000852', '000905', '000906', '000985',
+        '399001', '399006', '399300', '399905', '399951',
+    }
+
     def __init__(self):
         self.context = None
         self.data_proxy = None
@@ -149,6 +156,13 @@ class PortfolioBacktestEngine:
             for _, row in self._benchmark_data.iterrows():
                 d = row['date'].date() if hasattr(row['date'], 'date') else row['date']
                 benchmark_prices[d] = row['close']
+            # 将基准数据注入 _stock_data，使策略中 history(benchmark) 可用
+            bm_code = self._normalize_code(benchmark)
+            if bm_code not in self._stock_data:
+                bm_full = load_benchmark_data(bm_code, pre_start, end_date)
+                if bm_full is not None:
+                    self._stock_data[bm_code] = self._to_indexed_df(bm_full)
+                    self.data_proxy._set_history(bm_code, self._stock_data[bm_code])
 
         # 8. 主回测循环
         prev_nav = 1.0
@@ -1075,14 +1089,19 @@ class PortfolioBacktestEngine:
                 self.data_proxy._set_history(code, df)
 
     def _load_single_stock(self, code):
-        """延迟加载单只股票"""
+        """延迟加载单只股票或指数"""
         if code in self._stock_data:
             return
         # 使用更早的开始日期来提供 history() 数据
         pre_start = None
         if self.context.current_dt:
             pre_start = (pd.Timestamp(self.context.current_dt) - pd.Timedelta(days=400)).strftime('%Y-%m-%d')
-        df = load_stock_data(code, start_date=pre_start)
+
+        # 指数代码使用指数数据源
+        if code in self._INDEX_CODES or code.startswith('399'):
+            df = load_benchmark_data(code, start_date=pre_start)
+        else:
+            df = load_stock_data(code, start_date=pre_start)
         if df is not None:
             self._stock_data[code] = self._to_indexed_df(df)
             self.data_proxy._set_history(code, self._stock_data[code])
