@@ -21,6 +21,10 @@ __date__ = '2026/02/14'
 # 数据库连接重试次数（应用于 get_connection / insert / executeSql）
 _DB_CONN_RETRIES = _cfg.get_int('INSTOCK_DB_CONN_RETRIES', 1)
 
+# 批量写入分块大小（避免一次性构造巨大 SQL 语句导致 OOM）
+# 默认 500 行/批：4367 行会分 ~9 批执行，单批 SQL 约 10-30 MB
+_DB_INSERT_CHUNKSIZE = _cfg.get_int('INSTOCK_DB_INSERT_CHUNKSIZE', 500)
+
 db_host = _cfg.get_str('db_host', '127.0.0.1')       # 数据库服务主机
 db_user = _cfg.get_str('db_user', 'root')            # 数据库访问用户
 db_password = _cfg.get_str('db_password', '')         # 数据库访问密码（生产环境务必配置）
@@ -232,14 +236,15 @@ def insert_other_db_from_df(to_db, data, table_name, cols_type, write_index, pri
         try:
             if cols_type is None:
                 data.to_sql(name=table_name, con=engine_mysql, schema=to_db, if_exists='append',
-                            index=write_index, method=insert_method)
+                            index=write_index, method=insert_method, chunksize=_DB_INSERT_CHUNKSIZE)
             elif not cols_type:
                 data.to_sql(name=table_name, con=engine_mysql, schema=to_db, if_exists='append',
                             dtype={col_name: NVARCHAR(255) for col_name in col_name_list},
-                            index=write_index, method=insert_method)
+                            index=write_index, method=insert_method, chunksize=_DB_INSERT_CHUNKSIZE)
             else:
                 data.to_sql(name=table_name, con=engine_mysql, schema=to_db, if_exists='append',
-                            dtype=cols_type, index=write_index, method=insert_method)
+                            dtype=cols_type, index=write_index, method=insert_method,
+                            chunksize=_DB_INSERT_CHUNKSIZE)
             break  # 成功则跳出重试循环
         except Exception as e:
             if attempt < max_retries and _is_retryable_error(e):

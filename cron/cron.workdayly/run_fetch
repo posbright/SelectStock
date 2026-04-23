@@ -18,7 +18,7 @@ if [ "${INSTOCK_NO_SERVICE_STOP:-0}" != "1" ]; then
     SERVICES_STOPPED=1
 fi
 
-run_job "数据获取 (fetch_daily_job)" "instock/job/fetch_daily_job.py"
+run_job "数据获取 (fetch_daily_job)" "instock/job/fetch_daily_job.py" "${INSTOCK_FETCH_TIMEOUT:-7200}"
 RC=$?
 
 # ── 恢复服务 ──
