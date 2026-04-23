@@ -224,6 +224,101 @@ def handle_data(context, data):
 ''',
     },
     {
+        'id': 'fundamental_momentum',
+        'name': '基本面筛选动量策略',
+        'category': 'multi_factor',
+        'description': '通过基本面指标（ROE、净利润增速、市盈率）从全市场筛选优质股票，再按动量排序选出前10只，每20个交易日调仓',
+        'code': '''# 基本面筛选动量策略
+# 1. 从全市场筛选基本面优质股票：ROE>8%、净利润正增长、PE合理(0-60)
+# 2. 在优质股票池中按近20日动量排序，选出前10只
+# 3. 等权持有，每20个交易日调仓一次
+import jqdata
+
+def initialize(context):
+    set_benchmark('000300.XSHG')
+    set_option('use_real_price', True)
+    set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
+                             open_commission=0.0003, close_commission=0.0003,
+                             close_today_commission=0, min_commission=5), type='stock')
+    g.hold_num = 10          # 持股数量
+    g.refresh_rate = 20      # 调仓周期（交易日）
+    g.days = 0
+    run_daily(rebalance, 'every_bar')
+
+def get_fundamental_pool(context):
+    """基本面筛选：ROE>8、净利润同比增速>0、PE在0-60之间、市值>30亿"""
+    q = query(
+        valuation.code,
+        valuation.market_cap,
+        valuation.pe_ratio,
+        indicator.roe,
+        indicator.inc_net_profit_year_on_year
+    ).filter(
+        indicator.roe > 8,
+        indicator.inc_net_profit_year_on_year > 0,
+        valuation.pe_ratio > 0,
+        valuation.pe_ratio < 60,
+        valuation.market_cap > 30
+    ).order_by(
+        indicator.roe.desc()
+    ).limit(100)
+    df = get_fundamentals(q)
+    if df is None or len(df) == 0:
+        return []
+    stock_list = list(df['code'])
+    # 过滤停牌股票
+    stock_list = filter_paused(stock_list)
+    return stock_list
+
+def filter_paused(stock_list):
+    """过滤停牌股票"""
+    current_data = get_current_data()
+    return [s for s in stock_list if not current_data[s].paused]
+
+def select_by_momentum(stock_list, top_n):
+    """在基本面股票池中按近20日动量排序，选出前N只"""
+    momentum = {}
+    for code in stock_list:
+        h = history(code, 20, 'close')
+        if len(h) >= 20 and h.iloc[0] > 0:
+            momentum[code] = h.iloc[-1] / h.iloc[0] - 1
+    if not momentum:
+        return []
+    ranked = sorted(momentum, key=momentum.get, reverse=True)
+    return ranked[:top_n]
+
+def rebalance(context):
+    g.days += 1
+    if g.days % g.refresh_rate != 1:
+        return
+
+    # 第一步：基本面筛选
+    pool = get_fundamental_pool(context)
+    if not pool:
+        log.info("基本面筛选无结果，跳过调仓")
+        return
+
+    # 第二步：动量排序选股
+    targets = select_by_momentum(pool, g.hold_num)
+    if not targets:
+        log.info("动量排序无结果，跳过调仓")
+        return
+
+    log.info("基本面+动量选股: " + str(targets))
+
+    # 卖出不在目标列表中的持仓
+    for code in list(context.portfolio.positions.keys()):
+        if code not in targets:
+            order_target(code, 0)
+            log.info("调仓卖出 " + code)
+
+    # 等权买入目标股票
+    target_value = context.portfolio.total_value / g.hold_num
+    for code in targets:
+        order_target_value(code, target_value)
+''',
+    },
+    {
         'id': 'small_cap_jq',
         'name': '小市值策略(聚宽)',
         'category': 'stock',
