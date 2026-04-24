@@ -11,6 +11,13 @@ import pandas as pd
 cpath_current = os.path.dirname(os.path.dirname(__file__))
 cpath = os.path.abspath(os.path.join(cpath_current, os.pardir))
 sys.path.append(cpath)
+# 统一日志：stock_basic_other.log + stock_error.log + sys.excepthook 兜底
+try:
+    from instock.lib.log_config import setup_logging
+    setup_logging('basic_other')
+except Exception:
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s [%(levelname)s] %(message)s')
 import instock.lib.run_template as runt
 import instock.core.tablestructure as tbs
 import instock.lib.database as mdb

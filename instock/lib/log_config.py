@@ -102,3 +102,35 @@ def setup_logging(name='execute', level=logging.INFO):
         datefmt='%H:%M:%S',
     ))
     root_logger.addHandler(console_handler)
+
+    # 4. 安装未捕获异常钩子 — 确保 main() 抛出的任何异常都会写入
+    #    stock_{name}.log 和 stock_error.log（而非仅到 stderr）
+    #    这是防止"进程执行失败但日志无任何错误信息"的关键保障。
+    _install_excepthook()
+
+
+def _install_excepthook():
+    """将 sys.excepthook 重定向到 logging，保证未捕获异常留痕。
+
+    覆盖场景：
+    - 作业顶层 main() 未加 try/except 时的未捕获异常
+    - 导入阶段（setup_logging 后）的异常
+    注意：SIGKILL/OOM 杀死进程不会触发此钩子（Python 无法响应），
+          这类场景需要依赖 cron 层捕获退出码 + 父进程子进程化保护。
+    """
+    import sys as _sys
+    _orig_hook = _sys.excepthook
+
+    def _log_uncaught(exc_type, exc_value, exc_tb):
+        # KeyboardInterrupt 保留默认行为，方便 Ctrl+C 退出
+        if issubclass(exc_type, KeyboardInterrupt):
+            _orig_hook(exc_type, exc_value, exc_tb)
+            return
+        logging.critical(
+            "未捕获异常导致进程终止",
+            exc_info=(exc_type, exc_value, exc_tb),
+        )
+        # 仍调用原 hook，保留 stderr 输出便于 cron 层可见
+        _orig_hook(exc_type, exc_value, exc_tb)
+
+    _sys.excepthook = _log_uncaught
