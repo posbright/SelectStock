@@ -30,6 +30,7 @@ import logging
 import gc
 import os.path
 import sys
+import subprocess
 
 cpath_current = os.path.dirname(os.path.dirname(__file__))
 cpath = os.path.abspath(os.path.join(cpath_current, os.pardir))
@@ -49,7 +50,7 @@ import instock.lib.database as mdb
 import instock.lib.trade_time as trd
 import gpt_value_data_job as gptj
 import streaming_analysis_job as saj
-import backtest_data_daily_job as bdj
+# 注：backtest_data_daily_job 通过子进程调用，不在此导入
 from instock.lib.job_tracker import record_task_start, record_task_end, record_task_skipped
 import instock.lib.envconfig as _cfg
 
@@ -61,6 +62,36 @@ __date__ = '2026/03/12'
 ANALYSIS_DONE_THRESHOLD = _cfg.get_int('INSTOCK_ANALYSIS_DONE_THRESHOLD', 1000)
 
 _JOB_NAME = 'run_analysis'
+_JOB_DIR = os.path.dirname(os.path.abspath(__file__))
+# 回测子进程超时（默认 2 小时）
+_BACKTEST_TIMEOUT = _cfg.get_int('INSTOCK_BACKTEST_TIMEOUT', 7200)
+
+
+def _run_job_subprocess(script_name, label, timeout):
+    """以独立子进程运行 job 脚本，防止 OOM 波及当前进程。
+
+    Returns:
+        bool: True 表示子进程正常退出（exit code 0），False 表示失败/超时/异常。
+    """
+    script_path = os.path.join(_JOB_DIR, script_name)
+    try:
+        logging.info(f"{label}: 启动子进程 {script_name}")
+        result = subprocess.run(
+            [sys.executable, script_path],
+            env={**os.environ, 'PYTHONPATH': cpath},
+            timeout=timeout,
+        )
+        if result.returncode != 0:
+            logging.warning(f"{label}: 子进程退出码 {result.returncode}（可能 OOM 被杀）")
+            return False
+        logging.info(f"{label}: 子进程执行成功")
+        return True
+    except subprocess.TimeoutExpired:
+        logging.error(f"{label}: 子进程执行超时（{timeout}秒）")
+        return False
+    except Exception:
+        logging.error(f"{label}: 子进程启动异常", exc_info=True)
+        return False
 
 
 def _is_analysis_done(date_str):
@@ -222,10 +253,18 @@ def main():
     gc.collect()
 
     # Step 4: 策略回测（从磁盘缓存按需读取）
+    # ⚠️ 以独立子进程运行：回测需要加载大量 K 线数据和 ThreadPoolExecutor，
+    # 在低内存机器上易 OOM。子进程隔离确保 OOM 不会波及当前进程，保证
+    # 完成日志和 task_runs 状态能正确写入。
     t4 = record_task_start(_JOB_NAME, 'backtest', run_date_nph)
     try:
-        bdj.main()
-        record_task_end(_JOB_NAME, 'backtest', run_date_nph, t4, success=True)
+        ok = _run_job_subprocess('backtest_data_daily_job.py', '数据分析 backtest',
+                                 timeout=_BACKTEST_TIMEOUT)
+        if ok:
+            record_task_end(_JOB_NAME, 'backtest', run_date_nph, t4, success=True)
+        else:
+            record_task_end(_JOB_NAME, 'backtest', run_date_nph, t4,
+                            success=False, message='子进程失败/超时/OOM')
     except Exception as e:
         logging.error("数据分析 backtest 异常", exc_info=True)
         record_task_end(_JOB_NAME, 'backtest', run_date_nph, t4, success=False, message=str(e))
