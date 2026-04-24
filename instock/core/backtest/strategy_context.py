@@ -66,6 +66,21 @@ class Position:
         return self.amount
 
     @property
+    def price_basis(self):
+        """持仓成本价（聚宽兼容别名，等同 avg_cost）"""
+        return self.avg_cost
+
+    @property
+    def hold_cost(self):
+        """持仓成本价（聚宽兼容别名，等同 avg_cost）"""
+        return self.avg_cost
+
+    @property
+    def init_time(self):
+        """占位：建仓时间（向后兼容，返回 None）"""
+        return None
+
+    @property
     def profit(self):
         """浮动盈亏"""
         if self.amount == 0:

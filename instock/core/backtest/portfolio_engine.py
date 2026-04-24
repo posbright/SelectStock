@@ -859,9 +859,17 @@ class PortfolioBacktestEngine:
                 return
 
             sell_amount = min(sell_amount, pos.closeable_amount)
-            sell_amount = int(sell_amount / 100) * 100
-            if sell_amount <= 0:
-                sell_amount = pos.closeable_amount
+            # 按 A 股 100 股整手规则取整；仅当持仓本身是奇零残股（<100）
+            # 时才允许一次性清空，否则小于 100 股的卖出请求应拒绝而非
+            # 静默放大为全仓清仓（历史 bug: sell 50 → 意外清空 300 股持仓）。
+            rounded = int(sell_amount / 100) * 100
+            if rounded <= 0:
+                if pos.closeable_amount < 100:
+                    sell_amount = pos.closeable_amount  # 残股一次清空
+                else:
+                    return  # 请求量不足一手，拒绝订单
+            else:
+                sell_amount = rounded
 
             # 卖出前记录持仓均价，用于计算平仓盈亏
             avg_cost_before_sell = pos.avg_cost
