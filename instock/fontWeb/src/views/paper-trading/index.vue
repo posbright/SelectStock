@@ -31,7 +31,7 @@
         <el-table-column label="回测收益" width="95" align="center">
           <template #default="{ row }">
             <span v-if="hasBacktest(row)" :class="retCls(row.backtest_return)">
-              {{ fmtPctDash(row.backtest_return) }}
+              {{ fmtPct(row.backtest_return) }}
             </span>
             <span v-else>--</span>
           </template>

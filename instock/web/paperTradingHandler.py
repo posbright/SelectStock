@@ -26,7 +26,7 @@ class CreatePaperTradingHandler(webBase.BaseHandler, ABC):
         try:
             body = json.loads(self.request.body)
             strategy_id = body.get('strategy_id')
-            backtest_id = _parse_optional_int(body.get('backtest_id'))
+            requested_backtest_id = _parse_optional_int(body.get('backtest_id'))
             name = body.get('name', '')
             initial_cash = body.get('initial_cash', 1000000)
             run_frequency = body.get('run_frequency', 'daily')
@@ -48,14 +48,10 @@ class CreatePaperTradingHandler(webBase.BaseHandler, ABC):
             _ensure_paper_table()
             _ensure_backtest_table_if_available()
 
-            if backtest_id:
-                bt_rows = mdb.executeSqlFetch(
-                    'SELECT id, initial_cash FROM cn_stock_backtest_portfolio '
-                    'WHERE id=%s AND strategy_id=%s AND status=%s',
-                    (backtest_id, strategy_id, 'completed'))
-                if not bt_rows:
-                    self.write(json.dumps({'code': -1, 'msg': '请选择该策略已完成的回测版本'}))
-                    return
+            backtest_id = _resolve_backtest_id(strategy_id, requested_backtest_id)
+            if backtest_id is None:
+                self.write(json.dumps({'code': -1, 'msg': '该策略暂无已完成回测，请先运行一次组合回测'}))
+                return
 
             with mdb.get_connection() as conn:
                 with conn.cursor() as cur:
@@ -74,7 +70,7 @@ class CreatePaperTradingHandler(webBase.BaseHandler, ABC):
             if paper_id is None:
                 self.write(json.dumps({'code': -1, 'msg': '创建模拟盘失败'}))
                 return
-            self.write(json.dumps({'code': 0, 'data': {'id': paper_id}}, ensure_ascii=False))
+            self.write(json.dumps({'code': 0, 'data': {'id': paper_id, 'backtest_id': backtest_id}}, ensure_ascii=False))
         except Exception as e:
             mdb._invalidate_shared_conn()  # 废弃可能损坏的连接
             logging.error("CreatePaperTrading异常", exc_info=True)
@@ -110,6 +106,26 @@ def _parse_optional_int(value):
 
 def _json_int(value):
     return int(value) if value is not None else None
+
+
+def _resolve_backtest_id(strategy_id, requested_backtest_id=None):
+    strategy_id = _parse_optional_int(strategy_id)
+    if strategy_id is None:
+        return None
+
+    if requested_backtest_id is not None:
+        rows = mdb.executeSqlFetch(
+            'SELECT id FROM cn_stock_backtest_portfolio '
+            'WHERE id=%s AND strategy_id=%s AND status=%s',
+            (requested_backtest_id, strategy_id, 'completed'))
+        return int(rows[0][0]) if rows else None
+
+    rows = mdb.executeSqlFetch(
+        'SELECT id FROM cn_stock_backtest_portfolio '
+        'WHERE strategy_id=%s AND status=%s '
+        'ORDER BY completed_at DESC, id DESC LIMIT 1',
+        (strategy_id, 'completed'))
+    return int(rows[0][0]) if rows else None
 
 
 def _ensure_backtest_table_if_available():

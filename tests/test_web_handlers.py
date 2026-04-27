@@ -1308,6 +1308,40 @@ class TestPaperTradingHandlerClasses(unittest.TestCase):
             self.assertTrue(hasattr(cls, 'get'), f'{name} missing get()')
 
 
+class TestPaperTradingBacktestBinding(unittest.TestCase):
+    """Tests for paper trading backtest binding helpers."""
+
+    @patch('instock.web.paperTradingHandler.mdb.executeSqlFetch')
+    def test_resolve_backtest_validates_requested_id(self, mock_fetch):
+        from instock.web.paperTradingHandler import _resolve_backtest_id
+        mock_fetch.return_value = [(123,)]
+
+        result = _resolve_backtest_id(87, 123)
+
+        self.assertEqual(result, 123)
+        sql, params = mock_fetch.call_args.args
+        self.assertIn('id=%s', sql)
+        self.assertEqual(params, (123, 87, 'completed'))
+
+    @patch('instock.web.paperTradingHandler.mdb.executeSqlFetch')
+    def test_resolve_backtest_uses_latest_completed_when_missing(self, mock_fetch):
+        from instock.web.paperTradingHandler import _resolve_backtest_id
+        mock_fetch.return_value = [(132,)]
+
+        result = _resolve_backtest_id('84', None)
+
+        self.assertEqual(result, 132)
+        sql, params = mock_fetch.call_args.args
+        self.assertIn('ORDER BY completed_at DESC, id DESC LIMIT 1', sql)
+        self.assertEqual(params, (84, 'completed'))
+
+    @patch('instock.web.paperTradingHandler.mdb.executeSqlFetch', return_value=[])
+    def test_resolve_backtest_returns_none_without_completed_backtest(self, _mock_fetch):
+        from instock.web.paperTradingHandler import _resolve_backtest_id
+
+        self.assertIsNone(_resolve_backtest_id(84, None))
+
+
 # ============================================================
 # 8. strategyParamsHandler.py
 # ============================================================

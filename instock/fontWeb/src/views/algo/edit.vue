@@ -471,14 +471,20 @@ async function doCreatePaper() {
   try {
     const res = await createPaperTrading({
       strategy_id: strategy.value.id,
+      backtest_id: btBacktestId.value,
       name: '模拟-' + strategy.value.name,
       initial_cash: btCash.value,
+      run_frequency: 'daily',
     }) as any
-    if (unwrap(res).ok) {
+    const { ok, data } = unwrap(res)
+    if (ok) {
       ElMessage.success('模拟盘已创建')
+      if (data?.backtest_id) btBacktestId.value = data.backtest_id
       router.push('/algo/paper')
+    } else {
+      ElMessage.error(data?.msg || '创建失败')
     }
-  } catch (e) { ElMessage.error('创建失败') }
+  } catch (e: any) { ElMessage.error(e?.message || '创建失败') }
 }
 
 function renderChart() {
