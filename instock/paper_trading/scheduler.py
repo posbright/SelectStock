@@ -8,10 +8,9 @@
 
 调度逻辑：
 1. 每 CHECK_INTERVAL 分钟检查一次
-2. 仅在交易日收盘后（默认 16:00）触发
-3. 同一交易日只执行一次（通过 _last_run_date 去重）
-4. 在线程池中执行，不阻塞 IOLoop
-5. 执行结果写入 cn_stock_paper_execution_log 表
+2. 交易日内持续触发；每个模拟盘是否到期由 paper_engine 按自身频率判断
+3. 在线程池中执行，不阻塞 IOLoop
+4. 执行结果写入 cn_stock_paper_execution_log 表
 """
 
 import datetime
@@ -67,19 +66,9 @@ class PaperTradingScheduler:
         now = now or datetime.datetime.now()
         today = now.date() if isinstance(now, datetime.datetime) else now
 
-        # 已运行过今天的，跳过
-        if self._last_run_date == today:
-            return False, 'already_run'
-
         # 非交易日，跳过
         if not trd.is_trade_date(today):
             return False, 'not_trade_day'
-
-        # 收盘前不执行
-        if isinstance(now, datetime.datetime):
-            if (now.hour < self._run_after_hour or
-                    (now.hour == self._run_after_hour and now.minute < self._run_after_minute)):
-                return False, 'before_run_time'
 
         # 正在运行中，跳过
         if self._running:
@@ -107,7 +96,7 @@ class PaperTradingScheduler:
         try:
             log.info("[模拟交易调度] 开始执行每日模拟交易 (%s)", trade_date)
             from instock.paper_trading.paper_engine import run_all_paper_trading
-            results = run_all_paper_trading()
+            results = run_all_paper_trading(scheduled=True)
             if results:
                 ok = sum(1 for r in results if r.get('status') == 'ok')
                 skipped = sum(1 for r in results if r.get('status') == 'skipped')

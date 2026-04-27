@@ -26,24 +26,47 @@ class CreatePaperTradingHandler(webBase.BaseHandler, ABC):
         try:
             body = json.loads(self.request.body)
             strategy_id = body.get('strategy_id')
+            backtest_id = _parse_optional_int(body.get('backtest_id'))
             name = body.get('name', '')
             initial_cash = body.get('initial_cash', 1000000)
+            run_frequency = body.get('run_frequency', 'daily')
+            start_at = body.get('start_at')
 
             if not strategy_id:
                 self.write(json.dumps({'code': -1, 'msg': '缺少 strategy_id'}))
                 return
+            if run_frequency not in ('daily', 'hourly', '15m'):
+                self.write(json.dumps({'code': -1, 'msg': '运行频率参数错误'}))
+                return
+
+            start_dt = _parse_datetime(start_at) if start_at else datetime.datetime.now()
+            if start_dt is None:
+                self.write(json.dumps({'code': -1, 'msg': '开始时间格式错误'}))
+                return
 
             from instock.paper_trading.paper_engine import _ensure_paper_table
             _ensure_paper_table()
+            _ensure_backtest_table_if_available()
+
+            if backtest_id:
+                bt_rows = mdb.executeSqlFetch(
+                    'SELECT id, initial_cash FROM cn_stock_backtest_portfolio '
+                    'WHERE id=%s AND strategy_id=%s AND status=%s',
+                    (backtest_id, strategy_id, 'completed'))
+                if not bt_rows:
+                    self.write(json.dumps({'code': -1, 'msg': '请选择该策略已完成的回测版本'}))
+                    return
 
             with mdb.get_connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         'INSERT INTO cn_stock_paper_trading '
-                        '(strategy_id, name, initial_cash, current_cash, current_value, status) '
-                        'VALUES (%s, %s, %s, %s, %s, %s)',
-                        (strategy_id, name or f'模拟盘-{strategy_id}', initial_cash,
-                         initial_cash, initial_cash, 'running'))
+                        '(strategy_id, backtest_id, name, initial_cash, current_cash, '
+                        'current_value, status, run_frequency, start_at) '
+                        'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)',
+                        (strategy_id, backtest_id, name or f'模拟盘-{strategy_id}',
+                         initial_cash, initial_cash, initial_cash, 'running',
+                         run_frequency, start_dt))
                     cur.execute('SELECT LAST_INSERT_ID()')
                     row = cur.fetchone()
                     paper_id = row[0] if row is not None else None
@@ -56,6 +79,45 @@ class CreatePaperTradingHandler(webBase.BaseHandler, ABC):
             mdb._invalidate_shared_conn()  # 废弃可能损坏的连接
             logging.error("CreatePaperTrading异常", exc_info=True)
             self.write(json.dumps({'code': -1, 'msg': str(e)}))
+
+
+def _parse_datetime(value):
+    """Parse frontend datetime/date strings into datetime, returning None on invalid input."""
+    if isinstance(value, datetime.datetime):
+        return value
+    if isinstance(value, datetime.date):
+        return datetime.datetime.combine(value, datetime.time.min)
+    if not value:
+        return None
+    text = str(value).strip()
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d'):
+        try:
+            parsed = datetime.datetime.strptime(text[:19] if 'T' in text else text, fmt)
+            return parsed
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_optional_int(value):
+    if value is None or value == '':
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _json_int(value):
+    return int(value) if value is not None else None
+
+
+def _ensure_backtest_table_if_available():
+    try:
+        from instock.web.portfolioBacktestHandler import _ensure_backtest_table
+        _ensure_backtest_table()
+    except Exception:
+        logging.debug("确保组合回测表存在失败", exc_info=True)
 
 
 class PaperTradingActionHandler(webBase.BaseHandler, ABC):
@@ -92,13 +154,17 @@ class GetPaperTradingListHandler(webBase.BaseHandler, ABC):
         try:
             from instock.paper_trading.paper_engine import _ensure_paper_table
             _ensure_paper_table()
+            _ensure_backtest_table_if_available()
 
             rows = mdb.executeSqlFetch(
                 'SELECT pt.id, sc.name as strategy_name, pt.name, '
                 'pt.initial_cash, pt.current_cash, pt.current_value, '
-                'pt.status, pt.started_at, pt.last_run_date '
+                'pt.status, pt.started_at, pt.last_run_date, '
+                'pt.run_frequency, pt.start_at, pt.backtest_id, '
+                'bp.total_return, bp.strategy_name as backtest_name '
                 'FROM cn_stock_paper_trading pt '
                 'LEFT JOIN cn_stock_strategy_code sc ON pt.strategy_id = sc.id '
+                'LEFT JOIN cn_stock_backtest_portfolio bp ON pt.backtest_id = bp.id '
                 'ORDER BY pt.id DESC LIMIT 50')
 
             data = []
@@ -168,6 +234,11 @@ class GetPaperTradingListHandler(webBase.BaseHandler, ABC):
                         'status': r[6],
                         'started_at': r[7].strftime('%Y-%m-%d') if r[7] else '',
                         'last_run_date': str(r[8]) if r[8] else '未运行',
+                        'run_frequency': r[9] or 'daily',
+                        'start_at': r[10].strftime('%Y-%m-%d %H:%M:%S') if r[10] else '',
+                        'backtest_id': _json_int(r[11]),
+                        'backtest_return': float(r[12]) if r[12] is not None else None,
+                        'backtest_name': r[13] or '',
                     })
             self.write(json.dumps({'code': 0, 'data': data}, ensure_ascii=False))
         except Exception as e:
@@ -293,12 +364,17 @@ class GetPaperTradingDetailHandler(webBase.BaseHandler, ABC):
                 self.write(json.dumps({'code': -1, 'msg': '缺少 id'}))
                 return
 
+            _ensure_backtest_table_if_available()
+
             rows = mdb.executeSqlFetch(
                 'SELECT pt.id, sc.name, pt.name, pt.initial_cash, '
                 'pt.current_cash, pt.current_value, pt.status, '
-                'pt.started_at, pt.last_run_date '
+                'pt.started_at, pt.last_run_date, pt.run_frequency, '
+                'pt.start_at, pt.backtest_id, bp.total_return, '
+                'bp.strategy_name as backtest_name '
                 'FROM cn_stock_paper_trading pt '
                 'LEFT JOIN cn_stock_strategy_code sc ON pt.strategy_id = sc.id '
+                'LEFT JOIN cn_stock_backtest_portfolio bp ON pt.backtest_id = bp.id '
                 'WHERE pt.id = %s', (paper_id,))
 
             if not rows:
@@ -320,6 +396,11 @@ class GetPaperTradingDetailHandler(webBase.BaseHandler, ABC):
                 'status': r[6],
                 'started_at': r[7].strftime('%Y-%m-%d') if r[7] else '',
                 'last_run_date': str(r[8]) if r[8] else '',
+                'run_frequency': r[9] or 'daily',
+                'start_at': r[10].strftime('%Y-%m-%d %H:%M:%S') if r[10] else '',
+                'backtest_id': _json_int(r[11]),
+                'backtest_return': float(r[12]) if r[12] is not None else None,
+                'backtest_name': r[13] or '',
             }
 
             # 当前持仓（支持按日期查询历史持仓）
@@ -549,12 +630,14 @@ class GetPaperCompareHandler(webBase.BaseHandler, ABC):
             from instock.paper_trading.paper_engine import _ensure_paper_table, _ensure_nav_table
             _ensure_paper_table()
             _ensure_nav_table()
+            _ensure_backtest_table_if_available()
 
             placeholders = ','.join(['%s'] * len(paper_ids))
 
             info_rows = mdb.executeSqlFetch(
                 f'SELECT pt.id, sc.name as strategy_name, pt.name, '
-                f'pt.initial_cash, pt.current_value, pt.status, pt.started_at, pt.last_run_date '
+                f'pt.initial_cash, pt.current_value, pt.status, pt.started_at, '
+                f'pt.last_run_date, pt.run_frequency, pt.start_at '
                 f'FROM cn_stock_paper_trading pt '
                 f'LEFT JOIN cn_stock_strategy_code sc ON pt.strategy_id = sc.id '
                 f'WHERE pt.id IN ({placeholders})', tuple(paper_ids))
@@ -575,6 +658,8 @@ class GetPaperCompareHandler(webBase.BaseHandler, ABC):
                         'status': r[5],
                         'started_at': r[6].strftime('%Y-%m-%d') if r[6] else '',
                         'last_run_date': str(r[7]) if r[7] else '',
+                        'run_frequency': r[8] or 'daily',
+                        'start_at': r[9].strftime('%Y-%m-%d %H:%M:%S') if r[9] else '',
                         'nav': [],
                         'metrics': {},
                     }

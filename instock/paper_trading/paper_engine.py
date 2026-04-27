@@ -26,8 +26,31 @@ from instock.core.backtest.strategy_context import (
     Context, GlobalVars, DataProxy, TradeRecord, NavRecord,
 )
 from instock.core.backtest.strategy_sandbox import compile_strategy
-from instock.core.backtest.data_feed import load_stock_data
+from instock.core.backtest.data_feed import load_stock_data, load_benchmark_data
 from .state_manager import serialize_portfolio, restore_portfolio
+
+_INDEX_CODES = {
+    '000002', '000003', '000016', '000300', '000688',
+    '000852', '000905', '000906', '000985',
+    '399001', '399006', '399300', '399905', '399951',
+}
+
+
+def _normalize_security_code(code):
+    text = str(code or '').strip()
+    return text.split('.')[0] if '.' in text else text
+
+
+def _is_index_code(code):
+    clean = _normalize_security_code(code)
+    return clean in _INDEX_CODES or clean.startswith('399')
+
+
+def _load_security_data(code, start_date=None, end_date=None):
+    clean = _normalize_security_code(code)
+    if _is_index_code(clean):
+        return clean, load_benchmark_data(clean, start_date, end_date)
+    return clean, load_stock_data(clean, start_date, end_date)
 
 # 基本面数据提供器（延迟初始化，仅在策略需要时加载）
 _fundamental_provider = None
@@ -50,7 +73,7 @@ __author__ = 'InStock'
 __date__ = '2026/03/13'
 
 
-def run_paper_trading_daily(paper_id):
+def run_paper_trading_daily(paper_id, scheduled=False, now=None):
     """
     执行指定模拟盘的每日交易。
 
@@ -80,7 +103,8 @@ def run_paper_trading_daily(paper_id):
         _ensure_paper_table()
         rows = mdb.executeSqlFetch(
             'SELECT pt.id, pt.strategy_id, pt.initial_cash, pt.status, '
-            'pt.last_run_date, pt.state_json, sc.code as strategy_code '
+            'pt.last_run_date, pt.state_json, sc.code as strategy_code, '
+            'pt.run_frequency, pt.start_at, pt.last_run_at '
             'FROM cn_stock_paper_trading pt '
             'JOIN cn_stock_strategy_code sc ON pt.strategy_id = sc.id '
             'WHERE pt.id = %s', (paper_id,))
@@ -94,15 +118,21 @@ def run_paper_trading_daily(paper_id):
         last_run_date = row[4]
         state_json = row[5]
         strategy_code = row[6]
+        run_frequency = _normalize_run_frequency(row[7] if len(row) > 7 else 'daily')
+        start_at = row[8] if len(row) > 8 else None
+        last_run_at = row[9] if len(row) > 9 else None
         initial_cash = float(row[2]) if row[2] else 1000000
 
         if status != 'running':
             result = {'status': 'skipped', 'message': f'模拟盘状态为 {status}'}
             return result
 
-        # 防止重复运行
-        if last_run_date and str(last_run_date) >= date_str:
-            result = {'status': 'skipped', 'message': f'今日已运行 ({last_run_date})'}
+        now_dt = now or datetime.datetime.now()
+        due, reason = _is_paper_due(
+            run_frequency, start_at, last_run_date, last_run_at,
+            date_str, now_dt, scheduled=scheduled)
+        if not due:
+            result = {'status': 'skipped', 'message': reason}
             return result
 
         logging.info(f"[模拟交易] 执行模拟盘 #{paper_id}，日期 {date_str}")
@@ -140,22 +170,27 @@ def run_paper_trading_daily(paper_id):
                 if attr.startswith('_'):
                     continue
                 val = getattr(obj, attr, None)
-                if isinstance(val, str) and len(val) == 6 and val.isdigit():
-                    all_codes.add(val)
+                if isinstance(val, str):
+                    clean = _normalize_security_code(val)
+                    if len(clean) == 6 and clean.isdigit():
+                        all_codes.add(clean)
                 elif isinstance(val, (list, tuple, set)):
                     for item in val:
-                        if isinstance(item, str) and len(item) == 6 and item.isdigit():
-                            all_codes.add(item)
+                        if isinstance(item, str):
+                            clean = _normalize_security_code(item)
+                            if len(clean) == 6 and clean.isdigit():
+                                all_codes.add(clean)
 
         today_prices = {}
         pre_start = (pd.Timestamp(date_str) - pd.Timedelta(days=60)).strftime('%Y-%m-%d')
 
         # 优先从数据库批量加载当日行情（由定时任务每日写入 cn_stock_spot）
         from instock.core.backtest.data_feed import _batch_load_today_from_db
-        db_today = _batch_load_today_from_db(list(all_codes), date_str) if all_codes else {}
+        stock_codes = [code for code in all_codes if not _is_index_code(code)]
+        db_today = _batch_load_today_from_db(stock_codes, date_str) if stock_codes else {}
 
         for code in all_codes:
-            df = load_stock_data(code, pre_start, date_str)
+            code, df = _load_security_data(code, pre_start, date_str)
             if df is not None:
                 context._engine._stock_data[code] = df
                 data_proxy._set_history(code, df)
@@ -204,9 +239,10 @@ def run_paper_trading_daily(paper_id):
         pending_orders = []
 
         def _order_proxy(code, amount=None, value=None):
+            code = _normalize_security_code(code)
             # 动态加载未预加载的股票数据
             if code not in context._engine._stock_data:
-                df = load_stock_data(code, pre_start, date_str)
+                code, df = _load_security_data(code, pre_start, date_str)
                 if df is not None:
                     context._engine._stock_data[code] = df
                     data_proxy._set_history(code, df)
@@ -223,7 +259,7 @@ def run_paper_trading_daily(paper_id):
                             'pre_close': row_data.get('pre_close', row_data['close']),
                         })
             # 如果仍无今日价格，尝试从 DB 单只加载
-            if code not in today_prices:
+            if code not in today_prices and not _is_index_code(code):
                 from instock.core.backtest.data_feed import _load_today_from_db
                 db_row = _load_today_from_db(code, date_str)
                 if db_row is not None:
@@ -266,7 +302,11 @@ def run_paper_trading_daily(paper_id):
                 _update_paper_error(paper_id, f'initialize 异常: {e}')
                 return {'status': 'error', 'message': f'initialize 异常: {e}'}
             else:
-                logging.warning(f"[模拟交易] initialize 异常（恢复运行）: {e}")
+                # 恢复运行时 initialize 仍需成功注册回调/参数。失败后继续执行会
+                # 用半初始化状态撮合并覆盖 state_json，存在模拟盘状态污染风险。
+                logging.error(f"[模拟交易] initialize 异常（恢复运行失败）: {e}")
+                _update_paper_error(paper_id, f'initialize 异常: {e}')
+                return {'status': 'error', 'message': f'initialize 异常: {e}'}
 
         # before_trading_start
         if strategy_funcs.get('before_trading_start'):
@@ -396,61 +436,75 @@ def run_paper_trading_daily(paper_id):
         new_state = serialize_portfolio(context)
         position_value = context.portfolio.total_value - context.portfolio.available_cash
 
-        conn_ctx = mdb.get_connection()
-        conn = conn_ctx.__enter__()
-        try:
+        with mdb.get_connection() as conn:
             conn.autocommit(False)
-            cur = conn.cursor()
+            try:
+                cur = conn.cursor()
 
-            # 8. 保存状态
-            cur.execute(
-                'UPDATE cn_stock_paper_trading SET last_run_date=%s, state_json=%s, '
-                'current_cash=%s, current_value=%s WHERE id=%s',
-                (date_str, new_state, context.portfolio.available_cash,
-                 context.portfolio.total_value, paper_id))
-
-            # 9. 记录交易
-            for t in trade_records:
-                cur.execute(
-                    'INSERT INTO cn_stock_backtest_trade '
-                    '(paper_id, date, code, name, direction, price, amount, value, commission, tax) '
-                    'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
-                    (paper_id, date_str, t.code, t.name, t.direction,
-                     t.price, t.amount, t.value, t.commission, t.tax))
-
-            # 10. 持仓快照
-            for code, pos in context.portfolio.positions.items():
-                if pos.amount > 0:
-                    weight = pos.value / context.portfolio.total_value * 100 if context.portfolio.total_value > 0 else 0
+                # 8. 保存状态
+                try:
                     cur.execute(
-                        'INSERT INTO cn_stock_backtest_position '
-                        '(paper_id, date, code, name, amount, avg_cost, close_price, '
-                        'market_value, profit, profit_rate, weight) '
-                        'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
-                        (paper_id, date_str, code, pos.name, pos.amount,
-                         round(pos.avg_cost, 3), round(pos.price, 3),
-                         round(pos.value, 2), round(pos.profit, 2),
-                         round(pos.profit_rate, 6), round(weight, 6)))
+                        'UPDATE cn_stock_paper_trading SET last_run_date=%s, last_run_at=%s, '
+                        'state_json=%s, current_cash=%s, current_value=%s WHERE id=%s',
+                        (date_str, now_dt, new_state, context.portfolio.available_cash,
+                         context.portfolio.total_value, paper_id))
+                except Exception as update_error:
+                    if 'last_run_at' not in str(update_error):
+                        raise
+                    logging.warning("[模拟交易] last_run_at 列不存在，使用旧表结构保存状态")
+                    cur.execute(
+                        'UPDATE cn_stock_paper_trading SET last_run_date=%s, '
+                        'state_json=%s, current_cash=%s, current_value=%s WHERE id=%s',
+                        (date_str, new_state, context.portfolio.available_cash,
+                         context.portfolio.total_value, paper_id))
 
-            # 11. 每日 NAV 记录
-            cur.execute(
-                'INSERT INTO cn_stock_paper_nav '
-                '(paper_id, date, total_value, cash, position_value) '
-                'VALUES (%s,%s,%s,%s,%s) '
-                'ON DUPLICATE KEY UPDATE total_value=VALUES(total_value), '
-                'cash=VALUES(cash), position_value=VALUES(position_value)',
-                (paper_id, date_str,
-                 round(context.portfolio.total_value, 2),
-                 round(context.portfolio.available_cash, 2),
-                 round(position_value, 2)))
+                # 9. 记录交易
+                for t in trade_records:
+                    cur.execute(
+                        'INSERT INTO cn_stock_backtest_trade '
+                        '(paper_id, date, code, name, direction, price, amount, value, commission, tax) '
+                        'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                        (paper_id, date_str, t.code, t.name, t.direction,
+                         t.price, t.amount, t.value, t.commission, t.tax))
 
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.autocommit(True)
-            conn_ctx.__exit__(None, None, None)
+                # 10. 持仓快照
+                for code, pos in context.portfolio.positions.items():
+                    if pos.amount > 0:
+                        weight = pos.value / context.portfolio.total_value * 100 if context.portfolio.total_value > 0 else 0
+                        cur.execute(
+                            'INSERT INTO cn_stock_backtest_position '
+                            '(paper_id, date, code, name, amount, avg_cost, close_price, '
+                            'market_value, profit, profit_rate, weight) '
+                            'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                            (paper_id, date_str, code, pos.name, pos.amount,
+                             round(pos.avg_cost, 3), round(pos.price, 3),
+                             round(pos.value, 2), round(pos.profit, 2),
+                             round(pos.profit_rate, 6), round(weight, 6)))
+
+                # 11. 每日 NAV 记录
+                cur.execute(
+                    'INSERT INTO cn_stock_paper_nav '
+                    '(paper_id, date, total_value, cash, position_value) '
+                    'VALUES (%s,%s,%s,%s,%s) '
+                    'ON DUPLICATE KEY UPDATE total_value=VALUES(total_value), '
+                    'cash=VALUES(cash), position_value=VALUES(position_value)',
+                    (paper_id, date_str,
+                     round(context.portfolio.total_value, 2),
+                     round(context.portfolio.available_cash, 2),
+                     round(position_value, 2)))
+
+                conn.commit()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    logging.exception(f"[模拟交易] 模拟盘 #{paper_id} 事务回滚失败")
+                raise
+            finally:
+                try:
+                    conn.autocommit(True)
+                except Exception:
+                    logging.warning(f"[模拟交易] 模拟盘 #{paper_id} 恢复 autocommit 失败", exc_info=True)
 
         logging.info(f"[模拟交易] 模拟盘 #{paper_id} 完成: "
                      f"交易 {len(trade_records)} 笔, "
@@ -485,7 +539,7 @@ def run_paper_trading_daily(paper_id):
                 logging.debug("[模拟交易] 记录执行日志失败", exc_info=True)
 
 
-def run_all_paper_trading():
+def run_all_paper_trading(scheduled=False):
     """
     执行所有状态为 running 的模拟盘。
 
@@ -505,7 +559,7 @@ def run_all_paper_trading():
     for row in rows:
         paper_id = row[0]
         try:
-            result = run_paper_trading_daily(paper_id)
+            result = run_paper_trading_daily(paper_id, scheduled=scheduled)
         except Exception as e:
             logging.error(f"[模拟交易] #{paper_id} 执行异常", exc_info=True)
             result = {'status': 'error', 'message': str(e)}
@@ -519,6 +573,7 @@ def _create_api(context, data_proxy, g):
     """创建策略 API 命名空间（兼容聚宽风格调用）"""
 
     def history(code, count, field='close'):
+        code = _normalize_security_code(code)
         df = context._engine._stock_data.get(code) if hasattr(context, '_engine') and context._engine else None
         if df is None:
             return pd.Series(dtype=float)
@@ -544,6 +599,7 @@ def _create_api(context, data_proxy, g):
         return subset[['open', 'high', 'low', 'close', 'volume']].reset_index(drop=True)
 
     def get_price(code, start_date=None, end_date=None, fields=None):
+        code = _normalize_security_code(code)
         df = context._engine._stock_data.get(code) if hasattr(context, '_engine') and context._engine else None
         if df is None:
             return pd.DataFrame()
@@ -866,7 +922,7 @@ def _create_api(context, data_proxy, g):
         'log': _Log(),
         'g': g,
         'record': lambda **kw: None,
-        'set_benchmark': lambda code: setattr(context, 'benchmark', code),
+        'set_benchmark': lambda code: setattr(context, 'benchmark', _normalize_security_code(code)),
         'set_option': lambda *a, **kw: None,
         'set_order_cost': set_order_cost,
         'OrderCost': lambda **kw: kw,
@@ -908,23 +964,100 @@ def _update_paper_error(paper_id, message):
         pass
 
 
+_RUN_FREQUENCY_MINUTES = {
+    'daily': 24 * 60,
+    'hourly': 60,
+    '15m': 15,
+}
+
+
+def _normalize_run_frequency(value):
+    value = (value or 'daily').strip() if isinstance(value, str) else 'daily'
+    return value if value in _RUN_FREQUENCY_MINUTES else 'daily'
+
+
+def _as_datetime(value):
+    if isinstance(value, datetime.datetime):
+        return value
+    if isinstance(value, datetime.date):
+        return datetime.datetime.combine(value, datetime.time.min)
+    if value:
+        text = str(value).strip()
+        for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d'):
+            try:
+                return datetime.datetime.strptime(text[:19] if 'T' in text else text, fmt)
+            except ValueError:
+                continue
+    return None
+
+
+def _is_paper_due(run_frequency, start_at, last_run_date, last_run_at,
+                  date_str, now_dt, scheduled=False):
+    start_dt = _as_datetime(start_at)
+    if start_dt and now_dt < start_dt:
+        return False, f'未到开始时间 ({start_dt.strftime("%Y-%m-%d %H:%M:%S")})'
+
+    freq = _normalize_run_frequency(run_frequency)
+    if freq == 'daily':
+        if scheduled and (now_dt.hour < 16):
+            return False, '每日模拟盘收盘后执行'
+        if last_run_date and str(last_run_date) >= date_str:
+            return False, f'今日已运行 ({last_run_date})'
+        return True, 'ok'
+
+    last_dt = _as_datetime(last_run_at)
+    if last_dt:
+        interval = datetime.timedelta(minutes=_RUN_FREQUENCY_MINUTES[freq])
+        next_dt = last_dt + interval
+        if now_dt < next_dt:
+            return False, f'未到下次运行时间 ({next_dt.strftime("%Y-%m-%d %H:%M:%S")})'
+    return True, 'ok'
+
+
+def _add_paper_column_safe(column_name, ddl):
+    import instock.lib.database as mdb
+    try:
+        rows = mdb.executeSqlFetch(
+            "SELECT COUNT(*) FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cn_stock_paper_trading' "
+            "AND COLUMN_NAME = %s", (column_name,))
+        exists = rows and rows[0][0] > 0
+        if not exists:
+            mdb.executeSql(f'ALTER TABLE cn_stock_paper_trading ADD COLUMN {ddl}')
+    except Exception as e:
+        logging.warning(f"[模拟交易] 添加 cn_stock_paper_trading.{column_name} 失败/已存在: {e}")
+
+
+def _ensure_paper_columns():
+    _add_paper_column_safe('backtest_id', '`backtest_id` INT DEFAULT NULL AFTER `strategy_id`')
+    _add_paper_column_safe('run_frequency', "`run_frequency` VARCHAR(20) DEFAULT 'daily' AFTER `status`")
+    _add_paper_column_safe('start_at', '`start_at` DATETIME DEFAULT CURRENT_TIMESTAMP AFTER `run_frequency`')
+    _add_paper_column_safe('last_run_at', '`last_run_at` DATETIME DEFAULT NULL AFTER `last_run_date`')
+
+
 def _ensure_paper_table():
     import instock.lib.database as mdb
     if mdb.checkTableIsExist('cn_stock_paper_trading'):
+        _ensure_paper_columns()
         return
     mdb.executeSql('''
         CREATE TABLE IF NOT EXISTS `cn_stock_paper_trading` (
             `id` INT AUTO_INCREMENT PRIMARY KEY,
             `strategy_id` INT NOT NULL,
+            `backtest_id` INT DEFAULT NULL,
             `name` VARCHAR(100),
             `initial_cash` DECIMAL(15,2) DEFAULT 1000000.00,
             `current_cash` DECIMAL(15,2),
             `current_value` DECIMAL(15,2),
             `status` ENUM('running','paused','stopped') DEFAULT 'running',
+            `run_frequency` VARCHAR(20) DEFAULT 'daily',
+            `start_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
             `started_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
             `last_run_date` DATE,
+            `last_run_at` DATETIME DEFAULT NULL,
             `state_json` LONGTEXT,
             INDEX `idx_strategy` (`strategy_id`),
+            INDEX `idx_backtest` (`backtest_id`),
             INDEX `idx_status` (`status`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     ''')

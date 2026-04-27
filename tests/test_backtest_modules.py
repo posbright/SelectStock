@@ -694,6 +694,38 @@ class TestLoadStockData(unittest.TestCase):
         self.assertTrue((df['date'] >= pd.Timestamp('2024-02-01')).all())
         self.assertTrue((df['date'] <= pd.Timestamp('2024-02-28')).all())
 
+    @patch('instock.core.backtest.data_feed._load_from_cache')
+    @patch('instock.core.backtest.data_feed._fetch_stock_from_eastmoney')
+    @patch('instock.core.backtest.data_feed.load_benchmark_data')
+    def test_unambiguous_index_routes_to_benchmark_loader(
+            self, mock_benchmark, mock_fetch, mock_cache):
+        benchmark_df = pd.DataFrame({
+            'date': pd.to_datetime(['2025-01-02']),
+            'close': [3900],
+        })
+        mock_benchmark.return_value = benchmark_df
+
+        df = load_stock_data('000300.XSHG', '2025-01-01', '2025-01-31')
+
+        self.assertIs(df, benchmark_df)
+        mock_benchmark.assert_called_once_with('000300', '2025-01-01', '2025-01-31')
+        mock_cache.assert_not_called()
+        mock_fetch.assert_not_called()
+
+    @patch('instock.core.backtest.data_feed._load_from_cache')
+    @patch('instock.core.backtest.data_feed._fetch_stock_from_eastmoney')
+    @patch('instock.core.backtest.data_feed.load_benchmark_data')
+    def test_ambiguous_stock_code_still_uses_stock_loader(
+            self, mock_benchmark, mock_fetch, mock_cache):
+        mock_cache.return_value = self._make_cache_df('000001')
+
+        df = load_stock_data('000001', '2024-01-02', '2024-03-01')
+
+        self.assertIsNotNone(df)
+        mock_benchmark.assert_not_called()
+        mock_cache.assert_called_once_with('000001')
+        mock_fetch.assert_not_called()
+
 
 class TestLoadMultipleStocks(unittest.TestCase):
     @patch('instock.core.backtest.data_feed.load_stock_data')
@@ -715,14 +747,30 @@ class TestLoadMultipleStocks(unittest.TestCase):
 
 
 class TestGetTradingDates(unittest.TestCase):
+    @patch('instock.core.backtest.data_feed.load_benchmark_data')
     @patch('instock.core.backtest.data_feed.load_stock_data')
-    def test_fallback_to_bdate_range(self, mock_load):
+    def test_fallback_to_bdate_range(self, mock_load_stock, mock_load_benchmark):
         """When DB and cache are both unavailable, pd.bdate_range is used."""
-        mock_load.return_value = None
+        mock_load_stock.return_value = None
+        mock_load_benchmark.return_value = None
         with patch.dict('sys.modules', {'instock.lib.trade_time': None}):
             dates = get_trading_dates('2025-01-06', '2025-01-10')
         self.assertIsInstance(dates, list)
         self.assertTrue(all(isinstance(d, datetime.date) for d in dates))
+
+    @patch('instock.core.backtest.data_feed.load_stock_data')
+    @patch('instock.core.backtest.data_feed.load_benchmark_data')
+    def test_uses_benchmark_loader_for_hs300_fallback(self, mock_load_benchmark, mock_load_stock):
+        benchmark_df = pd.DataFrame({
+            'date': pd.to_datetime(['2025-01-06', '2025-01-07']),
+            'close': [3900, 3910],
+        })
+        mock_load_benchmark.return_value = benchmark_df
+        with patch.dict('sys.modules', {'instock.lib.trade_time': None}):
+            dates = get_trading_dates('2025-01-06', '2025-01-10')
+        mock_load_benchmark.assert_called_once_with('000300', '2025-01-06', '2025-01-10')
+        mock_load_stock.assert_not_called()
+        self.assertEqual(dates, [datetime.date(2025, 1, 6), datetime.date(2025, 1, 7)])
 
 
 class TestLoadBenchmarkData(unittest.TestCase):
@@ -1286,6 +1334,29 @@ class TestPortfolioBacktestEngineRun(unittest.TestCase):
 
     @patch('instock.core.backtest.portfolio_engine.load_benchmark_data')
     @patch('instock.core.backtest.portfolio_engine.load_multiple_stocks')
+    def test_preload_routes_index_codes_to_benchmark_loader(self, mock_load_multi, mock_bm):
+        stock_df = self._make_stock_df(code='000001', periods=5)
+        benchmark_df = self._make_stock_df(code='000300', periods=5)
+        mock_load_multi.return_value = {'000001': stock_df}
+        mock_bm.return_value = benchmark_df
+
+        engine = PortfolioBacktestEngine()
+        engine.context = MagicMock()
+        engine.context.benchmark = '000300'
+        engine.context.stock = '000001'
+        engine.g = MagicMock()
+        engine.data_proxy = MagicMock()
+
+        engine._discover_and_load_stocks('2024-12-01', '2025-01-31')
+
+        loaded_stock_codes = mock_load_multi.call_args.args[0]
+        self.assertIn('000001', loaded_stock_codes)
+        self.assertNotIn('000300', loaded_stock_codes)
+        mock_bm.assert_called_once_with('000300', '2024-12-01', '2025-01-31')
+        self.assertIn('000300', engine._stock_data)
+
+    @patch('instock.core.backtest.portfolio_engine.load_benchmark_data')
+    @patch('instock.core.backtest.portfolio_engine.load_multiple_stocks')
     @patch('instock.core.backtest.portfolio_engine.get_trading_dates')
     @patch('instock.core.backtest.portfolio_engine.load_stock_data')
     def test_run_simple_buy_and_hold(self, mock_load_single, mock_dates,
@@ -1613,6 +1684,20 @@ class TestTradeRecordPnlInEngine(unittest.TestCase):
         self.assertAlmostEqual(trade.close_profit, -5000.0)
         # return_rate = (35.0 - 40.0) / 40.0 * 100 = -12.5%
         self.assertAlmostEqual(trade.return_rate, -12.5)
+
+    def test_sell_less_than_one_lot_rejected_with_warning(self):
+        """不足一手的卖出请求不应静默清仓，应记录拒绝日志。"""
+        engine = self._make_engine_with_position(
+            code='000001', name='平安银行', amount=300, avg_cost=10.0)
+        date = datetime.date(2025, 3, 1)
+        self._setup_day_price(engine, '000001', date, 12.0)
+
+        engine._execute_single_order({'code': '000001', 'amount': -50, 'value': None}, date)
+
+        self.assertEqual(len(engine._trade_records), 0)
+        self.assertEqual(engine.context.portfolio.positions['000001'].amount, 300)
+        self.assertTrue(any('不足一手' in msg and '000001' in msg
+                            for msg in engine._log_messages))
 
     def test_buy_has_stock_name(self):
         """买入交易记录包含股票名称"""

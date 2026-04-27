@@ -867,6 +867,8 @@ class PortfolioBacktestEngine:
                 if pos.closeable_amount < 100:
                     sell_amount = pos.closeable_amount  # 残股一次清空
                 else:
+                    self._log_messages.append(
+                        f"[{date}] [WARN] {code} 卖出数量不足一手，订单被拒绝: {sell_amount}股")
                     return  # 请求量不足一手，拒绝订单
             else:
                 sell_amount = rounded
@@ -1072,8 +1074,14 @@ class PortfolioBacktestEngine:
             _try_extract(getattr(self.g, attr, None))
 
         if codes:
-            logging.info(f"[回测引擎] 预加载 {len(codes)} 只股票数据")
-            raw_data = load_multiple_stocks(codes, pre_start, end_date)
+            index_codes = {code for code in codes if code in self._INDEX_CODES or code.startswith('399')}
+            stock_codes = codes - index_codes
+            logging.info(f"[回测引擎] 预加载 {len(stock_codes)} 只股票数据")
+            raw_data = load_multiple_stocks(stock_codes, pre_start, end_date) if stock_codes else {}
+            for code in index_codes:
+                df = load_benchmark_data(code, pre_start, end_date)
+                if df is not None and len(df) > 0:
+                    raw_data[code] = df
             self._all_codes = codes
 
             # 转为 DatetimeIndex 格式并降精度（节省内存）

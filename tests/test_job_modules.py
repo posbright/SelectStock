@@ -676,14 +676,16 @@ class TestAnalysisDailyJob(unittest.TestCase):
              patch.object(m, 'record_task_start', return_value=time.time()), \
              patch.object(m, 'record_task_end'), \
              patch.object(m, '_run_stock_spot_buy') as mock_buy, \
+             patch.object(m, '_run_job_subprocess', return_value=True) as mock_backtest, \
              patch.object(m.gptj, 'main') as mock_gpt, \
-             patch.object(m.saj, 'main') as mock_saj, \
-             patch.object(m.bdj, 'main') as mock_bdj:
+             patch.object(m.saj, 'main') as mock_saj:
             m.main()
             mock_gpt.assert_called_once()
             mock_buy.assert_called_once()
             mock_saj.assert_called_once()
-            mock_bdj.assert_called_once()
+            mock_backtest.assert_called_once_with(
+                'backtest_data_daily_job.py', '数据分析 backtest',
+                timeout=m._BACKTEST_TIMEOUT)
 
     @patch(f'{_trd}.get_trade_date_last', return_value=(TEST_DATE, TEST_DATE))
     def test_main_skips_when_done(self, mock_td):

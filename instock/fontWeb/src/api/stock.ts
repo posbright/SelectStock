@@ -322,7 +322,14 @@ export function getPortfolioBacktestListPage(params?: { strategy_id?: number; pa
 // ============= 模拟交易 API =============
 
 /** 创建模拟盘 */
-export function createPaperTrading(data: { strategy_id: number; name?: string; initial_cash?: number }) {
+export function createPaperTrading(data: {
+  strategy_id: number
+  backtest_id?: number | null
+  name?: string
+  initial_cash?: number
+  run_frequency?: 'daily' | 'hourly' | '15m'
+  start_at?: string
+}) {
   return request({ url: '/api/paper/create', method: 'post', data })
 }
 

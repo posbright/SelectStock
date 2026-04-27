@@ -11,7 +11,7 @@
           <el-button :disabled="selectedRows.length < 2" @click="goCompare">
             <el-icon><DataAnalysis /></el-icon>对比 ({{ selectedRows.length }})
           </el-button>
-          <el-button type="primary" @click="showCreateDialog = true" :icon="Plus">创建模拟盘</el-button>
+          <el-button type="primary" @click="openCreateDialog" :icon="Plus">创建模拟盘</el-button>
         </div>
       </div>
 
@@ -28,8 +28,16 @@
             </span>
           </template>
         </el-table-column>
-        <el-table-column prop="strategy_name" label="频率" width="60" align="center">
-          <template #default>每天</template>
+        <el-table-column label="回测收益" width="95" align="center">
+          <template #default="{ row }">
+            <span v-if="hasBacktest(row)" :class="retCls(row.backtest_return)">
+              {{ fmtPctDash(row.backtest_return) }}
+            </span>
+            <span v-else>--</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="run_frequency" label="频率" width="80" align="center">
+          <template #default="{ row }">{{ frequencyLabel(row.run_frequency) }}</template>
         </el-table-column>
         <el-table-column prop="status" label="状态" width="70" align="center">
           <template #default="{ row }">
@@ -37,7 +45,7 @@
           </template>
         </el-table-column>
         <el-table-column prop="started_at" label="开始时间" width="100" align="center">
-          <template #default="{ row }">{{ row.started_at || row.last_run_date || '--' }}</template>
+          <template #default="{ row }">{{ row.start_at || row.started_at || row.last_run_date || '--' }}</template>
         </el-table-column>
         <el-table-column label="累计收益" width="90" align="center">
           <template #default="{ row }">
@@ -84,7 +92,7 @@
       </el-table>
       <el-empty v-if="!loading && paperList.length === 0"
                  description="还没有模拟盘，点击「创建模拟盘」开始">
-        <el-button type="primary" @click="showCreateDialog = true">创建模拟盘</el-button>
+        <el-button type="primary" @click="openCreateDialog">创建模拟盘</el-button>
       </el-empty>
     </template>
 
@@ -417,11 +425,17 @@
                     </div>
                     <div class="jq-set-row">
                       <span class="jq-set-label">运行频率</span>
-                      <span class="jq-set-value">每天</span>
+                      <span class="jq-set-value">{{ frequencyLabel(detailData.info.run_frequency) }}</span>
+                    </div>
+                    <div class="jq-set-row">
+                      <span class="jq-set-label">回测版本</span>
+                      <span class="jq-set-value">
+                        {{ hasBacktest(detailData.info) ? backtestLabel(detailData.info) : '未绑定' }}
+                      </span>
                     </div>
                     <div class="jq-set-row">
                       <span class="jq-set-label">开始日期</span>
-                      <span class="jq-set-value">{{ detailData.info.started_at || '--' }}</span>
+                      <span class="jq-set-value">{{ detailData.info.start_at || detailData.info.started_at || '--' }}</span>
                     </div>
                     <div class="jq-set-row">
                       <span class="jq-set-label">最后运行</span>
@@ -465,24 +479,50 @@
     </el-dialog>
 
     <!-- ═══════════ 创建对话框 ═══════════ -->
-    <el-dialog v-model="showCreateDialog" title="创建模拟盘" width="500px">
-      <el-form label-width="100px">
-        <el-form-item label="策略">
-          <el-select v-model="createForm.strategy_id" placeholder="选择已保存的策略" style="width: 100%;"
-                     filterable>
+    <el-dialog v-model="showCreateDialog" title="新建模拟交易" width="520px">
+      <el-form label-width="120px" class="paper-create-form">
+        <el-form-item label="交易名称">
+          <el-input v-model="createForm.name" placeholder="模拟交易名称（可选）" />
+        </el-form-item>
+        <el-form-item label="选择策略" required>
+          <el-select v-model="createForm.strategy_id" placeholder="请选择一个策略" style="width: 100%;"
+                     filterable @change="onCreateStrategyChange">
             <el-option v-for="s in strategies" :key="s.id" :label="s.name" :value="s.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="名称">
-          <el-input v-model="createForm.name" placeholder="模拟盘名称（可选）" />
+        <el-form-item label="选择回测" required>
+          <el-select v-model="createForm.backtest_id" placeholder="请选择该策略的一个回测版本"
+                     style="width: 100%;" filterable :loading="backtestsLoading"
+                     :disabled="!createForm.strategy_id">
+            <el-option v-for="bt in strategyBacktests" :key="bt.id"
+                       :label="backtestOptionLabel(bt)" :value="bt.id">
+              <div class="bt-option">
+                <span class="bt-option-name">{{ bt.strategy_name || `回测-${bt.id}` }}</span>
+                <span :class="retCls(bt.total_return)">{{ fmtPct(bt.total_return) }}</span>
+              </div>
+            </el-option>
+          </el-select>
+          <div v-if="createForm.strategy_id && !backtestsLoading && strategyBacktests.length === 0"
+               class="form-tip">该策略暂无已完成回测，请先运行一次组合回测。</div>
         </el-form-item>
         <el-form-item label="初始资金">
           <el-input-number v-model="createForm.initial_cash" :min="10000" :step="100000" style="width: 100%;" />
         </el-form-item>
+        <el-form-item label="运行频率" required>
+          <div class="form-inline-row">
+            <el-select v-model="createForm.run_frequency" style="width: 130px;">
+              <el-option v-for="f in frequencyOptions" :key="f.value" :label="f.label" :value="f.value" />
+            </el-select>
+            <span class="inline-label">开始时间</span>
+            <el-date-picker v-model="createForm.start_at" type="datetime"
+                            value-format="YYYY-MM-DD HH:mm:ss"
+                            format="YYYY-MM-DD HH:mm" style="flex: 1;" />
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showCreateDialog = false">取消</el-button>
-        <el-button type="primary" @click="doCreate" :loading="creating">创建</el-button>
+        <el-button type="primary" @click="doCreate" :loading="creating">确定</el-button>
       </template>
     </el-dialog>
   </div>
@@ -500,7 +540,7 @@ import * as echarts from 'echarts'
 import {
   getPaperTradingList, getPaperTradingDetail, createPaperTrading,
   paperTradingAction, runPaperTrading, getStrategyCodeList, getPaperCompare,
-  deletePaperTrading,
+  deletePaperTrading, getPortfolioBacktestList,
 } from '@/api/stock'
 import request from '@/api/request'
 
@@ -515,6 +555,8 @@ const detailId = computed(() => {
 
 const paperList = ref<any[]>([])
 const strategies = ref<any[]>([])
+const strategyBacktests = ref<any[]>([])
+const backtestsLoading = ref(false)
 const loading = ref(false)
 const showCreateDialog = ref(false)
 const showCompare = ref(false)
@@ -527,7 +569,24 @@ const compareLoading = ref(false)
 const creating = ref(false)
 const runningId = ref<number | null>(null)
 const selectedRows = ref<any[]>([])
-const createForm = ref({ strategy_id: null as number | null, name: '', initial_cash: 1000000 })
+const frequencyOptions = [
+  { label: '每天', value: 'daily' as const },
+  { label: '每小时', value: 'hourly' as const },
+  { label: '每15分钟', value: '15m' as const },
+]
+
+function defaultCreateForm() {
+  return {
+    strategy_id: null as number | null,
+    backtest_id: null as number | null,
+    name: '',
+    initial_cash: 1000000,
+    run_frequency: 'daily' as 'daily' | 'hourly' | '15m',
+    start_at: formatDateTime(new Date()),
+  }
+}
+
+const createForm = ref(defaultCreateForm())
 const navChartRef = ref<HTMLElement | null>(null)
 const compareChartRef = ref<HTMLElement | null>(null)
 let navChart: echarts.ECharts | null = null
@@ -606,6 +665,26 @@ function statusType(s: string) {
 }
 function statusLabel(s: string) {
   return s === 'running' ? '运行中' : s === 'paused' ? '已暂停' : '已停止'
+}
+function frequencyLabel(v: string) {
+  return frequencyOptions.find(f => f.value === v)?.label || '每天'
+}
+function formatDateTime(d: Date) {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:00`
+}
+function backtestOptionLabel(bt: any) {
+  const name = bt.strategy_name || `回测-${bt.id}`
+  const range = bt.start_date && bt.end_date ? ` ${bt.start_date}~${bt.end_date}` : ''
+  return `${name}${range} ${fmtPct(bt.total_return)}`
+}
+function backtestLabel(info: any) {
+  const name = info.backtest_name || `回测-${info.backtest_id}`
+  return `${name} ${info.backtest_return != null ? fmtPct(info.backtest_return) : ''}`.trim()
+}
+function hasBacktest(info: any) {
+  const id = info?.backtest_id
+  return id !== null && id !== undefined && String(id).trim() !== ''
 }
 
 // ── 持仓占比 ──
@@ -765,6 +844,30 @@ async function loadStrategies() {
   } catch { /* ignore */ }
 }
 
+async function loadStrategyBacktests(strategyId: number) {
+  backtestsLoading.value = true
+  strategyBacktests.value = []
+  try {
+    const res = await getPortfolioBacktestList({ strategy_id: strategyId }) as any
+    const body = res?.code !== undefined ? res : res.data
+    const rows = body?.code === 0 ? (body.data || []) : []
+    strategyBacktests.value = rows.filter((bt: any) => (bt.status || '').toLowerCase() === 'completed')
+  } finally {
+    backtestsLoading.value = false
+  }
+}
+
+function openCreateDialog() {
+  createForm.value = defaultCreateForm()
+  strategyBacktests.value = []
+  showCreateDialog.value = true
+}
+
+async function onCreateStrategyChange(strategyId: number) {
+  createForm.value.backtest_id = null
+  if (strategyId) await loadStrategyBacktests(strategyId)
+}
+
 async function loadDetailData(id: number) {
   detailLoading.value = true
   sideTab.value = 'overview'
@@ -859,18 +962,24 @@ async function doDelete(id: number, name: string) {
 
 async function doCreate() {
   if (!createForm.value.strategy_id) { ElMessage.warning('请选择策略'); return }
+  if (!createForm.value.backtest_id) { ElMessage.warning('请选择一个回测版本'); return }
+  if (!createForm.value.start_at) { ElMessage.warning('请选择开始时间'); return }
   creating.value = true
   try {
     const res = await createPaperTrading({
       strategy_id: createForm.value.strategy_id,
+      backtest_id: createForm.value.backtest_id,
       name: createForm.value.name,
       initial_cash: createForm.value.initial_cash,
+      run_frequency: createForm.value.run_frequency,
+      start_at: createForm.value.start_at,
     })
     const body = (res as any)?.code !== undefined ? (res as any) : res.data
     if (body?.code === 0) {
       ElMessage.success('模拟盘创建成功')
       showCreateDialog.value = false
-      createForm.value = { strategy_id: null as any, name: '', initial_cash: 1000000 }
+      createForm.value = defaultCreateForm()
+      strategyBacktests.value = []
       loadList()
     } else { ElMessage.error(body?.msg || '创建失败') }
   } finally { creating.value = false }
@@ -915,6 +1024,13 @@ onUnmounted(() => {
 .header-left h2 { margin: 0; font-size: 18px; }
 .header-right { display: flex; gap: 8px; }
 .count-tag { font-variant-numeric: tabular-nums; }
+
+.paper-create-form :deep(.el-form-item) { margin-bottom: 18px; }
+.form-inline-row { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; }
+.inline-label { color: #606266; white-space: nowrap; }
+.form-tip { margin-top: 6px; font-size: 12px; color: #909399; line-height: 1.4; }
+.bt-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.bt-option-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ══════ 详情页：聚宽实盘风格 ══════ */
 .detail-page { min-height: 500px; }

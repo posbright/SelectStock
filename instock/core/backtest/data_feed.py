@@ -25,6 +25,26 @@ __date__ = '2026/03/16'
 _CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
                           'cache', 'hist')
 
+_KNOWN_INDEX_CODES = {
+    '000001', '000002', '000003', '000016', '000300', '000688',
+    '000852', '000905', '000906', '000985',
+    '399001', '399006', '399300', '399905', '399951',
+}
+
+# These codes do not collide with common A-share stock symbols and should never
+# be sent to the stock K-line endpoint.
+_STOCK_LOADER_INDEX_CODES = _KNOWN_INDEX_CODES - {'000001', '000002', '000003'}
+
+
+def _normalize_code(code):
+    text = str(code or '').strip()
+    return text.split('.')[0] if '.' in text else text
+
+
+def _should_route_stock_loader_to_index(code):
+    clean = _normalize_code(code)
+    return clean in _STOCK_LOADER_INDEX_CODES or clean.startswith('399')
+
 
 def _fetch_stock_from_eastmoney(code, start_date=None, end_date=None, adjust='qfq'):
     """
@@ -176,6 +196,10 @@ def load_stock_data(code, start_date=None, end_date=None):
         DataFrame: 包含 date/open/high/low/close/volume/pre_close 列，
                    按日期升序排列。无数据返回 None。
     """
+    code = _normalize_code(code)
+    if _should_route_stock_loader_to_index(code):
+        return load_benchmark_data(code, start_date, end_date)
+
     df = _load_from_cache(code)
     need_online = False
 
@@ -404,9 +428,16 @@ def get_trading_dates(start_date, end_date):
     except Exception:
         logging.debug("从 DB 获取交易日异常，降级到缓存", exc_info=True)
 
-    # 降级：从沪深300或000001的缓存提取交易日
-    for code in ['000001', '600000', '000300']:
-        df = load_stock_data(code, start_date, end_date)
+    # 降级：从沪深300指数或常见股票的 K 线提取交易日
+    # 000300 是指数，必须走指数数据源；否则会被股票接口误判为深市股票
+    # 并请求 secid=0.000300，EastMoney 会返回 500。
+    candidates = [
+        ('000300', load_benchmark_data),
+        ('000001', load_stock_data),
+        ('600000', load_stock_data),
+    ]
+    for code, loader in candidates:
+        df = loader(code, start_date, end_date)
         if df is not None and len(df) > 0:
             dates = sorted(df['date'].dt.date.tolist())
             return dates
@@ -435,12 +466,7 @@ def load_benchmark_data(code='000300', start_date=None, end_date=None):
     Returns:
         DataFrame: 包含 date/close 列。无数据返回 None。
     """
-    # 常见指数代码集合（用于判断是否应跳过股票 API）
-    _KNOWN_INDEX_CODES = {
-        '000001', '000002', '000003', '000016', '000300', '000688',
-        '000852', '000905', '000906', '000985',  # 上证/中证系列
-        '399001', '399006', '399300', '399905', '399951',  # 深证系列
-    }
+    code = _normalize_code(code)
     is_index = code in _KNOWN_INDEX_CODES or code.startswith('399')
 
     # 1. 优先从指数缓存加载

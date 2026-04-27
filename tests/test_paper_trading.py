@@ -17,6 +17,7 @@ from unittest import mock
 from unittest.mock import patch, MagicMock, call
 
 import pytest
+import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -30,6 +31,9 @@ from instock.paper_trading.paper_engine import (
     _ensure_paper_table,
     _ensure_trade_table,
     _ensure_position_table,
+    _is_paper_due,
+    _load_security_data,
+    _normalize_security_code,
     run_paper_trading_daily,
     run_all_paper_trading,
 )
@@ -545,10 +549,11 @@ class TestCreateApi:
 class TestEnsureTables:
     """Tests for _ensure_paper_table, _ensure_trade_table, _ensure_position_table."""
 
+    @patch('instock.lib.database.executeSqlFetch', return_value=[(4,)])
     @patch('instock.lib.database.checkTableIsExist', return_value=True)
     @patch('instock.lib.database.executeSql')
-    def test_ensure_paper_table_exists(self, mock_exec, mock_check):
-        """If table exists, no CREATE TABLE issued."""
+    def test_ensure_paper_table_exists(self, mock_exec, mock_check, _mock_fetch):
+        """If table exists and migration columns exist, no ALTER/CREATE TABLE issued."""
         _ensure_paper_table()
         mock_check.assert_called_once_with('cn_stock_paper_trading')
         mock_exec.assert_not_called()
@@ -563,8 +568,103 @@ class TestEnsureTables:
         assert 'CREATE TABLE' in sql
         assert 'cn_stock_paper_trading' in sql
         assert 'strategy_id' in sql
+        assert 'backtest_id' in sql
+        assert 'run_frequency' in sql
+        assert 'start_at' in sql
+        assert 'last_run_at' in sql
         assert 'initial_cash' in sql
         assert 'state_json' in sql
+
+    @patch('instock.lib.database.executeSqlFetch', return_value=[(0,)])
+    @patch('instock.lib.database.checkTableIsExist', return_value=True)
+    @patch('instock.lib.database.executeSql')
+    def test_ensure_paper_table_migrates_existing_table(self, mock_exec, _mock_check, _mock_fetch):
+        """Existing paper table is migrated with newly introduced scheduling columns."""
+        _ensure_paper_table()
+        assert mock_exec.call_count == 4
+        sqls = [c.args[0] for c in mock_exec.call_args_list]
+        assert any('backtest_id' in sql for sql in sqls)
+        assert any('run_frequency' in sql for sql in sqls)
+        assert any('start_at' in sql for sql in sqls)
+        assert any('last_run_at' in sql for sql in sqls)
+
+
+class TestPaperRunFrequency:
+    """Tests for per-paper run frequency gating."""
+
+    def test_daily_scheduled_waits_until_after_close(self):
+        due, reason = _is_paper_due(
+            'daily', None, None, None, '2026-04-21',
+            datetime.datetime(2026, 4, 21, 14, 30), scheduled=True)
+        assert due is False
+        assert '收盘后' in reason
+
+    def test_daily_skips_same_trade_date(self):
+        due, reason = _is_paper_due(
+            'daily', None, datetime.date(2026, 4, 21), None, '2026-04-21',
+            datetime.datetime(2026, 4, 21, 16, 30), scheduled=False)
+        assert due is False
+        assert '今日已运行' in reason
+
+    def test_hourly_respects_last_run_at(self):
+        due, reason = _is_paper_due(
+            'hourly', None, datetime.date(2026, 4, 21),
+            datetime.datetime(2026, 4, 21, 10, 0), '2026-04-21',
+            datetime.datetime(2026, 4, 21, 10, 30), scheduled=True)
+        assert due is False
+        assert '下次运行时间' in reason
+
+        due, reason = _is_paper_due(
+            'hourly', None, datetime.date(2026, 4, 21),
+            datetime.datetime(2026, 4, 21, 10, 0), '2026-04-21',
+            datetime.datetime(2026, 4, 21, 11, 0), scheduled=True)
+        assert due is True
+        assert reason == 'ok'
+
+    def test_start_at_blocks_before_configured_time(self):
+        due, reason = _is_paper_due(
+            '15m', datetime.datetime(2026, 4, 21, 10, 15), None, None,
+            '2026-04-21', datetime.datetime(2026, 4, 21, 10, 0), scheduled=True)
+        assert due is False
+        assert '未到开始时间' in reason
+
+
+class TestPaperSecurityDataRouting:
+    """Tests for stock/index data source selection in paper trading."""
+
+    def test_normalize_jq_security_suffix(self):
+        assert _normalize_security_code('000300.XSHG') == '000300'
+        assert _normalize_security_code('399951.XSHE') == '399951'
+
+    @patch('instock.paper_trading.paper_engine.load_stock_data')
+    @patch('instock.paper_trading.paper_engine.load_benchmark_data')
+    def test_hs300_uses_benchmark_loader(self, mock_benchmark, mock_stock):
+        df = pd.DataFrame({'date': pd.to_datetime(['2026-04-21']), 'close': [3900]})
+        mock_benchmark.return_value = df
+
+        code, result = _load_security_data('000300.XSHG', '2026-04-01', '2026-04-21')
+
+        assert code == '000300'
+        assert result is df
+        mock_benchmark.assert_called_once_with('000300', '2026-04-01', '2026-04-21')
+        mock_stock.assert_not_called()
+
+    @patch('instock.paper_trading.paper_engine.load_stock_data')
+    @patch('instock.paper_trading.paper_engine.load_benchmark_data')
+    def test_common_stock_uses_stock_loader(self, mock_benchmark, mock_stock):
+        df = pd.DataFrame({'date': pd.to_datetime(['2026-04-21']), 'close': [12.3]})
+        mock_stock.return_value = df
+
+        code, result = _load_security_data('000001', '2026-04-01', '2026-04-21')
+
+        assert code == '000001'
+        assert result is df
+        mock_stock.assert_called_once_with('000001', '2026-04-01', '2026-04-21')
+        mock_benchmark.assert_not_called()
+
+
+class TestEnsureTradeAndPositionTables:
+    """Tests for _ensure_trade_table and _ensure_position_table."""
 
     @patch('instock.lib.database.checkTableIsExist', return_value=True)
     @patch('instock.lib.database.executeSql')
@@ -814,6 +914,43 @@ class TestRunPaperTradingDaily:
     @patch('instock.paper_trading.paper_engine.compile_strategy')
     @patch('instock.paper_trading.paper_engine.load_stock_data', return_value=None)
     @patch('instock.lib.database.get_connection')
+    def test_initialize_exception_after_restore_does_not_persist_state(
+            self, mock_get_conn, mock_load, mock_compile, mock_is_td,
+            mock_get_td, mock_fetch, mock_exec, mock_check):
+        """Restored paper state must not continue/save if initialize() fails."""
+        mock_get_td.return_value = (datetime.date(2026, 3, 18), datetime.date(2026, 3, 18))
+        state_json = json.dumps({
+            'available_cash': 1000000, 'positions': {}, 'g_vars': {},
+            'benchmark': '000300', 'commission_rate': 0.0003,
+            'stamp_tax_rate': 0.001, 'slippage_rate': 0.002,
+        })
+        mock_fetch.return_value = [(1, 10, 1000000, 'running', '2026-03-17',
+                                    state_json, 'def initialize(ctx): pass')]
+
+        def _bad_init(ctx):
+            raise ValueError('restore init failed')
+
+        mock_compile.return_value = {
+            'initialize': _bad_init,
+            'handle_data': lambda ctx, data: None,
+            'before_trading_start': None,
+            'after_trading_end': None,
+        }
+
+        result = run_paper_trading_daily(1)
+
+        assert result['status'] == 'error'
+        assert 'initialize' in result['message']
+        mock_get_conn.assert_not_called()
+
+    @patch('instock.lib.database.checkTableIsExist', return_value=True)
+    @patch('instock.lib.database.executeSql')
+    @patch('instock.lib.database.executeSqlFetch')
+    @patch('instock.lib.trade_time.get_trade_date_last')
+    @patch('instock.lib.trade_time.is_trade_date', return_value=True)
+    @patch('instock.paper_trading.paper_engine.compile_strategy')
+    @patch('instock.paper_trading.paper_engine.load_stock_data', return_value=None)
+    @patch('instock.lib.database.get_connection')
     def test_state_saved_after_run(self, mock_get_conn, mock_load, mock_compile, mock_is_td,
                                    mock_get_td, mock_fetch, mock_exec, mock_check):
         """After successful run, state is saved via get_connection transaction."""
@@ -956,9 +1093,9 @@ class TestRunAllPaperTrading:
         results = run_all_paper_trading()
 
         assert len(results) == 3
-        mock_run.assert_any_call(1)
-        mock_run.assert_any_call(2)
-        mock_run.assert_any_call(3)
+        mock_run.assert_any_call(1, scheduled=False)
+        mock_run.assert_any_call(2, scheduled=False)
+        mock_run.assert_any_call(3, scheduled=False)
 
     @patch('instock.paper_trading.paper_engine.run_paper_trading_daily')
     @patch('instock.lib.database.checkTableIsExist', return_value=True)

@@ -47,12 +47,12 @@ class TestSchedulerShouldRun:
 
     @patch('instock.lib.trade_time.is_trade_date', return_value=True)
     def test_before_run_time(self, _mock_td):
-        """交易日但还没到执行时间"""
+        """交易日内调度器保持触发，具体频率由模拟盘自身判断。"""
         s = self._make_scheduler(run_after_hour=16, run_after_minute=0)
         now = datetime.datetime(2026, 4, 21, 14, 30, 0)
         should, reason = s._should_run(now)
-        assert should is False
-        assert reason == 'before_run_time'
+        assert should is True
+        assert reason == 'ok'
 
     @patch('instock.lib.trade_time.is_trade_date', return_value=False)
     def test_not_trade_day(self, _mock_td):
@@ -65,13 +65,13 @@ class TestSchedulerShouldRun:
 
     @patch('instock.lib.trade_time.is_trade_date', return_value=True)
     def test_already_run_today(self, _mock_td):
-        """今日已运行则跳过"""
+        """旧的全局运行标记不阻止交易日内后续频率检查。"""
         s = self._make_scheduler()
         s._last_run_date = datetime.date(2026, 4, 21)
         now = datetime.datetime(2026, 4, 21, 17, 0, 0)
         should, reason = s._should_run(now)
-        assert should is False
-        assert reason == 'already_run'
+        assert should is True
+        assert reason == 'ok'
 
     @patch('instock.lib.trade_time.is_trade_date', return_value=True)
     def test_already_running(self, _mock_td):
@@ -103,12 +103,10 @@ class TestSchedulerShouldRun:
 
     @patch('instock.lib.trade_time.is_trade_date', return_value=True)
     def test_custom_run_time(self, _mock_td):
-        """自定义执行时间 17:30"""
+        """自定义收盘后时间不再限制全局触发，日频模拟盘由引擎控制。"""
         s = self._make_scheduler(run_after_hour=17, run_after_minute=30)
-        # 17:29 不执行
         should, _ = s._should_run(datetime.datetime(2026, 4, 21, 17, 29, 0))
-        assert should is False
-        # 17:30 执行
+        assert should is True
         should, _ = s._should_run(datetime.datetime(2026, 4, 21, 17, 30, 0))
         assert should is True
 
@@ -143,7 +141,7 @@ class TestSchedulerExecution:
         trade_date = datetime.date(2026, 4, 21)
         s._execute_paper_trading(trade_date)
 
-        mock_run_all.assert_called_once()
+        mock_run_all.assert_called_once_with(scheduled=True)
         assert s._running is False
 
     @patch('instock.paper_trading.scheduler._save_execution_log')
