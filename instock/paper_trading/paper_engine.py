@@ -444,6 +444,7 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
         _ensure_trade_table()
         _ensure_position_table()
         _ensure_nav_table()
+        _ensure_intraday_nav_table()
 
         new_state = serialize_portfolio(context)
         position_value = context.portfolio.total_value - context.portfolio.available_cash
@@ -471,14 +472,25 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                          float(context.portfolio.available_cash),
                          float(context.portfolio.total_value), paper_id))
 
-                # 9. 记录交易
+                # 9. 记录交易（executed_at 列不存在时降级为旧结构）
                 for t in trade_records:
-                    cur.execute(
-                        'INSERT INTO cn_stock_backtest_trade '
-                        '(paper_id, date, code, name, direction, price, amount, value, commission, tax) '
-                        'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
-                        (paper_id, date_str, t.code, t.name, t.direction,
-                         t.price, t.amount, t.value, t.commission, t.tax))
+                    try:
+                        cur.execute(
+                            'INSERT INTO cn_stock_backtest_trade '
+                            '(paper_id, date, executed_at, code, name, direction, price, amount, value, commission, tax) '
+                            'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                            (paper_id, date_str, now_dt, t.code, t.name, t.direction,
+                             t.price, t.amount, t.value, t.commission, t.tax))
+                    except Exception as trade_err:
+                        if 'executed_at' not in str(trade_err):
+                            raise
+                        logging.warning("[模拟交易] executed_at 列不存在，使用旧表结构记录交易")
+                        cur.execute(
+                            'INSERT INTO cn_stock_backtest_trade '
+                            '(paper_id, date, code, name, direction, price, amount, value, commission, tax) '
+                            'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                            (paper_id, date_str, t.code, t.name, t.direction,
+                             t.price, t.amount, t.value, t.commission, t.tax))
 
                 # 10. 持仓快照
                 for code, pos in context.portfolio.positions.items():
@@ -494,7 +506,7 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                              round(pos.value, 2), round(pos.profit, 2),
                              round(pos.profit_rate, 6), round(weight, 6)))
 
-                # 11. 每日 NAV 记录
+                # 11. 每日 NAV 记录（UPSERT）
                 cur.execute(
                     'INSERT INTO cn_stock_paper_nav '
                     '(paper_id, date, total_value, cash, position_value) '
@@ -505,6 +517,22 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                      round(context.portfolio.total_value, 2),
                      round(context.portfolio.available_cash, 2),
                      round(position_value, 2)))
+
+                # 11b. 日内实时 NAV 快照（hourly/15m 调度下每次写入，日级调度仅在收盘后一条）
+                try:
+                    cur.execute(
+                        'INSERT INTO cn_stock_paper_nav_intraday '
+                        '(paper_id, datetime, total_value, cash, position_value) '
+                        'VALUES (%s,%s,%s,%s,%s) '
+                        'ON DUPLICATE KEY UPDATE total_value=VALUES(total_value), '
+                        'cash=VALUES(cash), position_value=VALUES(position_value)',
+                        (paper_id, now_dt,
+                         round(context.portfolio.total_value, 2),
+                         round(context.portfolio.available_cash, 2),
+                         round(position_value, 2)))
+                except Exception as intraday_err:
+                    logging.warning(
+                        f"[模拟交易] 日内 NAV 快照写入失败(不阢达主事务): {intraday_err}")
 
                 conn.commit()
             except Exception:
@@ -1099,6 +1127,17 @@ def _ensure_paper_table():
 def _ensure_trade_table():
     import instock.lib.database as mdb
     if mdb.checkTableIsExist('cn_stock_backtest_trade'):
+        # 已存在：检查是否需要补上 executed_at 列（阶殲2升级）
+        try:
+            cols = mdb.executeSqlFetch(
+                "SHOW COLUMNS FROM cn_stock_backtest_trade LIKE 'executed_at'")
+            if not cols:
+                logging.info("[模拟交易] 为 cn_stock_backtest_trade 添加 executed_at 列")
+                mdb.executeSql(
+                    'ALTER TABLE cn_stock_backtest_trade '
+                    'ADD COLUMN executed_at DATETIME NULL AFTER date')
+        except Exception as e:
+            logging.warning(f"[模拟交易] executed_at 列检查/迁移失败(不阢达主逻辑): {e}")
         return
     mdb.executeSql('''
         CREATE TABLE IF NOT EXISTS `cn_stock_backtest_trade` (
@@ -1106,6 +1145,7 @@ def _ensure_trade_table():
             `backtest_id` INT DEFAULT NULL,
             `paper_id` INT DEFAULT NULL,
             `date` DATE NOT NULL,
+            `executed_at` DATETIME NULL,
             `code` VARCHAR(6) NOT NULL,
             `name` VARCHAR(20),
             `direction` ENUM('buy','sell') NOT NULL,
@@ -1115,7 +1155,8 @@ def _ensure_trade_table():
             `commission` DECIMAL(10,2),
             `tax` DECIMAL(10,2),
             INDEX `idx_bt_date` (`backtest_id`, `date`),
-            INDEX `idx_paper_date` (`paper_id`, `date`)
+            INDEX `idx_paper_date` (`paper_id`, `date`),
+            INDEX `idx_paper_executed_at` (`paper_id`, `executed_at`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     ''')
 
@@ -1161,5 +1202,24 @@ def _ensure_nav_table():
             `benchmark_value` DECIMAL(10,6) DEFAULT 1.0,
             UNIQUE KEY `uq_paper_date` (`paper_id`, `date`),
             INDEX `idx_paper` (`paper_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ''')
+
+
+def _ensure_intraday_nav_table():
+    """确保模拟盘日内 NAV 快照表存在（hourly/15m 调度写入）"""
+    import instock.lib.database as mdb
+    if mdb.checkTableIsExist('cn_stock_paper_nav_intraday'):
+        return
+    mdb.executeSql('''
+        CREATE TABLE IF NOT EXISTS `cn_stock_paper_nav_intraday` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `paper_id` INT NOT NULL,
+            `datetime` DATETIME NOT NULL,
+            `total_value` DECIMAL(15,2) NOT NULL,
+            `cash` DECIMAL(15,2),
+            `position_value` DECIMAL(15,2),
+            UNIQUE KEY `uq_paper_dt` (`paper_id`, `datetime`),
+            INDEX `idx_paper_dt` (`paper_id`, `datetime`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     ''')

@@ -705,11 +705,24 @@ class TestEnsureTradeAndPositionTables:
     """Tests for _ensure_trade_table and _ensure_position_table."""
 
     @patch('instock.lib.database.checkTableIsExist', return_value=True)
+    @patch('instock.lib.database.executeSqlFetch', return_value=[('executed_at',)])
     @patch('instock.lib.database.executeSql')
-    def test_ensure_trade_table_exists(self, mock_exec, mock_check):
+    def test_ensure_trade_table_exists(self, mock_exec, mock_fetch, mock_check):
+        """\u8868\u5b58\u5728\u4e14 executed_at \u5217\u5df2\u5b58\u5728\uff1a\u4e0d\u5e94 ALTER\u3002"""
         _ensure_trade_table()
         mock_check.assert_called_once_with('cn_stock_backtest_trade')
         mock_exec.assert_not_called()
+
+    @patch('instock.lib.database.checkTableIsExist', return_value=True)
+    @patch('instock.lib.database.executeSqlFetch', return_value=[])
+    @patch('instock.lib.database.executeSql')
+    def test_ensure_trade_table_migrates_executed_at(self, mock_exec, mock_fetch, mock_check):
+        """\u8868\u5b58\u5728\u4f46\u7f3a executed_at \u5217\uff1a\u5e94 ALTER \u8865\u4e0a\u3002"""
+        _ensure_trade_table()
+        mock_exec.assert_called_once()
+        sql = mock_exec.call_args[0][0]
+        assert 'ALTER TABLE cn_stock_backtest_trade' in sql
+        assert 'executed_at' in sql
 
     @patch('instock.lib.database.checkTableIsExist', return_value=False)
     @patch('instock.lib.database.executeSql')
@@ -739,6 +752,27 @@ class TestEnsureTradeAndPositionTables:
         assert 'cn_stock_backtest_position' in sql
         assert 'avg_cost' in sql
         assert 'weight' in sql
+
+    @patch('instock.lib.database.checkTableIsExist', return_value=False)
+    @patch('instock.lib.database.executeSql')
+    def test_ensure_intraday_nav_table_creates(self, mock_exec, mock_check):
+        from instock.paper_trading.paper_engine import _ensure_intraday_nav_table
+        _ensure_intraday_nav_table()
+        mock_check.assert_called_once_with('cn_stock_paper_nav_intraday')
+        mock_exec.assert_called_once()
+        sql = mock_exec.call_args[0][0]
+        assert 'CREATE TABLE' in sql
+        assert 'cn_stock_paper_nav_intraday' in sql
+        assert '`datetime`' in sql
+        assert 'uq_paper_dt' in sql
+
+    @patch('instock.lib.database.checkTableIsExist', return_value=True)
+    @patch('instock.lib.database.executeSql')
+    def test_ensure_intraday_nav_table_exists(self, mock_exec, mock_check):
+        from instock.paper_trading.paper_engine import _ensure_intraday_nav_table
+        _ensure_intraday_nav_table()
+        mock_check.assert_called_once_with('cn_stock_paper_nav_intraday')
+        mock_exec.assert_not_called()
 
 
 # ===========================================================================
