@@ -15,13 +15,17 @@
 
 import datetime
 import logging
+import os
 
 import tornado.ioloop
 
 log = logging.getLogger(__name__)
 
-# 收盘后多久执行（给数据源留更新时间）
-RUN_AFTER_HOUR = 16
+# 收盘后多久执行（给数据源留更新时间）；与 paper_engine 同源 env，便于联调
+try:
+    RUN_AFTER_HOUR = int(os.environ.get('INSTOCK_PAPER_DAILY_AFTER_HOUR', '16'))
+except (TypeError, ValueError):
+    RUN_AFTER_HOUR = 16
 RUN_AFTER_MINUTE = 0
 # 检查间隔（毫秒）
 CHECK_INTERVAL_MS = 5 * 60 * 1000  # 5 分钟

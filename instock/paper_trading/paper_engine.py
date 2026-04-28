@@ -455,8 +455,9 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                     cur.execute(
                         'UPDATE cn_stock_paper_trading SET last_run_date=%s, '
                         'state_json=%s, current_cash=%s, current_value=%s WHERE id=%s',
-                        (date_str, new_state, context.portfolio.available_cash,
-                         context.portfolio.total_value, paper_id))
+                        (date_str, new_state,
+                         float(context.portfolio.available_cash),
+                         float(context.portfolio.total_value), paper_id))
 
                 # 9. 记录交易
                 for t in trade_records:
@@ -991,6 +992,14 @@ def _as_datetime(value):
     return None
 
 
+# 每日模拟盘等到收盘+数据落库后才执行；可通过 INSTOCK_PAPER_DAILY_AFTER_HOUR 调整
+import os as _os
+try:
+    _PAPER_DAILY_AFTER_HOUR = int(_os.environ.get('INSTOCK_PAPER_DAILY_AFTER_HOUR', '16'))
+except (TypeError, ValueError):
+    _PAPER_DAILY_AFTER_HOUR = 16
+
+
 def _is_paper_due(run_frequency, start_at, last_run_date, last_run_at,
                   date_str, now_dt, scheduled=False):
     start_dt = _as_datetime(start_at)
@@ -999,12 +1008,14 @@ def _is_paper_due(run_frequency, start_at, last_run_date, last_run_at,
 
     freq = _normalize_run_frequency(run_frequency)
     if freq == 'daily':
-        if scheduled and (now_dt.hour < 16):
-            return False, '每日模拟盘收盘后执行'
+        if scheduled and now_dt.hour < _PAPER_DAILY_AFTER_HOUR:
+            return False, f'等待今日收盘后执行 (≥ {_PAPER_DAILY_AFTER_HOUR:02d}:00)'
         if last_run_date and str(last_run_date) >= date_str:
             return False, f'今日已运行 ({last_run_date})'
         return True, 'ok'
 
+    # hourly / 15m: 数据源仍是日级 K 线 + cn_stock_spot 日级快照，
+    # 盘中并无分钟级行情；保留触发能力但避免盘前/午休空跑。
     last_dt = _as_datetime(last_run_at)
     if last_dt:
         interval = datetime.timedelta(minutes=_RUN_FREQUENCY_MINUTES[freq])
