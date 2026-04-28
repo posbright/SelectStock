@@ -628,6 +628,44 @@ class TestPaperRunFrequency:
         assert due is False
         assert '未到开始时间' in reason
 
+    def test_hourly_skipped_before_market_open(self):
+        # 09:00 still pre-open
+        due, reason = _is_paper_due(
+            'hourly', None, None, None, '2026-04-21',
+            datetime.datetime(2026, 4, 21, 9, 0), scheduled=True)
+        assert due is False
+        assert '非交易时段' in reason
+
+    def test_hourly_skipped_during_lunch_break(self):
+        due, reason = _is_paper_due(
+            'hourly', None, None, None, '2026-04-21',
+            datetime.datetime(2026, 4, 21, 12, 0), scheduled=True)
+        assert due is False
+        assert '非交易时段' in reason
+
+    def test_hourly_due_in_morning_session(self):
+        due, reason = _is_paper_due(
+            'hourly', None, None, None, '2026-04-21',
+            datetime.datetime(2026, 4, 21, 10, 30), scheduled=True)
+        assert due is True
+        assert reason == 'ok'
+
+    def test_hourly_due_after_close_for_eod_pass(self):
+        # 15:30 after close — still allow last EOD run
+        due, reason = _is_paper_due(
+            'hourly', None, None, None, '2026-04-21',
+            datetime.datetime(2026, 4, 21, 15, 30), scheduled=True)
+        assert due is True
+        assert reason == 'ok'
+
+    def test_hourly_manual_run_bypasses_session_gate(self):
+        # scheduled=False（手动调用）不受时段限制
+        due, reason = _is_paper_due(
+            'hourly', None, None, None, '2026-04-21',
+            datetime.datetime(2026, 4, 21, 12, 0), scheduled=False)
+        assert due is True
+        assert reason == 'ok'
+
 
 class TestPaperSecurityDataRouting:
     """Tests for stock/index data source selection in paper trading."""
@@ -1050,6 +1088,156 @@ class TestRunPaperTradingDaily:
 
         result = run_paper_trading_daily(1)
         assert result['status'] == 'ok'
+
+    @patch('instock.lib.database.checkTableIsExist', return_value=True)
+    @patch('instock.lib.database.executeSql')
+    @patch('instock.lib.database.executeSqlFetch')
+    @patch('instock.lib.trade_time.get_trade_date_last')
+    @patch('instock.lib.trade_time.is_trade_date', return_value=True)
+    @patch('instock.paper_trading.paper_engine.compile_strategy')
+    @patch('instock.paper_trading.paper_engine.load_stock_data')
+    @patch('instock.lib.database.get_connection')
+    def test_intraday_rerun_preserves_t_plus_one(self, mock_get_conn, mock_load,
+                                                  mock_compile, mock_is_td, mock_get_td,
+                                                  mock_fetch, mock_exec, mock_check):
+        """同日 hourly 重入：closeable_amount 不应被重置为 amount（保留 T+1 约束）。"""
+        import pandas as pd
+
+        mock_get_td.return_value = (datetime.date(2026, 3, 18), datetime.date(2026, 3, 18))
+
+        # 持仓 amount=200 但 closeable_amount=0 (今天买入，明天才能卖)
+        state_json = json.dumps({
+            'available_cash': 600000,
+            'positions': {
+                '600519': {
+                    'code': '600519', 'name': '贵州茅台',
+                    'amount': 200, 'closeable_amount': 0,
+                    'avg_cost': 1800.0, 'price': 1850.0,
+                },
+            },
+            'g_vars': {}, 'benchmark': '000300',
+            'commission_rate': 0.0003, 'stamp_tax_rate': 0.001, 'slippage_rate': 0.002,
+        })
+        # 同日重入：last_run_date 已经是今天 2026-03-18, run_frequency=hourly
+        mock_fetch.return_value = [(1, 10, 1000000, 'running',
+                                    datetime.date(2026, 3, 18), state_json,
+                                    'def handle_data(c,d): pass',
+                                    'hourly', None,
+                                    datetime.datetime(2026, 3, 18, 10, 0))]
+
+        dates = pd.date_range('2026-03-01', '2026-03-18', freq='B')
+        df = pd.DataFrame({
+            'date': dates,
+            'close': [1900.0] * len(dates),
+            'open': [1890.0] * len(dates),
+            'high': [1910.0] * len(dates),
+            'low': [1880.0] * len(dates),
+            'volume': [10000] * len(dates),
+            'pre_close': [1895.0] * len(dates),
+        })
+        mock_load.return_value = df
+
+        captured = {}
+
+        def _handle(ctx, data):
+            pos = ctx.portfolio.positions.get('600519')
+            if pos is not None:
+                captured['amount'] = pos.amount
+                captured['closeable_amount'] = pos.closeable_amount
+
+        mock_compile.return_value = {
+            'initialize': lambda c: None,
+            'handle_data': _handle,
+            'before_trading_start': None,
+            'after_trading_end': None,
+        }
+
+        mock_cur = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cur
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__ = MagicMock(return_value=mock_conn)
+        mock_ctx.__exit__ = MagicMock(return_value=False)
+        mock_get_conn.return_value = mock_ctx
+
+        result = run_paper_trading_daily(
+            1, scheduled=True,
+            now=datetime.datetime(2026, 3, 18, 11, 0))
+        assert result['status'] == 'ok'
+        # 关键断言: 同日重入不应把 closeable_amount 拉回 amount
+        assert captured['amount'] == 200
+        assert captured['closeable_amount'] == 0
+
+    @patch('instock.lib.database.checkTableIsExist', return_value=True)
+    @patch('instock.lib.database.executeSql')
+    @patch('instock.lib.database.executeSqlFetch')
+    @patch('instock.lib.trade_time.get_trade_date_last')
+    @patch('instock.lib.trade_time.is_trade_date', return_value=True)
+    @patch('instock.paper_trading.paper_engine.compile_strategy')
+    @patch('instock.paper_trading.paper_engine.load_stock_data')
+    @patch('instock.lib.database.get_connection')
+    def test_cross_day_run_resets_t_plus_one(self, mock_get_conn, mock_load,
+                                              mock_compile, mock_is_td, mock_get_td,
+                                              mock_fetch, mock_exec, mock_check):
+        """跨日: 上一交易日 closeable_amount=0 应被重置为 amount."""
+        import pandas as pd
+
+        mock_get_td.return_value = (datetime.date(2026, 3, 18), datetime.date(2026, 3, 18))
+
+        state_json = json.dumps({
+            'available_cash': 600000,
+            'positions': {
+                '600519': {
+                    'code': '600519', 'name': '贵州茅台',
+                    'amount': 200, 'closeable_amount': 0,
+                    'avg_cost': 1800.0, 'price': 1850.0,
+                },
+            },
+            'g_vars': {}, 'benchmark': '000300',
+            'commission_rate': 0.0003, 'stamp_tax_rate': 0.001, 'slippage_rate': 0.002,
+        })
+        mock_fetch.return_value = [(1, 10, 1000000, 'running',
+                                    datetime.date(2026, 3, 17), state_json,
+                                    'def handle_data(c,d): pass')]
+
+        dates = pd.date_range('2026-03-01', '2026-03-18', freq='B')
+        df = pd.DataFrame({
+            'date': dates,
+            'close': [1900.0] * len(dates),
+            'open': [1890.0] * len(dates),
+            'high': [1910.0] * len(dates),
+            'low': [1880.0] * len(dates),
+            'volume': [10000] * len(dates),
+            'pre_close': [1895.0] * len(dates),
+        })
+        mock_load.return_value = df
+
+        captured = {}
+
+        def _handle(ctx, data):
+            pos = ctx.portfolio.positions.get('600519')
+            if pos is not None:
+                captured['closeable_amount'] = pos.closeable_amount
+
+        mock_compile.return_value = {
+            'initialize': lambda c: None,
+            'handle_data': _handle,
+            'before_trading_start': None,
+            'after_trading_end': None,
+        }
+
+        mock_cur = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cur
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__ = MagicMock(return_value=mock_conn)
+        mock_ctx.__exit__ = MagicMock(return_value=False)
+        mock_get_conn.return_value = mock_ctx
+
+        result = run_paper_trading_daily(1)
+        assert result['status'] == 'ok'
+        # 跨日: closeable_amount 应被 _on_new_day 重置为 amount
+        assert captured['closeable_amount'] == 200
 
     @patch('instock.lib.database.checkTableIsExist', return_value=True)
     @patch('instock.lib.database.executeSql')

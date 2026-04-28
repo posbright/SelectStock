@@ -231,8 +231,20 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                     'pre_close': spot.get('pre_close', spot['close']),
                 })
 
-        # 更新持仓价格 + T+1
-        context.portfolio._on_new_day(today_prices)
+        # 跨交易日判断：同一交易日多次运行（hourly/15m）不应重置 T+1 closeable_amount。
+        prev_run_date_str = str(last_run_date) if last_run_date else None
+        is_new_trade_day = (prev_run_date_str is None) or (prev_run_date_str < date_str)
+
+        # 更新持仓价格 + T+1：仅跨日才重置 closeable_amount
+        if is_new_trade_day:
+            context.portfolio._on_new_day(today_prices)
+        else:
+            # 同日重入：仅刷新最新价格与总资产，保留 T+1 closeable_amount
+            for _code, _price in today_prices.items():
+                _pos = context.portfolio.positions.get(_code)
+                if _pos:
+                    _pos._update_price(_price)
+            context.portfolio._update_value()
 
         # 6. 执行策略
         api_ns = _create_api(context, data_proxy, g)
@@ -1016,6 +1028,16 @@ def _is_paper_due(run_frequency, start_at, last_run_date, last_run_at,
 
     # hourly / 15m: 数据源仍是日级 K 线 + cn_stock_spot 日级快照，
     # 盘中并无分钟级行情；保留触发能力但避免盘前/午休空跑。
+    if scheduled:
+        try:
+            import instock.lib.trade_time as _trd
+            in_session = _trd.is_tradetime(now_dt)
+            after_close = _trd.is_close(now_dt)
+            if not (in_session or after_close):
+                return False, '非交易时段'
+        except Exception:
+            # trade_time 加载失败时不阢达主逻辑
+            pass
     last_dt = _as_datetime(last_run_at)
     if last_dt:
         interval = datetime.timedelta(minutes=_RUN_FREQUENCY_MINUTES[freq])
