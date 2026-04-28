@@ -59,14 +59,22 @@ def prepare():
     # 回归测试表，逐表顺序处理以控制内存占用（适配 ≤2GB 服务器）
     # 可通过环境变量 INSTOCK_BACKTEST_OUTER_WORKERS 覆盖（默认 1：顺序执行）
     outer_workers = _cfg.get_int('INSTOCK_BACKTEST_OUTER_WORKERS', 1)
+    total_tables = len(tables)
+    logging.info(f"backtest.prepare 开始：共 {total_tables} 张策略表，outer_workers={outer_workers}，日期区间 {date_start}~{date_end}")
+    overall_start = datetime.datetime.now()
     with concurrent.futures.ThreadPoolExecutor(max_workers=outer_workers) as executor:
-        for table in tables:
-            executor.submit(process, table, date_start, date_end, backtest_column)
+        for idx, table in enumerate(tables, start=1):
+            executor.submit(process, table, date_start, date_end, backtest_column, idx, total_tables)
+    elapsed = (datetime.datetime.now() - overall_start).total_seconds()
+    logging.info(f"backtest.prepare 完成：共 {total_tables} 张表，总耗时 {elapsed:.1f}s")
 
 
-def process(table, date_start, date_end, backtest_column):
+def process(table, date_start, date_end, backtest_column, idx=0, total=0):
     table_name = table['name']
+    tag = f"[{idx}/{total}] {table_name}" if total else table_name
+    t0 = datetime.datetime.now()
     if not mdb.checkTableIsExist(table_name):
+        logging.info(f"backtest {tag} 跳过：表不存在")
         return
 
     column_tail = tuple(table['columns'])[-1]
@@ -74,8 +82,11 @@ def process(table, date_start, date_end, backtest_column):
     sql = f"SELECT * FROM `{table_name}` WHERE `date` < %s AND `{column_tail}` is NULL"
     try:
         data = pd.read_sql(sql=sql, con=mdb.engine(), params=(now_date,))
+        read_sec = (datetime.datetime.now() - t0).total_seconds()
         if data is None or len(data.index) == 0:
+            logging.info(f"backtest {tag} 无待回测记录（read_sql {read_sec:.1f}s）")
             return
+        logging.info(f"backtest {tag} 待回测 {len(data.index)} 行（read_sql {read_sec:.1f}s）开始 run_check")
 
         subset = data[list(tbs.TABLE_CN_STOCK_FOREIGN_KEY['columns'])]
         subset = subset.astype({'date': 'string'})
@@ -88,13 +99,21 @@ def process(table, date_start, date_end, backtest_column):
             rate_func = partial(rate.get_rates_with_exit,
                                 trailing_exit_days=20, stop_loss_pct=10)
 
+        rc_t0 = datetime.datetime.now()
         results = run_check(stocks, date_start, date_end, backtest_column,
                             rate_func=rate_func)
+        rc_sec = (datetime.datetime.now() - rc_t0).total_seconds()
         if results is None:
+            logging.info(f"backtest {tag} run_check 无结果（{rc_sec:.1f}s）")
             return
+        logging.info(f"backtest {tag} run_check 完成 {len(results)} 条（{rc_sec:.1f}s）开始写库")
 
+        wr_t0 = datetime.datetime.now()
         data_new = pd.DataFrame(results.values())
         mdb.update_db_from_df(data_new, table_name, ('date', 'code'))
+        wr_sec = (datetime.datetime.now() - wr_t0).total_seconds()
+        total_sec = (datetime.datetime.now() - t0).total_seconds()
+        logging.info(f"backtest {tag} 写库完成（{wr_sec:.1f}s）总耗时 {total_sec:.1f}s")
 
     except Exception as e:
         logging.error(f"backtest_data_daily_job.process处理异常：{table}表", exc_info=True)
