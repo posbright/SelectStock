@@ -2138,6 +2138,15 @@ class StartPortfolioBacktestHandler(webBase.BaseHandler, ABC):
                                      m.get('daily_win_rate'), m.get('trade_count'),
                                      json.dumps(result, ensure_ascii=False, default=str)))
                                 result['backtest_id'] = bt_id
+                                # 更新策略的 backtest_count 和 compile_count（与同步入口保持一致）
+                                # 此前仅 RunPortfolioBacktestHandler 更新，导致前端编辑页（用 Start*）跑多次仍显示 0。
+                                if strategy_id:
+                                    try:
+                                        mdb.executeSql(
+                                            'UPDATE cn_stock_strategy_code SET backtest_count=backtest_count+1, '
+                                            'compile_count=compile_count+1 WHERE id=%s', (strategy_id,))
+                                    except Exception as e:
+                                        logging.debug(f"backtest_count 更新异常（不影响回测结果）: strategy_id={strategy_id} - {e}")
                             except Exception as e:
                                 logging.warning(f"回测持久化异常: {e}")
                 except Exception as e:
