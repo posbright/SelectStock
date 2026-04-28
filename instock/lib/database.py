@@ -19,7 +19,9 @@ __author__ = 'InStock'
 __date__ = '2026/02/14'
 
 # 数据库连接重试次数（应用于 get_connection / insert / executeSql）
-_DB_CONN_RETRIES = _cfg.get_int('INSTOCK_DB_CONN_RETRIES', 1)
+# 注意：值必须 >= 2 才能让 _is_retryable_error 路径真正生效（attempt < max_retries 条件）。
+# 默认 3 次：覆盖远程 MySQL 偶发超时（如 backtest 子进程抢占资源时）+ 失效连接重建。
+_DB_CONN_RETRIES = max(_cfg.get_int('INSTOCK_DB_CONN_RETRIES', 3), 1)
 
 # 批量写入分块大小（避免一次性构造巨大 SQL 语句导致 OOM）
 # 默认 500 行/批：4367 行会分 ~9 批执行，单批 SQL 约 10-30 MB
@@ -39,9 +41,11 @@ MYSQL_CONN_URL = "mysql+pymysql://%s:%s@%s:%s/%s?charset=%s" % (
 logging.info(f"数据库链接信息：mysql+pymysql://{db_user}:***@{db_host}:{db_port}/{db_database}?charset={db_charset}")
 
 # 超时配置（本地连远程时适当放宽）
-_connect_timeout = _cfg.get_int('INSTOCK_DB_CONNECT_TIMEOUT', 10)
-_read_timeout = _cfg.get_int('INSTOCK_DB_READ_TIMEOUT', 10)
-_write_timeout = _cfg.get_int('INSTOCK_DB_WRITE_TIMEOUT', 10)
+# 默认 30 秒：远端 MySQL 在 backtest 子进程并发期间，10s 默认值频繁触发
+# (2013, 'Lost connection to MySQL server during query (timed out)') —— 见 stock_error.log。
+_connect_timeout = _cfg.get_int('INSTOCK_DB_CONNECT_TIMEOUT', 30)
+_read_timeout = _cfg.get_int('INSTOCK_DB_READ_TIMEOUT', 30)
+_write_timeout = _cfg.get_int('INSTOCK_DB_WRITE_TIMEOUT', 60)
 
 MYSQL_CONN_DBAPI = {'host': db_host, 'user': db_user, 'password': db_password, 'database': db_database,
                     'charset': db_charset, 'port': db_port, 'autocommit': True,

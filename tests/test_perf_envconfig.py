@@ -47,10 +47,12 @@ class TestPerfEnvDefaults(unittest.TestCase):
         self.assertEqual(m._CRAWL_WORKERS, 5)
 
     def test_db_conn_retries_default(self):
+        # 默认 3：max_retries == 1 时 `attempt < max_retries` 永远 False，
+        # 重试逻辑形同虚设，会导致 MySQL 偶发超时直接雪崩（见 stock_error.log 2026-04-28）。
         os.environ.pop('INSTOCK_DB_CONN_RETRIES', None)
         import importlib, instock.lib.database as m
         importlib.reload(m)
-        self.assertEqual(m._DB_CONN_RETRIES, 1)
+        self.assertEqual(m._DB_CONN_RETRIES, 3)
 
     def test_job_timeout_defaults(self):
         """验证 execute_daily_job 中的超时默认值（通过 envconfig 间接验证）"""
