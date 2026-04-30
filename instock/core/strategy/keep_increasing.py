@@ -29,22 +29,29 @@ def check(code_name, data, date=None, threshold=30):
         return False
 
     data.loc[:, 'ma30'] = tl.MA(data['close'].values, timeperiod=30)
-    data['ma30'] = data['ma30'].fillna(0.0)
+    data['ma30'] = data['ma30'].replace([np.inf, -np.inf], np.nan)
 
     data = data.tail(n=threshold)
 
     step1 = round(threshold / 3)
     step2 = round(threshold * 2 / 3)
 
-    if data.iloc[0]['ma30'] < data.iloc[step1]['ma30'] < \
-            data.iloc[step2]['ma30'] < data.iloc[-1]['ma30'] and data.iloc[-1]['ma30'] > 1.2 * data.iloc[0]['ma30']:
+    ma30_start = data.iloc[0]['ma30']
+    ma30_step1 = data.iloc[step1]['ma30']
+    ma30_step2 = data.iloc[step2]['ma30']
+    ma30_last = data.iloc[-1]['ma30']
+    ma30_points = (ma30_start, ma30_step1, ma30_step2, ma30_last)
+    if any(pd.isna(value) or not np.isfinite(value) for value in ma30_points) or ma30_start <= 0:
+        return False
+
+    if ma30_start < ma30_step1 < ma30_step2 < ma30_last and ma30_last > 1.2 * ma30_start:
         p_change = data.iloc[-1]['p_change'] if 'p_change' in data.columns else 0.0
         return {
             'p_change': round(float(p_change), 2),
             'close': round(float(data.iloc[-1]['close']), 2),
-            'ma30': round(float(data.iloc[-1]['ma30']), 2),
-            'ma30_start': round(float(data.iloc[0]['ma30']), 2),
-            'ma30_ratio': round(float(data.iloc[-1]['ma30'] / data.iloc[0]['ma30']), 2),
+            'ma30': round(float(ma30_last), 2),
+            'ma30_start': round(float(ma30_start), 2),
+            'ma30_ratio': round(float(ma30_last / ma30_start), 2),
         }
     else:
         return False

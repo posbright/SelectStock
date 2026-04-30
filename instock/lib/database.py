@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 
 import logging
+import math
+import numbers
 import os
 import time
 import threading
@@ -176,7 +178,7 @@ def get_connection():
 # 解决并发写入时的主键冲突、死锁等问题
 def _mysql_upsert(table, conn, keys, data_iter):
     """pandas to_sql 的自定义 method，使用 INSERT ... ON DUPLICATE KEY UPDATE"""
-    data = [dict(zip(keys, row)) for row in data_iter]
+    data = [dict(zip(keys, (_mysql_safe_value(value) for value in row))) for row in data_iter]
     if not data:
         return 0
     stmt = mysql_insert(table.table).values(data)
@@ -185,6 +187,32 @@ def _mysql_upsert(table, conn, keys, data_iter):
     upsert_stmt = stmt.on_duplicate_key_update(**update_dict)
     result = conn.execute(upsert_stmt)
     return result.rowcount
+
+
+def _mysql_safe_value(value):
+    if value is None:
+        return None
+    if isinstance(value, numbers.Number) and not math.isfinite(value):
+        return None
+    return value
+
+
+def _is_mysql_null_value(value):
+    if value is None:
+        return True
+    if isinstance(value, numbers.Number) and not math.isfinite(value):
+        return True
+    try:
+        return value != value
+    except Exception:
+        return False
+
+
+def _sanitize_dataframe_for_mysql(data):
+    if data is None:
+        return data
+    sanitized = data.replace([float('inf'), float('-inf')], None)
+    return sanitized.where(sanitized.notnull(), None)
 
 
 # 判断是否为可重试的数据库瞬态错误（死锁、锁超时、连接异常等）
@@ -210,6 +238,7 @@ def insert_db_from_df(data, table_name, cols_type, write_index, primary_keys, in
 
 # 增加一个插入到其他数据库的方法。
 def insert_other_db_from_df(to_db, data, table_name, cols_type, write_index, primary_keys, indexs=None):
+    data = _sanitize_dataframe_for_mysql(data)
     # 定义engine
     if to_db is None:
         engine_mysql = engine()
@@ -293,7 +322,7 @@ def insert_other_db_from_df(to_db, data, table_name, cols_type, write_index, pri
 
 # 更新数据
 def update_db_from_df(data, table_name, where):
-    data = data.where(data.notnull(), None)
+    data = _sanitize_dataframe_for_mysql(data)
     update_string = f'UPDATE `{table_name}` set '
     where_string = ' where '
     cols = tuple(data.columns)
@@ -309,8 +338,7 @@ def update_db_from_df(data, table_name, where):
                         where_params = []
                         for index, col in enumerate(cols):
                             val = row[index]
-                            # 检测 None 和 NaN（NaN != NaN）
-                            is_null = val is None or (val != val)
+                            is_null = _is_mysql_null_value(val)
                             if col in where:
                                 if is_null:
                                     where_parts.append(f'`{col}` IS NULL')
