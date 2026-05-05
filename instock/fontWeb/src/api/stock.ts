@@ -177,8 +177,11 @@ export function getBacktestDashboardTradePairs(params: DashboardTradePairsParams
 export interface KlineParams {
   code: string
   date?: string
+  start_date?: string
+  end_date?: string
   period?: string   // daily / weekly / monthly / quarterly / yearly
   days?: number
+  warmup_days?: number
   name?: string
   type?: string     // 'index' | 'stock' — 指定数据源类型，避免同代码股票/指数混淆
 }
@@ -193,6 +196,11 @@ export function getKlineData(params: KlineParams) {
 /** 获取内置策略模板 */
 export function getStrategyTemplates() {
   return request({ url: '/api/strategy/templates', method: 'get' })
+}
+
+/** 同步内置策略模板到策略库（同名策略会更新代码） */
+export function syncStrategyTemplates() {
+  return request({ url: '/api/strategy/sync_templates', method: 'post' })
 }
 
 /** 获取策略列表（含文件夹） */

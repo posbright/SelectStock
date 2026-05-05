@@ -127,7 +127,11 @@
         <div ref="tradeChartEl" class="chart-box"></div>
         <el-table :data="info?.trades || []" size="small" max-height="480" stripe style="margin-top: 8px">
           <el-table-column prop="date" label="日期" width="100" />
-          <el-table-column prop="code" label="代码" width="75" />
+          <el-table-column prop="code" label="代码" width="75">
+            <template #default="{ row }">
+              <el-button link type="primary" @click.stop="openStockTrade(row)">{{ row.code }}</el-button>
+            </template>
+          </el-table-column>
           <el-table-column prop="name" label="名称" width="85" show-overflow-tooltip />
           <el-table-column prop="direction" label="方向" width="55">
             <template #default="{ row }">
@@ -169,6 +173,9 @@
               </span>
               <span v-else>-</span>
             </template>
+          </el-table-column>
+          <el-table-column label="交易原因" min-width="180" show-overflow-tooltip>
+            <template #default="{ row }">{{ tradeReason(row) }}</template>
           </el-table-column>
         </el-table>
       </el-tab-pane>
@@ -219,6 +226,119 @@
         </div>
       </el-tab-pane>
     </el-tabs>
+
+    <el-dialog v-model="stockDialogVisible" :title="stockDialogTitle" width="92vw" top="4vh" destroy-on-close
+               @closed="disposeStockCharts">
+      <div class="stock-dialog" v-loading="stockLoading">
+        <div class="stock-summary" v-if="selectedTrade">
+          <div class="summary-item"><span>交易日期</span><b>{{ selectedTrade.date }}</b></div>
+          <div class="summary-item"><span>方向</span><b :class="selectedTrade.direction === 'buy' ? 'val-red' : 'val-green'">{{ directionLabel(selectedTrade) }}</b></div>
+          <div class="summary-item"><span>成交价</span><b>{{ N(selectedTrade.price).toFixed(2) }}</b></div>
+          <div class="summary-item"><span>数量</span><b>{{ N(selectedTrade.amount).toLocaleString() }}</b></div>
+          <div class="summary-item wide"><span>原因</span><b>{{ tradeReason(selectedTrade) }}</b></div>
+        </div>
+
+        <div class="decision-panel" v-if="selectedTrade">
+          <div class="panel-title">交易决策依据</div>
+          <div class="decision-summary">
+            <span>{{ decisionSummary.action }}</span>
+            <b>{{ decisionSummary.reason }}</b>
+          </div>
+          <el-table :data="decisionRows" size="small" border class="decision-table" empty-text="暂无指标数据">
+            <el-table-column prop="name" label="指标/规则" min-width="120" />
+            <el-table-column prop="threshold" label="阈值/判定" min-width="150" />
+            <el-table-column prop="actual" label="实际数据" min-width="170" />
+            <el-table-column prop="result" label="结果" width="80" align="center">
+              <template #default="{ row }">
+                <el-tag :type="row.pass ? 'success' : row.pass === false ? 'warning' : 'info'" size="small" effect="plain">
+                  {{ row.result }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="note" label="说明" min-width="180" show-overflow-tooltip />
+          </el-table>
+        </div>
+
+        <div class="stock-toolbar">
+          <span class="toolbar-label">主图叠加</span>
+          <el-checkbox-group v-model="stockOverlayIndicators" size="small" @change="renderActiveStockChart">
+            <el-checkbox-button label="MA5">MA5</el-checkbox-button>
+            <el-checkbox-button label="MA20">MA20</el-checkbox-button>
+            <el-checkbox-button label="MA30">MA30</el-checkbox-button>
+            <el-checkbox-button label="MA60">MA60</el-checkbox-button>
+            <el-checkbox-button label="BOLL">BOLL</el-checkbox-button>
+          </el-checkbox-group>
+          <el-switch
+            v-model="stockShowBenchmark"
+            size="small"
+            :active-text="benchmarkSwitchText"
+            inactive-text="隐藏基准K线"
+            @change="renderActiveStockChart"
+          />
+          <span class="toolbar-hint">指标基于完整历史K线计算，视图默认聚焦回测区间，买卖点来自本次回测交易记录。</span>
+        </div>
+
+        <el-tabs v-model="stockActivePeriod" @tab-change="renderActiveStockChart">
+          <el-tab-pane label="日K" name="daily">
+            <div ref="stockDailyEl" class="stock-chart-box"></div>
+          </el-tab-pane>
+          <el-tab-pane label="周K" name="weekly">
+            <div ref="stockWeeklyEl" class="stock-chart-box"></div>
+          </el-tab-pane>
+          <el-tab-pane label="月K" name="monthly">
+            <div ref="stockMonthlyEl" class="stock-chart-box"></div>
+          </el-tab-pane>
+        </el-tabs>
+
+        <div class="indicator-panel" v-if="selectedTrade">
+          <div class="panel-title">{{ stockPeriodLabel }}指标快照</div>
+          <el-descriptions :column="4" size="small" border>
+            <el-descriptions-item label="K线日期">{{ activeIndicatorSnapshot.date || '--' }}</el-descriptions-item>
+            <el-descriptions-item label="开盘">{{ fmtMaybe(activeIndicatorSnapshot.open) }}</el-descriptions-item>
+            <el-descriptions-item label="最高">{{ fmtMaybe(activeIndicatorSnapshot.high) }}</el-descriptions-item>
+            <el-descriptions-item label="最低">{{ fmtMaybe(activeIndicatorSnapshot.low) }}</el-descriptions-item>
+            <el-descriptions-item label="收盘">{{ fmtMaybe(activeIndicatorSnapshot.close) }}</el-descriptions-item>
+            <el-descriptions-item label="MA5">{{ fmtMaybe(activeIndicatorSnapshot.ma5) }}</el-descriptions-item>
+            <el-descriptions-item label="MA20">{{ fmtMaybe(activeIndicatorSnapshot.ma20) }}</el-descriptions-item>
+            <el-descriptions-item label="MA30">{{ fmtMaybe(activeIndicatorSnapshot.ma30) }}</el-descriptions-item>
+            <el-descriptions-item label="MA60">{{ fmtMaybe(activeIndicatorSnapshot.ma60) }}</el-descriptions-item>
+            <el-descriptions-item label="BOLL上轨">{{ fmtMaybe(activeIndicatorSnapshot.bollUpper) }}</el-descriptions-item>
+            <el-descriptions-item label="BOLL中轨">{{ fmtMaybe(activeIndicatorSnapshot.bollMiddle) }}</el-descriptions-item>
+            <el-descriptions-item label="BOLL下轨">{{ fmtMaybe(activeIndicatorSnapshot.bollLower) }}</el-descriptions-item>
+            <el-descriptions-item label="RSI14">{{ fmtMaybe(activeIndicatorSnapshot.rsi) }}</el-descriptions-item>
+            <el-descriptions-item label="MACD DIF">{{ fmtMaybe(activeIndicatorSnapshot.macdDif) }}</el-descriptions-item>
+            <el-descriptions-item label="MACD DEA">{{ fmtMaybe(activeIndicatorSnapshot.macdDea) }}</el-descriptions-item>
+            <el-descriptions-item label="MACD柱">{{ fmtMaybe(activeIndicatorSnapshot.macdHist) }}</el-descriptions-item>
+            <el-descriptions-item label="成交量">{{ N(activeIndicatorSnapshot.volume || 0).toLocaleString() }}</el-descriptions-item>
+          </el-descriptions>
+        </div>
+
+        <el-table :data="selectedStockTrades" size="small" max-height="220" stripe class="stock-trade-table"
+                  @row-click="selectTradeInDialog">
+          <el-table-column prop="date" label="日期" width="100" />
+          <el-table-column label="方向" width="70">
+            <template #default="{ row }">
+              <span :class="row.direction === 'buy' ? 'val-red' : 'val-green'">{{ directionLabel(row) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="code" label="代码" width="75" />
+          <el-table-column prop="name" label="名称" width="110" show-overflow-tooltip />
+          <el-table-column label="价格" width="85" align="right"><template #default="{ row }">{{ N(row.price).toFixed(2) }}</template></el-table-column>
+          <el-table-column label="数量" width="95" align="right"><template #default="{ row }">{{ N(row.amount).toLocaleString() }}</template></el-table-column>
+          <el-table-column label="盈亏/收益率" width="140" align="right">
+            <template #default="{ row }">
+              <span v-if="row.direction === 'sell'" :class="pctCls(row.close_profit)">
+                {{ (row.close_profit ?? 0) >= 0 ? '+' : '' }}{{ N(row.close_profit || 0).toFixed(2) }} / {{ N(row.return_rate || 0).toFixed(2) }}%
+              </span>
+              <span v-else>-</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="交易原因" min-width="260" show-overflow-tooltip>
+            <template #default="{ row }">{{ tradeReason(row) }}</template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -226,7 +346,7 @@
 import { ref, computed, onMounted, onUnmounted, onActivated, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
-import { getPortfolioBacktestDetail } from '@/api/stock'
+import { getKlineData, getPortfolioBacktestDetail } from '@/api/stock'
 import * as echarts from 'echarts'
 
 const route = useRoute()
@@ -240,9 +360,25 @@ let lastLoadedId = 0   // 记录上次加载的回测ID，用于 keep-alive 激�
 const chartEl = ref<HTMLElement>()
 const pnlChartEl = ref<HTMLElement>()
 const tradeChartEl = ref<HTMLElement>()
+const stockDailyEl = ref<HTMLElement>()
+const stockWeeklyEl = ref<HTMLElement>()
+const stockMonthlyEl = ref<HTMLElement>()
 let chart: echarts.ECharts | null = null
 let pnlChart: echarts.ECharts | null = null
 let tradeChart: echarts.ECharts | null = null
+let stockDailyChart: echarts.ECharts | null = null
+let stockWeeklyChart: echarts.ECharts | null = null
+let stockMonthlyChart: echarts.ECharts | null = null
+
+const stockDialogVisible = ref(false)
+const stockLoading = ref(false)
+const stockActivePeriod = ref<'daily' | 'weekly' | 'monthly'>('daily')
+const selectedStock = ref<any>(null)
+const selectedTrade = ref<any>(null)
+const stockKlines = ref<Record<string, any>>({})
+const benchmarkKlines = ref<Record<string, any>>({})
+const stockOverlayIndicators = ref(['MA5', 'MA20', 'MA30', 'MA60', 'BOLL'])
+const stockShowBenchmark = ref(true)
 
 // ── shortcuts ──
 const N = Number
@@ -261,6 +397,239 @@ function pctCls(v: number | undefined) {
   return v > 0 ? 'val-red' : 'val-green'
 }
 
+function fmtMaybe(v: any, digits = 2) {
+  if (v == null || Number.isNaN(Number(v))) return '--'
+  return N(v).toFixed(digits)
+}
+
+function finiteNumber(v: any): number | null {
+  const num = Number(v)
+  return Number.isFinite(num) ? num : null
+}
+
+function fmtDiffPct(value: any, base: any) {
+  const actual = finiteNumber(value)
+  const threshold = finiteNumber(base)
+  if (actual == null || threshold == null || threshold === 0) return '--'
+  const diff = (actual / threshold - 1) * 100
+  return `${diff >= 0 ? '+' : ''}${diff.toFixed(2)}%`
+}
+
+function directionLabel(trade: any) {
+  return trade?.direction === 'buy' ? '买入' : '卖出'
+}
+
+function tradeReason(trade: any) {
+  if (!trade) return '--'
+  if (trade.reason) return trade.reason
+  const logReason = findTradeLogReason(trade)
+  if (logReason) return logReason
+  if (trade.direction === 'buy') {
+    return `策略触发买入信号，按收盘价撮合；成交价 ${fmtMaybe(trade.price)}，成交金额 ${N(trade.value || trade.price * trade.amount).toLocaleString('zh-CN', { maximumFractionDigits: 0 })} 元，佣金 ${fmtMaybe(trade.commission || 0)}，滑点成本 ${fmtMaybe(trade.slippage_cost || 0)}`
+  }
+  const profit = trade.close_profit == null ? '--' : `${trade.close_profit >= 0 ? '+' : ''}${fmtMaybe(trade.close_profit)}`
+  const ret = trade.return_rate == null ? '--' : `${trade.return_rate >= 0 ? '+' : ''}${fmtMaybe(trade.return_rate)}%`
+  return `策略触发卖出/风控/调仓信号，按收盘价撮合；成交价 ${fmtMaybe(trade.price)}，平仓盈亏 ${profit}，收益率 ${ret}，佣金 ${fmtMaybe(trade.commission || 0)}，印花税 ${fmtMaybe(trade.tax || 0)}，滑点成本 ${fmtMaybe(trade.slippage_cost || 0)}`
+}
+
+function decisionStatus(pass: boolean | null, positive = '满足', negative = '偏离') {
+  if (pass == null) return '缺数据'
+  return pass ? positive : negative
+}
+
+function buildDecisionRow(name: string, threshold: string, actual: string, pass: boolean | null, note: string) {
+  return {
+    name,
+    threshold,
+    actual,
+    pass,
+    result: decisionStatus(pass),
+    note,
+  }
+}
+
+function fmtVolume(v: any) {
+  const num = finiteNumber(v)
+  if (num == null) return '--'
+  if (Math.abs(num) >= 100000000) return `${(num / 100000000).toFixed(2)}亿`
+  if (Math.abs(num) >= 10000) return `${(num / 10000).toFixed(1)}万`
+  return num.toLocaleString('zh-CN', { maximumFractionDigits: 0 })
+}
+
+function fmtIndicatorDiff(value: any, base: any) {
+  const diff = fmtDiffPct(value, base)
+  return diff === '--' ? '' : `（偏离 ${diff}）`
+}
+
+function maCrossText(snapshot: any) {
+  const current = finiteNumber(snapshot.ma5) != null && finiteNumber(snapshot.ma20) != null
+    ? `MA5 ${fmtMaybe(snapshot.ma5)} / MA20 ${fmtMaybe(snapshot.ma20)}`
+    : 'MA5/MA20 --'
+  const prev = finiteNumber(snapshot.prevMa5) != null && finiteNumber(snapshot.prevMa20) != null
+    ? `，前值 ${fmtMaybe(snapshot.prevMa5)} / ${fmtMaybe(snapshot.prevMa20)}`
+    : ''
+  return current + prev
+}
+
+function decisionRowsForTrade(trade: any, snapshot: any) {
+  if (!trade) return []
+  const rows: any[] = []
+  const isBuy = trade.direction === 'buy'
+  const close = finiteNumber(snapshot?.close)
+  const price = finiteNumber(trade.price)
+  const ma5 = finiteNumber(snapshot?.ma5)
+  const ma20 = finiteNumber(snapshot?.ma20)
+  const ma60 = finiteNumber(snapshot?.ma60)
+  const prevMa5 = finiteNumber(snapshot?.prevMa5)
+  const prevMa20 = finiteNumber(snapshot?.prevMa20)
+  const bollUpper = finiteNumber(snapshot?.bollUpper)
+  const bollMiddle = finiteNumber(snapshot?.bollMiddle)
+  const bollLower = finiteNumber(snapshot?.bollLower)
+  const rsi = finiteNumber(snapshot?.rsi)
+  const macdDif = finiteNumber(snapshot?.macdDif)
+  const macdDea = finiteNumber(snapshot?.macdDea)
+  const macdHist = finiteNumber(snapshot?.macdHist)
+  const prevMacdHist = finiteNumber(snapshot?.prevMacdHist)
+  const volume = finiteNumber(snapshot?.volume)
+  const volMa5 = finiteNumber(snapshot?.volMa5)
+  const tradeValue = finiteNumber(trade.value || (trade.price * trade.amount))
+  const returnRate = finiteNumber(trade.return_rate)
+  const closeProfit = finiteNumber(trade.close_profit)
+
+  rows.push(buildDecisionRow(
+    '原始交易信号',
+    isBuy ? '策略发出买入/建仓指令' : '策略发出卖出/调仓/风控指令',
+    tradeReason(trade),
+    null,
+    '来自回测交易记录或匹配到的运行日志',
+  ))
+  rows.push(buildDecisionRow(
+    '成交撮合',
+    '按当日K线收盘价附近撮合',
+    `成交 ${fmtMaybe(price)} / 收盘 ${fmtMaybe(close)}${fmtIndicatorDiff(price, close)}`,
+    price != null && close != null ? Math.abs(price - close) <= Math.max(0.01, Math.abs(close) * 0.03) : null,
+    `金额 ${tradeValue == null ? '--' : tradeValue.toLocaleString('zh-CN', { maximumFractionDigits: 0 })} 元，佣金 ${fmtMaybe(trade.commission || 0)}，滑点 ${fmtMaybe(trade.slippage_cost || 0)}`,
+  ))
+
+  if (isBuy) {
+    rows.push(buildDecisionRow(
+      '短中期趋势',
+      'MA5 >= MA20；前值下穿到当前上穿时为金叉',
+      maCrossText(snapshot),
+      ma5 != null && ma20 != null ? ma5 >= ma20 : null,
+      prevMa5 != null && prevMa20 != null && ma5 != null && ma20 != null && prevMa5 <= prevMa20 && ma5 >= ma20
+        ? '出现MA5上穿MA20，买入动能增强'
+        : '用于判断短线是否强于中线',
+    ))
+    rows.push(buildDecisionRow(
+      '价格强弱',
+      '收盘价 >= MA20，且优先不跌破MA60',
+      `收盘 ${fmtMaybe(close)} / MA20 ${fmtMaybe(ma20)} / MA60 ${fmtMaybe(ma60)}`,
+      close != null && ma20 != null ? close >= ma20 : null,
+      ma60 != null ? `相对MA60 ${fmtIndicatorDiff(close, ma60) || '--'}` : 'MA60缺失时仅参考MA20',
+    ))
+    rows.push(buildDecisionRow(
+      'BOLL位置',
+      '收盘价 >= BOLL下轨，接近中轨或重新站上中轨更强',
+      `收盘 ${fmtMaybe(close)} / 下轨 ${fmtMaybe(bollLower)} / 中轨 ${fmtMaybe(bollMiddle)} / 上轨 ${fmtMaybe(bollUpper)}`,
+      close != null && bollLower != null ? close >= bollLower : null,
+      bollMiddle != null ? `相对中轨 ${fmtIndicatorDiff(close, bollMiddle) || '--'}` : 'BOLL数据缺失',
+    ))
+    rows.push(buildDecisionRow(
+      'RSI动量',
+      '30 <= RSI14 <= 70，避免极端超卖/超买追入',
+      `RSI14 ${fmtMaybe(rsi)}`,
+      rsi != null ? rsi >= 30 && rsi <= 70 : null,
+      rsi != null && rsi > 50 ? '偏强动量' : '中性或偏弱动量',
+    ))
+    rows.push(buildDecisionRow(
+      'MACD确认',
+      'DIF >= DEA 或 MACD柱 >= 0',
+      `DIF ${fmtMaybe(macdDif)} / DEA ${fmtMaybe(macdDea)} / 柱 ${fmtMaybe(macdHist)} / 前柱 ${fmtMaybe(prevMacdHist)}`,
+      macdDif != null && macdDea != null ? macdDif >= macdDea : macdHist != null ? macdHist >= 0 : null,
+      macdHist != null && prevMacdHist != null && macdHist > prevMacdHist ? '柱体改善' : '观察动能延续',
+    ))
+    rows.push(buildDecisionRow(
+      '量能配合',
+      '成交量 >= 5周期均量',
+      `成交量 ${fmtVolume(volume)} / 量MA5 ${fmtVolume(volMa5)}`,
+      volume != null && volMa5 != null ? volume >= volMa5 : null,
+      `相对均量 ${fmtIndicatorDiff(volume, volMa5) || '--'}`,
+    ))
+  } else {
+    rows.push(buildDecisionRow(
+      '平仓结果',
+      '记录本次卖出对应盈亏与收益率',
+      `盈亏 ${closeProfit == null ? '--' : `${closeProfit >= 0 ? '+' : ''}${fmtMaybe(closeProfit)}`} / 收益率 ${returnRate == null ? '--' : `${returnRate >= 0 ? '+' : ''}${fmtMaybe(returnRate)}%`}`,
+      null,
+      returnRate == null ? '历史结果缺失' : returnRate >= 0 ? '获利卖出/调仓兑现' : '亏损卖出/风控退出',
+    ))
+    rows.push(buildDecisionRow(
+      '趋势转弱',
+      'MA5 <= MA20 或收盘价 <= MA20',
+      `${maCrossText(snapshot)}；收盘 ${fmtMaybe(close)}`,
+      ma5 != null && ma20 != null && close != null ? (ma5 <= ma20 || close <= ma20) : null,
+      prevMa5 != null && prevMa20 != null && ma5 != null && ma20 != null && prevMa5 >= prevMa20 && ma5 <= ma20
+        ? '出现MA5下穿MA20，卖出信号增强'
+        : '用于识别短线走弱或调仓退出',
+    ))
+    rows.push(buildDecisionRow(
+      '价格防线',
+      '收盘价跌破MA60或BOLL中轨时提高风控权重',
+      `收盘 ${fmtMaybe(close)} / MA60 ${fmtMaybe(ma60)} / BOLL中轨 ${fmtMaybe(bollMiddle)} / 下轨 ${fmtMaybe(bollLower)}`,
+      close != null && (ma60 != null || bollMiddle != null) ? ((ma60 != null && close <= ma60) || (bollMiddle != null && close <= bollMiddle)) : null,
+      `相对MA60 ${fmtIndicatorDiff(close, ma60) || '--'}，相对中轨 ${fmtIndicatorDiff(close, bollMiddle) || '--'}`,
+    ))
+    rows.push(buildDecisionRow(
+      'RSI风险',
+      'RSI14 >= 70 视为超买兑现，RSI14 <= 45 视为动能走弱',
+      `RSI14 ${fmtMaybe(rsi)}`,
+      rsi != null ? (rsi >= 70 || rsi <= 45) : null,
+      rsi == null ? 'RSI缺失' : rsi >= 70 ? '超买区域，适合止盈/减仓' : rsi <= 45 ? '弱势区域，适合风控' : '中性区域，需结合趋势和策略调仓',
+    ))
+    rows.push(buildDecisionRow(
+      'MACD风险',
+      'DIF <= DEA 或 MACD柱 < 0',
+      `DIF ${fmtMaybe(macdDif)} / DEA ${fmtMaybe(macdDea)} / 柱 ${fmtMaybe(macdHist)} / 前柱 ${fmtMaybe(prevMacdHist)}`,
+      macdDif != null && macdDea != null ? macdDif <= macdDea : macdHist != null ? macdHist < 0 : null,
+      macdHist != null && prevMacdHist != null && macdHist < prevMacdHist ? '柱体走弱' : '观察动能变化',
+    ))
+    rows.push(buildDecisionRow(
+      '量能变化',
+      '成交量 >= 5周期均量时卖出信号可信度更高',
+      `成交量 ${fmtVolume(volume)} / 量MA5 ${fmtVolume(volMa5)}`,
+      volume != null && volMa5 != null ? volume >= volMa5 : null,
+      `相对均量 ${fmtIndicatorDiff(volume, volMa5) || '--'}`,
+    ))
+  }
+  return rows
+}
+
+function findTradeLogReason(trade: any) {
+  const logs = (info.value?.logs || []) as string[]
+  const code = String(trade?.code || '')
+  if (!code) return ''
+  const dirWords = trade.direction === 'buy' ? ['买入', '加仓', '回补'] : ['卖出', '减仓', '清仓', '止损', '退出']
+  const hit = logs.slice().reverse().find(line => {
+    const text = String(line)
+    return text.includes(code) && dirWords.some(w => text.includes(w))
+  })
+  return hit || ''
+}
+
+function tradeDetailHtml(trade: any) {
+  const value = N(trade.value || trade.price * trade.amount).toLocaleString('zh-CN', { maximumFractionDigits: 0 })
+  const reason = tradeReason(trade)
+  const decisionHtml = decisionRowsForTrade(trade, activeIndicatorSnapshot.value).slice(0, 6)
+    .map(row => `<br/>${row.name}: ${row.threshold}；实际 ${row.actual}；${row.result}`)
+    .join('')
+  const name = trade.name ? ` ${trade.name}` : ''
+  const extra = trade.direction === 'sell'
+    ? `<br/>平仓盈亏: ${(trade.close_profit ?? 0) >= 0 ? '+' : ''}${fmtMaybe(trade.close_profit || 0)}，收益率: ${(trade.return_rate ?? 0) >= 0 ? '+' : ''}${fmtMaybe(trade.return_rate || 0)}%`
+    : ''
+  return `<b>${trade.date}</b><br/>${directionLabel(trade)} ${trade.code}${name}<br/>价格: ${fmtMaybe(trade.price)}，数量: ${N(trade.amount).toLocaleString()}<br/>成交金额: ${value} 元${extra}<br/>佣金: ${fmtMaybe(trade.commission || 0)}，印花税: ${fmtMaybe(trade.tax || 0)}，滑点: ${fmtMaybe(trade.slippage_cost || 0)}<br/>原因: ${reason}${decisionHtml}`
+}
+
 const ddRange = computed(() => {
   const m = M.value
   return (m.max_drawdown_start && m.max_drawdown_end)
@@ -268,6 +637,42 @@ const ddRange = computed(() => {
 })
 
 const dailyPnlData = computed(() => info.value?.nav || [])
+
+const selectedStockTrades = computed(() => {
+  if (!selectedStock.value?.code) return []
+  return ((info.value?.trades || []) as any[])
+    .filter(t => t.code === selectedStock.value.code)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+})
+
+const stockDialogTitle = computed(() => {
+  if (!selectedStock.value) return '个股回测轨迹'
+  const name = selectedStock.value.name ? ` ${selectedStock.value.name}` : ''
+  return `${selectedStock.value.code}${name} - 回测买卖点与技术指标`
+})
+
+const stockPeriodLabel = computed(() => {
+  const map: Record<string, string> = { daily: '日K', weekly: '周K', monthly: '月K' }
+  return map[stockActivePeriod.value] || '日K'
+})
+
+const benchmarkCode = computed(() => normalizeBenchmarkCode(info.value?.benchmark || info.value?.params?.benchmark || '000300'))
+
+const benchmarkSwitchText = computed(() => `显示基准K线(${benchmarkCode.value})`)
+
+const activeIndicatorSnapshot = computed(() => {
+  if (!selectedTrade.value) return {}
+  return indicatorSnapshot(stockActivePeriod.value, selectedTrade.value)
+})
+
+const decisionSummary = computed(() => {
+  const trade = selectedTrade.value
+  if (!trade) return { action: '--', reason: '--' }
+  const action = `${directionLabel(trade)} ${trade.code}${trade.name ? ' ' + trade.name : ''}`
+  return { action, reason: tradeReason(trade) }
+})
+
+const decisionRows = computed(() => decisionRowsForTrade(selectedTrade.value, activeIndicatorSnapshot.value))
 
 const selectedPositions = computed(() => {
   const pos = info.value?.positions
@@ -284,6 +689,13 @@ function disposeAllCharts() {
   chart?.dispose(); chart = null
   pnlChart?.dispose(); pnlChart = null
   tradeChart?.dispose(); tradeChart = null
+  disposeStockCharts()
+}
+
+function disposeStockCharts() {
+  stockDailyChart?.dispose(); stockDailyChart = null
+  stockWeeklyChart?.dispose(); stockWeeklyChart = null
+  stockMonthlyChart?.dispose(); stockMonthlyChart = null
 }
 
 /** 加载回测详情数据 */
@@ -328,7 +740,10 @@ watch(btId, (newId, oldId) => {
   }
 })
 
-const onResize = () => { chart?.resize(); pnlChart?.resize(); tradeChart?.resize() }
+const onResize = () => {
+  chart?.resize(); pnlChart?.resize(); tradeChart?.resize()
+  stockDailyChart?.resize(); stockWeeklyChart?.resize(); stockMonthlyChart?.resize()
+}
 window.addEventListener('resize', onResize)
 onUnmounted(() => {
   window.removeEventListener('resize', onResize)
@@ -526,9 +941,14 @@ function renderTradeChart() {
     const idx = dateIdx.get(t.date)
     if (idx == null) return
     const val = totalVals[idx]
-    const point = [t.date, val, t.code, N(t.price).toFixed(2), N(t.amount).toLocaleString(), t.direction]
+    const point = { value: [t.date, val], trade: t }
     if (t.direction === 'buy') buyPoints.push(point)
     else sellPoints.push(point)
+  })
+
+  tradeChart.on('click', (params: any) => {
+    const trade = params?.data?.trade
+    if (trade) openStockTrade(trade)
   })
 
   tradeChart.setOption({
@@ -536,8 +956,7 @@ function renderTradeChart() {
       trigger: 'item',
       formatter(p: any) {
         if (p.seriesType === 'scatter') {
-          const d = p.data
-          return `<b>${d[0]}</b><br/>${d[5] === 'buy' ? '🔴 买入' : '🟢 卖出'} ${d[2]}<br/>价格: ${d[3]}&nbsp;&nbsp;数量: ${d[4]}`
+          return tradeDetailHtml(p.data.trade)
         }
         return `<b>${p.name}</b><br/>${p.marker} 总资产: ${N(p.value).toLocaleString()} 元`
       },
@@ -571,14 +990,318 @@ function renderTradeChart() {
         name: '买入', type: 'scatter',
         data: buyPoints, symbolSize: 12, symbol: 'triangle',
         itemStyle: { color: '#f56c6c' },
+        emphasis: { scale: 1.6 },
       },
       {
         name: '卖出', type: 'scatter',
         data: sellPoints, symbolSize: 12, symbol: 'diamond',
         itemStyle: { color: '#67c23a' },
+        emphasis: { scale: 1.6 },
       },
     ],
   })
+}
+
+async function openStockTrade(trade: any) {
+  selectedStock.value = { code: trade.code, name: trade.name || '' }
+  selectedTrade.value = trade
+  stockActivePeriod.value = 'daily'
+  stockDialogVisible.value = true
+  stockLoading.value = true
+  stockKlines.value = {}
+  benchmarkKlines.value = {}
+  disposeStockCharts()
+  try {
+    const periods: Array<'daily' | 'weekly' | 'monthly'> = ['daily', 'weekly', 'monthly']
+    const stockResults = await Promise.all(periods.map(period => getKlineData({
+      code: trade.code,
+      name: trade.name || '',
+      period,
+    }) as Promise<any>))
+    const benchmarkResults = await Promise.all(periods.map(period => getKlineData({
+      code: benchmarkCode.value,
+      name: benchmarkCode.value,
+      period,
+      type: 'index',
+    }).catch(() => null) as Promise<any>))
+    periods.forEach((period, index) => {
+      stockKlines.value[period] = stockResults[index]?.data || stockResults[index]
+      const benchmarkResult = benchmarkResults[index]?.data || benchmarkResults[index]
+      benchmarkKlines.value[period] = benchmarkResult?.dates?.length ? benchmarkResult : null
+    })
+    await nextTick()
+    renderActiveStockChart()
+  } finally {
+    stockLoading.value = false
+  }
+}
+
+function selectTradeInDialog(row: any) {
+  selectedTrade.value = row
+  renderActiveStockChart()
+}
+
+function renderActiveStockChart() {
+  setTimeout(() => renderStockChart(stockActivePeriod.value), 80)
+}
+
+function getStockChartRef(period: string) {
+  if (period === 'weekly') return stockWeeklyEl.value
+  if (period === 'monthly') return stockMonthlyEl.value
+  return stockDailyEl.value
+}
+
+function getStockChart(period: string) {
+  if (period === 'weekly') return stockWeeklyChart
+  if (period === 'monthly') return stockMonthlyChart
+  return stockDailyChart
+}
+
+function setStockChart(period: string, instance: echarts.ECharts | null) {
+  if (period === 'weekly') stockWeeklyChart = instance
+  else if (period === 'monthly') stockMonthlyChart = instance
+  else stockDailyChart = instance
+}
+
+function renderStockChart(period: 'daily' | 'weekly' | 'monthly') {
+  const el = getStockChartRef(period)
+  const kline = stockKlines.value[period]
+  if (!el || !kline?.dates?.length) return
+  if (el.clientWidth === 0) { setTimeout(() => renderStockChart(period), 120); return }
+  getStockChart(period)?.dispose()
+  const instance = echarts.init(el)
+  setStockChart(period, instance)
+
+  const dates = kline.dates as string[]
+  const ohlc = kline.ohlc || []
+  const volumes = kline.volumes || []
+  const ma = kline.ma || {}
+  const boll = kline.boll || {}
+  const macd = kline.macd || {}
+  const range = stockDataZoomRange(dates)
+  const tradeMarkers = buildStockTradeMarkers(kline, period)
+  const overlaySeries = buildOverlaySeries(ma, boll)
+  const benchmarkOverlay = buildBenchmarkOverlay(period, dates)
+  const legendData = ['K线', ...overlaySeries.map(s => s.name), ...(benchmarkOverlay ? [benchmarkOverlay.name] : []), '买入', '卖出']
+
+  instance.on('click', (params: any) => {
+    const trade = params?.data?.trade
+    if (trade) selectedTrade.value = trade
+  })
+
+  instance.setOption({
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'cross' },
+      formatter(params: any[]) {
+        const scatter = params.find(p => p.seriesType === 'scatter' && p.data?.trade)
+        if (scatter) return tradeDetailHtml(scatter.data.trade)
+        const first = params[0]
+        const index = first?.dataIndex ?? dates.indexOf(first?.axisValue)
+        const candle = ohlc[index] || []
+        let html = `<b>${first?.axisValue || ''}</b><br/>开: ${fmtMaybe(candle[0])} 收: ${fmtMaybe(candle[1])} 低: ${fmtMaybe(candle[2])} 高: ${fmtMaybe(candle[3])}`
+        html += `<br/>MA5: ${fmtMaybe(ma.ma5?.[index])} MA20: ${fmtMaybe(ma.ma20?.[index])} MA30: ${fmtMaybe(ma.ma30?.[index])} MA60: ${fmtMaybe(ma.ma60?.[index])}`
+        if (benchmarkOverlay) html += benchmarkTooltipHtml(benchmarkOverlay, index)
+        html += `<br/>BOLL: 上 ${fmtMaybe(boll.upper?.[index])} 中 ${fmtMaybe(boll.middle?.[index])} 下 ${fmtMaybe(boll.lower?.[index])}`
+        html += `<br/>RSI14: ${fmtMaybe(kline.rsi?.[index])} MACD: ${fmtMaybe(macd.histogram?.[index])}`
+        html += `<br/>成交量: ${N(volumes[index] || 0).toLocaleString()}`
+        return html
+      },
+    },
+    legend: { data: legendData, top: 2, textStyle: { fontSize: 11 } },
+    grid: [
+      { left: 58, right: 62, top: 38, height: 270 },
+      { left: 58, right: 62, top: 330, height: 70 },
+      { left: 58, right: 62, top: 420, height: 70 },
+    ],
+    dataZoom: [
+      { type: 'inside', xAxisIndex: [0, 1, 2], start: range.start, end: range.end },
+      { type: 'slider', xAxisIndex: [0, 1, 2], start: range.start, end: range.end, bottom: 4, height: 20 },
+    ],
+    xAxis: [
+      { type: 'category', data: dates, boundaryGap: true, axisLabel: { fontSize: 10 } },
+      { type: 'category', data: dates, gridIndex: 1, axisLabel: { show: false } },
+      { type: 'category', data: dates, gridIndex: 2, axisLabel: { fontSize: 10 } },
+    ],
+    yAxis: [
+      { scale: true, axisLabel: { fontSize: 10 }, splitLine: { lineStyle: { type: 'dashed', color: '#eee' } } },
+      { scale: true, gridIndex: 1, axisLabel: { fontSize: 10 }, splitLine: { show: false } },
+      { scale: true, gridIndex: 2, axisLabel: { fontSize: 10 }, splitLine: { show: false } },
+      ...(benchmarkOverlay ? [{ scale: true, gridIndex: 0, position: 'right', name: benchmarkCode.value, axisLabel: { fontSize: 10 }, splitLine: { show: false } }] : []),
+    ],
+    series: [
+      { name: 'K线', type: 'candlestick', data: ohlc, itemStyle: { color: '#f56c6c', color0: '#67c23a', borderColor: '#f56c6c', borderColor0: '#67c23a' } },
+      ...overlaySeries,
+      ...(benchmarkOverlay ? [benchmarkOverlay] : []),
+      { name: '买入', type: 'scatter', data: tradeMarkers.buy, symbol: 'triangle', symbolSize: 18, itemStyle: { color: '#f56c6c', borderColor: '#8a1f11', borderWidth: 1 }, label: tradeMarkerLabel('buy'), emphasis: { scale: 1.5 } },
+      { name: '卖出', type: 'scatter', data: tradeMarkers.sell, symbol: 'diamond', symbolSize: 17, itemStyle: { color: '#67c23a', borderColor: '#2f6f1f', borderWidth: 1 }, label: tradeMarkerLabel('sell'), emphasis: { scale: 1.5 } },
+      { name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volumes, itemStyle: { color: '#dcdfe6' }, barMaxWidth: 8 },
+      { name: 'MACD柱', type: 'bar', xAxisIndex: 2, yAxisIndex: 2, data: macd.histogram || [], itemStyle: { color: (p: any) => p.value >= 0 ? '#f56c6c' : '#67c23a' }, barMaxWidth: 8 },
+      { name: 'DIF', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macd.dif || [], symbol: 'none', lineStyle: { width: 1, color: '#e6a23c' } },
+      { name: 'DEA', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macd.dea || [], symbol: 'none', lineStyle: { width: 1, color: '#409eff' } },
+    ],
+  })
+}
+
+function stockDataZoomRange(dates: string[]) {
+  const startDate = String(info.value?.start_date || '')
+  const endDate = String(info.value?.end_date || '')
+  if (!dates.length || !startDate || !endDate) return { start: 0, end: 100 }
+  const firstIdx = dates.findIndex(d => d >= startDate)
+  const startIdx = Math.max(0, firstIdx >= 0 ? firstIdx : 0)
+  const endRaw = dates.findIndex(d => d >= endDate)
+  const endIdx = endRaw >= 0 ? endRaw : dates.length - 1
+  return {
+    start: Math.max(0, Math.min(100, startIdx / dates.length * 100)),
+    end: Math.max(0, Math.min(100, (endIdx + 1) / dates.length * 100)),
+  }
+}
+
+function buildOverlaySeries(ma: any, boll: any) {
+  const selected = new Set(stockOverlayIndicators.value)
+  const series: any[] = []
+  if (selected.has('MA5')) {
+    series.push({ name: 'MA5', type: 'line', data: ma.ma5 || [], symbol: 'none', lineStyle: { width: 1, color: '#e6a23c' } })
+  }
+  if (selected.has('MA20')) {
+    series.push({ name: 'MA20', type: 'line', data: ma.ma20 || [], symbol: 'none', lineStyle: { width: 1, color: '#409eff' } })
+  }
+  if (selected.has('MA30')) {
+    series.push({ name: 'MA30', type: 'line', data: ma.ma30 || [], symbol: 'none', lineStyle: { width: 1, color: '#7f56d9' } })
+  }
+  if (selected.has('MA60')) {
+    series.push({ name: 'MA60', type: 'line', data: ma.ma60 || [], symbol: 'none', lineStyle: { width: 1, color: '#909399' } })
+  }
+  if (selected.has('BOLL')) {
+    series.push(
+      { name: 'BOLL上轨', type: 'line', data: boll.upper || [], symbol: 'none', lineStyle: { width: 1, type: 'dashed', color: '#c45656' } },
+      { name: 'BOLL中轨', type: 'line', data: boll.middle || [], symbol: 'none', lineStyle: { width: 1, type: 'dashed', color: '#909399' } },
+      { name: 'BOLL下轨', type: 'line', data: boll.lower || [], symbol: 'none', lineStyle: { width: 1, type: 'dashed', color: '#529b2e' } },
+    )
+  }
+  return series
+}
+
+function normalizeBenchmarkCode(code: any) {
+  const text = String(code || '000300').trim()
+  const match = text.match(/\d{6}/)
+  return match ? match[0] : text
+}
+
+function buildBenchmarkOverlay(period: string, dates: string[]) {
+  if (!stockShowBenchmark.value) return null
+  const benchmark = benchmarkKlines.value[period]
+  if (!benchmark?.dates?.length || !dates.length) return null
+  const alignedOhlc = alignOhlcToDates(dates, benchmark)
+  if (!alignedOhlc.some(item => item !== '-')) return null
+  return {
+    name: `基准K线(${benchmarkCode.value})`,
+    type: 'candlestick',
+    xAxisIndex: 0,
+    yAxisIndex: 3,
+    data: alignedOhlc,
+    itemStyle: {
+      color: 'rgba(144, 147, 153, 0.28)',
+      color0: 'rgba(64, 158, 255, 0.24)',
+      borderColor: 'rgba(96, 98, 102, 0.7)',
+      borderColor0: 'rgba(64, 158, 255, 0.65)',
+    },
+    barWidth: '45%',
+    barGap: '-55%',
+    z: 1,
+  }
+}
+
+function alignOhlcToDates(dates: string[], kline: any) {
+  const dateIndex = new Map((kline.dates || []).map((date: string, index: number) => [date, index]))
+  return dates.map(date => {
+    const index = dateIndex.get(date)
+    return typeof index === 'number' ? (kline.ohlc?.[index] || '-') : '-'
+  })
+}
+
+function benchmarkTooltipHtml(benchmarkOverlay: any, index: number) {
+  const candle = benchmarkOverlay.data?.[index]
+  if (!Array.isArray(candle)) return ''
+  return `<br/>${benchmarkOverlay.name}: 开 ${fmtMaybe(candle[0])} 收 ${fmtMaybe(candle[1])} 低 ${fmtMaybe(candle[2])} 高 ${fmtMaybe(candle[3])}`
+}
+
+function tradeMarkerLabel(direction: 'buy' | 'sell') {
+  return {
+    show: true,
+    position: direction === 'buy' ? 'bottom' : 'top',
+    distance: 6,
+    color: direction === 'buy' ? '#a82116' : '#2f6f1f',
+    fontSize: 10,
+    fontWeight: 600,
+    formatter(params: any) {
+      const trade = params?.data?.trade
+      if (!trade) return direction === 'buy' ? '买' : '卖'
+      return `${direction === 'buy' ? '买' : '卖'} ${fmtMaybe(trade.price)}`
+    },
+  }
+}
+
+function buildStockTradeMarkers(kline: any, period: string) {
+  const dates = kline.dates || []
+  const closeValues = (kline.ohlc || []).map((x: any[]) => x?.[1])
+  const buy: any[] = []
+  const sell: any[] = []
+  selectedStockTrades.value.forEach((trade: any) => {
+    const idx = findTradeBarIndex(dates, trade.date, period)
+    if (idx < 0) return
+    const point = {
+      value: [dates[idx], closeValues[idx]],
+      trade,
+      name: `${directionLabel(trade)} ${trade.code}`,
+    }
+    if (trade.direction === 'buy') buy.push(point)
+    else sell.push(point)
+  })
+  return { buy, sell }
+}
+
+function findTradeBarIndex(dates: string[], tradeDate: string, period: string) {
+  if (!dates.length) return -1
+  const exact = dates.indexOf(tradeDate)
+  if (exact >= 0) return exact
+  if (period === 'daily') return -1
+  const idx = dates.findIndex(d => d >= tradeDate)
+  return idx >= 0 ? idx : dates.length - 1
+}
+
+function indicatorSnapshot(period: string, trade: any) {
+  const kline = stockKlines.value[period]
+  if (!kline?.dates?.length || !trade) return {}
+  const idx = findTradeBarIndex(kline.dates, trade.date, period)
+  if (idx < 0) return {}
+  const candle = kline.ohlc?.[idx] || []
+  const prevIdx = idx > 0 ? idx - 1 : -1
+  return {
+    date: kline.dates[idx],
+    open: candle[0],
+    close: candle[1],
+    low: candle[2],
+    high: candle[3],
+    volume: kline.volumes?.[idx],
+    ma5: kline.ma?.ma5?.[idx],
+    ma20: kline.ma?.ma20?.[idx],
+    ma30: kline.ma?.ma30?.[idx],
+    ma60: kline.ma?.ma60?.[idx],
+    bollUpper: kline.boll?.upper?.[idx],
+    bollMiddle: kline.boll?.middle?.[idx],
+    bollLower: kline.boll?.lower?.[idx],
+    rsi: kline.rsi?.[idx],
+    macdDif: kline.macd?.dif?.[idx],
+    macdDea: kline.macd?.dea?.[idx],
+    macdHist: kline.macd?.histogram?.[idx],
+    prevClose: prevIdx >= 0 ? kline.ohlc?.[prevIdx]?.[1] : null,
+    prevMa5: prevIdx >= 0 ? kline.ma?.ma5?.[prevIdx] : null,
+    prevMa20: prevIdx >= 0 ? kline.ma?.ma20?.[prevIdx] : null,
+    prevMacdHist: prevIdx >= 0 ? kline.macd?.histogram?.[prevIdx] : null,
+    volMa5: kline.vol_ma?.ma5?.[idx],
+    volMa10: kline.vol_ma?.ma10?.[idx],
+  }
 }
 </script>
 
@@ -616,6 +1339,99 @@ function renderTradeChart() {
 
 /* ── Charts ── */
 .chart-box { width: 100%; height: 380px; }
+.stock-dialog { min-height: 680px; }
+.stock-chart-box { width: 100%; height: 530px; }
+.stock-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  margin: 10px 0 6px;
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+  background: #fafafa;
+  flex-wrap: wrap;
+}
+.toolbar-label {
+  color: #606266;
+  font-size: 13px;
+  font-weight: 600;
+}
+.toolbar-hint {
+  color: #909399;
+  font-size: 12px;
+}
+.stock-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(140px, 1fr)) minmax(260px, 2fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.summary-item {
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #fafafa;
+  min-width: 0;
+}
+.summary-item span {
+  display: block;
+  color: #909399;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.summary-item b {
+  display: block;
+  color: #303133;
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.summary-item.wide { grid-column: span 1; }
+.indicator-panel {
+  margin-top: 10px;
+  border-top: 1px solid #ebeef5;
+  padding-top: 10px;
+}
+.decision-panel {
+  margin: 10px 0;
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+  padding: 10px;
+  background: #fff;
+}
+.decision-summary {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  background: #fafafa;
+  border-radius: 4px;
+  color: #606266;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.decision-summary span {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: #303133;
+}
+.decision-summary b {
+  font-weight: 500;
+  color: #303133;
+  overflow-wrap: anywhere;
+}
+.decision-table :deep(.el-table__cell) {
+  vertical-align: top;
+}
+.panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 8px;
+}
+.stock-trade-table { margin-top: 12px; }
 
 /* ── Logs ── */
 .log-box {

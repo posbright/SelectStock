@@ -160,7 +160,7 @@
 import { ref, onMounted, nextTick, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import { CaretRight, DocumentAdd, Loading } from '@element-plus/icons-vue'
-import { getStrategyTemplates, startPortfolioBacktest, getBacktestTaskResult, saveStrategyCode } from '@/api/stock'
+import { getStrategyTemplates, getStrategyCodeList, startPortfolioBacktest, getBacktestTaskResult, saveStrategyCode } from '@/api/stock'
 import * as echarts from 'echarts'
 
 interface LogLine { type: 'log' | 'error' | 'warn'; msg: string }
@@ -194,6 +194,7 @@ const navChartRef = ref<HTMLElement>()
 const logContainerRef = ref<HTMLElement>()
 const logLines = ref<LogLine[]>([])
 const errorCount = ref(0)
+const savedStrategyId = ref<number | null>(null)
 let navChart: echarts.ECharts | null = null
 let eventSource: EventSource | null = null
 
@@ -240,6 +241,7 @@ function loadTemplate(templateId: string) {
   if (t) {
     strategyCode.value = t.code
     strategyName.value = t.name
+    savedStrategyId.value = null
     ElMessage.success(`已加载模板: ${t.name}`)
   }
 }
@@ -383,12 +385,21 @@ async function saveStrategy() {
     return
   }
   try {
+    let strategyId = savedStrategyId.value || undefined
+    if (!strategyId) {
+      const listRes: any = await getStrategyCodeList()
+      const strategies = listRes?.data?.strategies || []
+      const existing = strategies.find((item: any) => item.name === strategyName.value.trim())
+      if (existing?.id) strategyId = existing.id
+    }
     const res: any = await saveStrategyCode({
+      id: strategyId,
       name: strategyName.value,
       code: strategyCode.value,
       initial_cash: initialCash.value,
     })
     if (res?.code === 0) {
+      savedStrategyId.value = res?.data?.id || strategyId || savedStrategyId.value
       ElMessage.success('策略已保存')
     } else {
       ElMessage.error(res?.msg || '保存失败')

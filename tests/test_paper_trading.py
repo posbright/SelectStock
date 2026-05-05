@@ -474,9 +474,14 @@ class TestCreateApi:
         assert callable(getattr(log, 'error', None))
         assert callable(getattr(log, 'debug', None))
 
-    def test_history_returns_series(self):
-        """history() returns a pandas Series (empty when no data)."""
+    def test_history_returns_series(self, monkeypatch):
+        """history() returns an empty Series when dynamic loading has no data."""
         import pandas as pd
+
+        monkeypatch.setattr(
+            'instock.paper_trading.paper_engine._load_security_data',
+            lambda code, start_date=None, end_date=None: (code, None),
+        )
 
         ctx = Context(1000000)
         ctx._engine = type('E', (), {'_stock_data': {}})()

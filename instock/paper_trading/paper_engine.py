@@ -52,6 +52,27 @@ def _load_security_data(code, start_date=None, end_date=None):
         return clean, load_benchmark_data(clean, start_date, end_date)
     return clean, load_stock_data(clean, start_date, end_date)
 
+
+def _cache_security_data(context, data_proxy, code, loaded_df):
+    """Cache dynamically loaded K-line data and update the current-day bar."""
+    if loaded_df is None or not hasattr(context, '_engine') or not context._engine:
+        return
+    context._engine._stock_data[code] = loaded_df
+    data_proxy._set_history(code, loaded_df)
+    current_date = pd.Timestamp(context.current_dt).normalize()
+    dates = pd.to_datetime(loaded_df['date']).dt.normalize()
+    today_row = loaded_df[dates == current_date]
+    if len(today_row) > 0:
+        row_data = today_row.iloc[0]
+        data_proxy._set_current(code, {
+            'open': row_data.get('open', row_data['close']),
+            'high': row_data.get('high', row_data['close']),
+            'low': row_data.get('low', row_data['close']),
+            'close': row_data['close'],
+            'volume': row_data.get('volume', 0),
+            'pre_close': row_data.get('pre_close', row_data['close']),
+        })
+
 # 基本面数据提供器（延迟初始化，仅在策略需要时加载）
 _fundamental_provider = None
 
@@ -551,6 +572,14 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                      f"交易 {len(trade_records)} 笔, "
                      f"总资产 {context.portfolio.total_value:.2f}")
 
+        if trade_records:
+            try:
+                from instock.notification import notify_trade_records
+                notify_stats = notify_trade_records(paper_id, trade_records, date_str, executed_at=now_dt)
+                logging.info(f"[模拟交易] 模拟盘 #{paper_id} 通知事件: {notify_stats}")
+            except Exception as notify_error:
+                logging.warning(f"[模拟交易] 模拟盘 #{paper_id} 通知处理失败(不影响交易): {notify_error}", exc_info=True)
+
         result = {
             'status': 'ok',
             'message': f'执行完成，{len(trade_records)} 笔交易',
@@ -617,6 +646,14 @@ def _create_api(context, data_proxy, g):
         code = _normalize_security_code(code)
         df = context._engine._stock_data.get(code) if hasattr(context, '_engine') and context._engine else None
         if df is None:
+            start_date = (pd.Timestamp(context.current_dt) - pd.Timedelta(days=max(int(count) * 3, 80))).strftime('%Y-%m-%d')
+            end_date = pd.Timestamp(context.current_dt).strftime('%Y-%m-%d')
+            loaded_code, loaded_df = _load_security_data(code, start_date, end_date)
+            if loaded_df is not None and hasattr(context, '_engine') and context._engine:
+                code = loaded_code
+                _cache_security_data(context, data_proxy, code, loaded_df)
+                df = loaded_df
+        if df is None:
             return pd.Series(dtype=float)
         mask = df['date'] <= pd.Timestamp(context.current_dt)
         subset = df.loc[mask].tail(count)
@@ -629,6 +666,14 @@ def _create_api(context, data_proxy, g):
         """聚宽 attribute_history 兼容"""
         code = security.split('.')[0] if '.' in security else security
         stock_df = context._engine._stock_data.get(code) if hasattr(context, '_engine') and context._engine else None
+        if stock_df is None:
+            start_date = (pd.Timestamp(context.current_dt) - pd.Timedelta(days=max(int(count) * 3, 80))).strftime('%Y-%m-%d')
+            end_date = pd.Timestamp(context.current_dt).strftime('%Y-%m-%d')
+            loaded_code, loaded_df = _load_security_data(code, start_date, end_date)
+            if loaded_df is not None and hasattr(context, '_engine') and context._engine:
+                code = loaded_code
+                _cache_security_data(context, data_proxy, code, loaded_df)
+                stock_df = loaded_df
         if stock_df is None:
             cols = fields or ['close']
             return pd.DataFrame(columns=cols)

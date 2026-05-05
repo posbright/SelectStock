@@ -233,6 +233,43 @@ def _resample_to_period(df, period):
     return resampled
 
 
+def _slice_kline_result(result, start_date=None, end_date=None, warmup_days=0, days=None):
+    dates = result.get('dates') or []
+    if not dates:
+        return result
+
+    start_idx = 0
+    end_idx = len(dates)
+    if start_date:
+        found = next((i for i, d in enumerate(dates) if d >= start_date), None)
+        if found is not None:
+            start_idx = max(0, found - max(0, int(warmup_days or 0)))
+    if end_date:
+        found = next((i for i, d in enumerate(dates) if d > end_date), None)
+        end_idx = found if found is not None else len(dates)
+
+    if not start_date and not end_date and days:
+        try:
+            n = int(days)
+            if 0 < n < len(dates):
+                start_idx = len(dates) - n
+        except (ValueError, TypeError):
+            pass
+
+    def slice_value(value):
+        if isinstance(value, list) and len(value) == len(dates):
+            return value[start_idx:end_idx]
+        if isinstance(value, dict):
+            return {k: slice_value(v) for k, v in value.items()}
+        return value
+
+    sliced = {k: slice_value(v) for k, v in result.items()}
+    sliced['total'] = len(sliced.get('dates') or [])
+    sliced['source_total'] = len(dates)
+    sliced['indicator_source'] = 'full_cache_before_slice'
+    return sliced
+
+
 class GetKlineDataHandler(webBase.BaseHandler, ABC):
     """
     K线数据JSON API（仿东方财富风格，返回全量数据供前端 dataZoom 控制视图）
@@ -264,6 +301,9 @@ class GetKlineDataHandler(webBase.BaseHandler, ABC):
         date = self.get_argument("date", default=None, strip=True)
         period = self.get_argument("period", default="daily", strip=True)
         days = self.get_argument("days", default=None, strip=True)
+        start_date = self.get_argument("start_date", default=None, strip=True)
+        end_date = self.get_argument("end_date", default=None, strip=True)
+        warmup_days = self.get_argument("warmup_days", default="0", strip=True)
         name = self.get_argument("name", default="", strip=True)
         data_type = self.get_argument("type", default=None, strip=True)  # 'index'/'stock'/None
 
@@ -303,15 +343,6 @@ class GetKlineDataHandler(webBase.BaseHandler, ABC):
             resample_key = period_map.get(period)
             if resample_key:
                 stock = _resample_to_period(stock, resample_key)
-
-            # 仅在显式指定 days 时截取，否则返回全部数据
-            if days:
-                try:
-                    n = int(days)
-                    if 0 < n < len(stock):
-                        stock = stock.tail(n).reset_index(drop=True)
-                except (ValueError, TypeError):
-                    pass
 
             # 提取数据
             dates = stock['date'].astype(str).tolist()
@@ -391,6 +422,14 @@ class GetKlineDataHandler(webBase.BaseHandler, ABC):
                     "mabb": mabb,
                 },
             }
+
+            result = _slice_kline_result(
+                result,
+                start_date=start_date,
+                end_date=end_date,
+                warmup_days=warmup_days,
+                days=days,
+            )
 
             self.write(json.dumps(result, ensure_ascii=False))
 

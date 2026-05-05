@@ -100,7 +100,7 @@ import { Folder, FolderAdd, Document, Delete, ArrowLeft } from '@element-plus/ic
 import {
   getStrategyCodeList, saveStrategyCode,
   createFolder, renameStrategy, renameFolder, moveStrategy,
-  batchDeleteStrategy, getStrategyTemplates, deleteFolder,
+  batchDeleteStrategy, getStrategyTemplates, syncStrategyTemplates, deleteFolder,
 } from '@/api/stock'
 
 const router = useRouter()
@@ -250,6 +250,14 @@ async function seedTemplateStrategies() {
   if (importing.value) return
   importing.value = true
   try {
+    const syncRes = await syncStrategyTemplates() as any
+    if ((syncRes?.code ?? syncRes?.data?.code) === 0) {
+      const msg = syncRes?.msg || syncRes?.data?.msg || '模板已同步'
+      ElMessage.success(msg)
+      await loadData()
+      return
+    }
+
     await loadData()
     const res = await getStrategyTemplates() as any
     const list = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : [])

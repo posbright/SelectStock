@@ -4,6 +4,7 @@
 import logging
 import os.path
 import sys
+import threading
 from abc import ABC
 
 import tornado.escape
@@ -173,6 +174,14 @@ class SPAHandler(tornado.web.RequestHandler, ABC):
             self.write(f.read())
 
 
+def _sync_strategy_templates_in_background():
+    try:
+        sync_result = portfolioBacktestHandler.sync_strategy_templates_to_db()
+        logging.info(f"内置策略模板已同步: {sync_result}")
+    except Exception as e:
+        logging.warning(f"内置策略模板同步失败（不影响 Web 服务启动）: {e}", exc_info=True)
+
+
 def main():
     # tornado.options.parse_command_line()
     tornado.options.options.logging = None
@@ -183,6 +192,8 @@ def main():
 
     logging.info(f"服务已启动，web地址 : http://localhost:{port}/")
     print(f"服务已启动，web地址 : http://localhost:{port}/")  # 控制台通知运维人员
+
+    threading.Thread(target=_sync_strategy_templates_in_background, name="strategy-template-sync", daemon=True).start()
 
     # 启动模拟交易自动调度器（每个交易日收盘后自动执行）
     try:

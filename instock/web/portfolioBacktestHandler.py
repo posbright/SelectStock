@@ -12,10 +12,12 @@ import datetime
 import traceback
 import uuid
 import time as _time
+import hashlib
 from abc import ABC
 from tornado import gen, ioloop
 import instock.web.base as webBase
 import instock.lib.database as mdb
+from instock.core.backtest.boll_lower_band_strategy import BOLL_LOWER_BAND_VALUE_TEMPLATE
 
 __author__ = 'InStock'
 __date__ = '2026/03/13'
@@ -26,6 +28,7 @@ _running_tasks = {}
 
 # ── 内置策略模板 ──
 STRATEGY_TEMPLATES = [
+    BOLL_LOWER_BAND_VALUE_TEMPLATE,
     {
         'id': 'small_cap',
         'name': '小市值策略',
@@ -1728,36 +1731,13 @@ class SyncStrategyTemplatesHandler(webBase.BaseHandler, ABC):
     @gen.coroutine
     def post(self):
         try:
-            _ensure_strategy_table()
-            updated = 0
-            inserted = 0
-            for tpl in STRATEGY_TEMPLATES:
-                name = tpl['name']
-                code = tpl['code']
-                desc = tpl.get('description', '')
-                cat = tpl.get('category', 'stock')
-                existing = mdb.executeSqlFetch(
-                    "SELECT id FROM cn_stock_strategy_code WHERE name=%s AND status!='archived' LIMIT 1",
-                    (name,))
-                if existing and len(existing) > 0:
-                    eid = existing[0][0] if isinstance(existing[0], (list, tuple)) else existing[0].get('id', existing[0])
-                    mdb.executeSql(
-                        'UPDATE cn_stock_strategy_code SET code=%s, description=%s, category=%s WHERE id=%s',
-                        (code, desc, cat, eid))
-                    updated += 1
-                else:
-                    _insert_and_get_id(
-                        'INSERT INTO cn_stock_strategy_code '
-                        '(name, code, description, category, folder_id, initial_cash, '
-                        'benchmark, commission_rate, stamp_tax_rate, slippage, status) '
-                        'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
-                        (name, code, desc, cat, 0, 1000000,
-                         '000300', 0.0003, 0.001, 0.0005, 'active'))
-                    inserted += 1
+            result = sync_strategy_templates_to_db()
+            updated = result.get('updated', 0) if isinstance(result, dict) else 0
+            inserted = result.get('inserted', 0) if isinstance(result, dict) else 0
             self.write(json.dumps({
                 'code': 0,
-                'msg': f'同步完成：更新 {updated} 个，新增 {inserted} 个',
-                'data': {'updated': updated, 'inserted': inserted}
+                'msg': f"同步完成：更新 {updated} 个，新增 {inserted} 个",
+                'data': result
             }, ensure_ascii=False))
         except Exception as e:
             logging.error("SyncStrategyTemplates异常", exc_info=True)
@@ -1805,13 +1785,16 @@ class SaveStrategyCodeHandler(webBase.BaseHandler, ABC):
             _ensure_strategy_table()
 
             if strategy_id:
+                user_modified = _resolve_user_modified_flag(strategy_id, code)
                 # 更新
                 mdb.executeSql(
                     'UPDATE cn_stock_strategy_code SET name=%s, code=%s, description=%s, '
                     'category=%s, initial_cash=%s, benchmark=%s, commission_rate=%s, '
-                    'stamp_tax_rate=%s, slippage=%s, status=%s WHERE id=%s',
+                    'stamp_tax_rate=%s, slippage=%s, status=%s, '
+                    'user_modified=%s '
+                    'WHERE id=%s',
                     (name, code, description, category, initial_cash, benchmark,
-                     commission, tax, slippage, 'active', strategy_id))
+                     commission, tax, slippage, 'active', user_modified, strategy_id))
                 result_id = strategy_id
             else:
                 # 新增 —— 同名且未归档的策略视为重复，直接返回已有记录
@@ -2350,7 +2333,7 @@ class GetPortfolioBacktestDetailHandler(webBase.BaseHandler, ABC):
                 'SELECT bp.id, bp.strategy_id, COALESCE(bp.strategy_name, sc.name), bp.start_date, bp.end_date, '
                 'bp.initial_cash, bp.status, bp.total_return, bp.annual_return, '
                 'bp.max_drawdown, bp.sharpe_ratio, bp.alpha, bp.beta, bp.win_rate, '
-                'bp.trade_count, bp.completed_at, bp.result_json '
+                'bp.trade_count, bp.completed_at, bp.result_json, bp.benchmark '
                 'FROM cn_stock_backtest_portfolio bp '
                 'LEFT JOIN cn_stock_strategy_code sc ON bp.strategy_id = sc.id '
                 'WHERE bp.id = %s', (bt_id,))
@@ -2392,6 +2375,9 @@ class GetPortfolioBacktestDetailHandler(webBase.BaseHandler, ABC):
             # 如果 result_json 中有完整 metrics，用它覆盖（字段更全）
             if full_data.get('metrics'):
                 info['metrics'] = full_data['metrics']
+
+            params = full_data.get('params', {}) if isinstance(full_data.get('params', {}), dict) else {}
+            info['benchmark'] = params.get('benchmark') or r[17] or '000300'
 
             info['nav'] = full_data.get('nav', [])
             info['trades'] = full_data.get('trades', [])
@@ -2641,6 +2627,115 @@ def _insert_and_get_id(sql, params=()):
         raise
 
 
+def _row_get(row, key, index, default=None):
+    if isinstance(row, dict):
+        return row.get(key, default)
+    if isinstance(row, (list, tuple)) and len(row) > index:
+        return row[index]
+    return default
+
+
+def sync_strategy_templates_to_db(templates=None):
+    """Upsert built-in strategy templates into the strategy table.
+
+    The frontend edit and backtest pages run the strategy code stored in
+    cn_stock_strategy_code, so template source changes must be copied there.
+    """
+    _ensure_strategy_table()
+    updated = 0
+    inserted = 0
+    unchanged = 0
+    skipped_user_modified = 0
+    target_templates = templates or STRATEGY_TEMPLATES
+
+    for tpl in target_templates:
+        template_id = tpl.get('id', tpl['name'])
+        name = tpl['name']
+        code = tpl['code']
+        desc = tpl.get('description', '')
+        cat = tpl.get('category', 'stock')
+        code_hash = _template_hash(code)
+        existing = mdb.executeSqlFetch(
+            'SELECT id, code, description, category, template_hash, user_modified '
+            'FROM cn_stock_strategy_code '
+            "WHERE template_id=%s AND status!='archived' LIMIT 1",
+            (template_id,))
+        if not existing:
+            existing = mdb.executeSqlFetch(
+                'SELECT id, code, description, category, template_hash, user_modified '
+                'FROM cn_stock_strategy_code '
+                "WHERE name=%s AND status!='archived' LIMIT 1",
+                (name,))
+        if existing and len(existing) > 0:
+            row = existing[0]
+            eid = _row_get(row, 'id', 0)
+            old_code = _row_get(row, 'code', 1, '') or ''
+            old_desc = _row_get(row, 'description', 2, '') or ''
+            old_cat = _row_get(row, 'category', 3, 'stock') or 'stock'
+            user_modified = int(_row_get(row, 'user_modified', 5, 0) or 0)
+            if user_modified and old_code != code:
+                skipped_user_modified += 1
+                continue
+            if old_code == code and old_desc == desc and old_cat == cat:
+                mdb.executeSql(
+                    'UPDATE cn_stock_strategy_code SET template_id=%s, template_hash=%s, user_modified=%s '
+                    'WHERE id=%s AND (template_id IS NULL OR template_id!=%s OR template_hash IS NULL '
+                    'OR template_hash!=%s OR user_modified!=0)',
+                    (template_id, code_hash, 0, eid, template_id, code_hash))
+                unchanged += 1
+                continue
+            mdb.executeSql(
+                'UPDATE cn_stock_strategy_code SET code=%s, description=%s, category=%s, '
+                'template_id=%s, template_hash=%s, user_modified=%s WHERE id=%s',
+                (code, desc, cat, template_id, code_hash, 0, eid))
+            updated += 1
+        else:
+            _insert_and_get_id(
+                'INSERT INTO cn_stock_strategy_code '
+                '(name, code, description, category, folder_id, initial_cash, '
+                'benchmark, commission_rate, stamp_tax_rate, slippage, status, '
+                'template_id, template_hash, user_modified) '
+                'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                (name, code, desc, cat, 0, 1000000,
+                 '000300', 0.0003, 0.001, 0.0005, 'active',
+                 template_id, code_hash, 0))
+            inserted += 1
+
+    return {
+        'updated': updated,
+        'inserted': inserted,
+        'unchanged': unchanged,
+        'skipped_user_modified': skipped_user_modified,
+    }
+
+
+def _template_hash(code):
+    return hashlib.md5((code or '').encode('utf-8')).hexdigest()
+
+
+def _find_strategy_template(template_id):
+    for tpl in STRATEGY_TEMPLATES:
+        if tpl.get('id', tpl['name']) == template_id:
+            return tpl
+    return None
+
+
+def _resolve_user_modified_flag(strategy_id, code):
+    rows = mdb.executeSqlFetch(
+        'SELECT template_id FROM cn_stock_strategy_code WHERE id=%s',
+        (strategy_id,),
+    )
+    if not rows:
+        return 0
+    template_id = _row_get(rows[0], 'template_id', 0)
+    if not template_id:
+        return 0
+    tpl = _find_strategy_template(template_id)
+    if tpl and (code or '').strip() == (tpl.get('code') or '').strip():
+        return 0
+    return 1
+
+
 _strategy_table_ready = False
 
 def _ensure_strategy_table():
@@ -2664,6 +2759,9 @@ def _ensure_strategy_table():
                 `slippage` DECIMAL(8,6) DEFAULT 0.000500,
                 `compile_count` INT DEFAULT 0 COMMENT '历史编译运行次数',
                 `backtest_count` INT DEFAULT 0 COMMENT '历史回测次数',
+                `template_id` VARCHAR(100) DEFAULT NULL COMMENT '内置模板ID',
+                `template_hash` CHAR(32) DEFAULT NULL COMMENT '内置模板代码哈希',
+                `user_modified` TINYINT DEFAULT 0 COMMENT '是否由用户修改过内置模板',
                 `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
                 `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 `status` ENUM('draft','active','archived') DEFAULT 'draft'
@@ -2702,6 +2800,9 @@ def _ensure_strategy_table():
         _add_col_safe('cn_stock_strategy_code', 'folder_id', '`folder_id` INT DEFAULT 0 AFTER `category`')
         _add_col_safe('cn_stock_strategy_code', 'compile_count', '`compile_count` INT DEFAULT 0 AFTER `slippage`')
         _add_col_safe('cn_stock_strategy_code', 'backtest_count', '`backtest_count` INT DEFAULT 0 AFTER `compile_count`')
+        _add_col_safe('cn_stock_strategy_code', 'template_id', '`template_id` VARCHAR(100) DEFAULT NULL AFTER `backtest_count`')
+        _add_col_safe('cn_stock_strategy_code', 'template_hash', '`template_hash` CHAR(32) DEFAULT NULL AFTER `template_id`')
+        _add_col_safe('cn_stock_strategy_code', 'user_modified', '`user_modified` TINYINT DEFAULT 0 AFTER `template_hash`')
 
     # 确保文件夹表存在
     if not mdb.checkTableIsExist('cn_stock_strategy_folder'):
@@ -2839,6 +2940,7 @@ def _ensure_backtest_table():
                 `start_date` DATE,
                 `end_date` DATE,
                 `initial_cash` DECIMAL(15,2),
+                `benchmark` VARCHAR(20) DEFAULT '000300',
                 `status` ENUM('pending','running','completed','failed') DEFAULT 'pending',
                 `started_at` DATETIME,
                 `completed_at` DATETIME,
@@ -2882,6 +2984,15 @@ def _ensure_backtest_table():
                                     'COMMENT %s AFTER `strategy_id`',
                                     ('策略名称快照（写入时冻结）',))
                         logging.info("成功添加列：cn_stock_backtest_portfolio.strategy_name")
+                    # 添加 benchmark 列（历史库兼容）
+                    cur.execute(
+                        "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS "
+                        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cn_stock_backtest_portfolio' "
+                        "AND COLUMN_NAME = 'benchmark'")
+                    if cur.fetchone() is None:
+                        cur.execute('ALTER TABLE cn_stock_backtest_portfolio '
+                                    "ADD COLUMN `benchmark` VARCHAR(20) DEFAULT '000300' AFTER `initial_cash`")
+                        logging.info("成功添加列：cn_stock_backtest_portfolio.benchmark")
         except Exception as e:
             logging.warning(f"ALTER TABLE cn_stock_backtest_portfolio 异常：{e}")
     _backtest_table_ready = True

@@ -136,6 +136,34 @@ def _ensure_backtest_table_if_available():
         logging.debug("确保组合回测表存在失败", exc_info=True)
 
 
+def _get_stock_name_map(codes):
+    clean_codes = sorted({str(code).strip() for code in codes if str(code or '').strip()})
+    if not clean_codes:
+        return {}
+    try:
+        import instock.core.tablestructure as tbs
+        table = tbs.TABLE_CN_STOCK_SPOT['name']
+        if not mdb.checkTableIsExist(table):
+            return {}
+        lookup_codes = sorted(set(clean_codes + [code[:6] for code in clean_codes if len(code) >= 6]))
+        placeholders = ','.join(['%s'] * len(lookup_codes))
+        rows = mdb.executeSqlFetch(
+            f'SELECT code, name FROM `{table}` WHERE code IN ({placeholders})',
+            tuple(lookup_codes))
+        result = {}
+        for row in rows or []:
+            code = str(row.get('code') if isinstance(row, dict) else row[0]).strip()
+            name = str((row.get('name') if isinstance(row, dict) else row[1]) or '').strip()
+            if code and name:
+                result[code] = name
+                if len(code) >= 6:
+                    result[code[:6]] = name
+        return result
+    except Exception:
+        logging.debug("查询股票名称失败", exc_info=True)
+        return {}
+
+
 class PaperTradingActionHandler(webBase.BaseHandler, ABC):
     """暂停/恢复/停止模拟盘"""
 
@@ -438,9 +466,12 @@ class GetPaperTradingDetailHandler(webBase.BaseHandler, ABC):
                         '  SELECT MAX(date) FROM cn_stock_backtest_position WHERE paper_id = %s'
                         ') ORDER BY market_value DESC', (paper_id, paper_id))
                 if pos_rows:
+                    stock_name_map = _get_stock_name_map([p[0] for p in pos_rows])
                     for p in pos_rows:
+                        code = str(p[0] or '').strip()
+                        name = (p[1] or stock_name_map.get(code) or '')
                         positions.append({
-                            'code': p[0], 'name': p[1] or '',
+                            'code': code, 'name': name,
                             'amount': p[2],
                             'avg_cost': float(p[3]) if p[3] else 0,
                             'price': float(p[4]) if p[4] else 0,
@@ -460,10 +491,13 @@ class GetPaperTradingDetailHandler(webBase.BaseHandler, ABC):
                     'WHERE paper_id = %s ORDER BY date DESC, id DESC LIMIT 200',
                     (paper_id,))
                 if trade_rows_raw:
+                    stock_name_map = _get_stock_name_map([t[1] for t in trade_rows_raw])
                     for t in trade_rows_raw:
+                        code = str(t[1] or '').strip()
+                        name = (t[2] or stock_name_map.get(code) or '')
                         trades.append({
                             'date': str(t[0]) if t[0] else '',
-                            'code': t[1], 'name': t[2] or '',
+                            'code': code, 'name': name,
                             'direction': t[3],
                             'price': float(t[4]) if t[4] else 0,
                             'amount': t[5],

@@ -130,8 +130,8 @@ class PortfolioBacktestEngine:
         self.g = GlobalVars()
 
         # 3. 获取交易日列表
-        # 预留20个交易日的前导数据供 history() 使用
-        pre_start = (pd.Timestamp(start_date) - pd.Timedelta(days=40)).strftime('%Y-%m-%d')
+        # 预留足够前导数据供多周期策略 history()/attribute_history() 使用
+        pre_start = (pd.Timestamp(start_date) - pd.Timedelta(days=750)).strftime('%Y-%m-%d')
         trading_dates = get_trading_dates(start_date, end_date)
         if not trading_dates:
             return {'status': 'error', 'message': f'无交易日: {start_date} ~ {end_date}'}
@@ -742,7 +742,7 @@ class PortfolioBacktestEngine:
         idx_df = self._stock_data.get(code)
         if idx_df is None:
             return
-        ts_date = pd.Timestamp(date)
+        ts_date = pd.Timestamp(date).normalize()
         if ts_date not in idx_df.index:
             return
         row = idx_df.loc[ts_date]
@@ -776,7 +776,7 @@ class PortfolioBacktestEngine:
 
         # 涨跌停检测
         idx_df = self._stock_data.get(code)
-        ts_date = pd.Timestamp(date)
+        ts_date = pd.Timestamp(date).normalize()
         if idx_df is not None and ts_date in idx_df.index:
                 row = idx_df.loc[ts_date]
                 exec_price = float(row['close'])
@@ -1108,10 +1108,10 @@ class PortfolioBacktestEngine:
         """延迟加载单只股票或指数"""
         if code in self._stock_data:
             return
-        # 使用更早的开始日期来提供 history() 数据
+        # 使用更早的开始日期来提供多周期 history() 数据
         pre_start = None
         if self.context.current_dt:
-            pre_start = (pd.Timestamp(self.context.current_dt) - pd.Timedelta(days=400)).strftime('%Y-%m-%d')
+            pre_start = (pd.Timestamp(self.context.current_dt) - pd.Timedelta(days=750)).strftime('%Y-%m-%d')
 
         # 指数代码使用指数数据源
         if code in self._INDEX_CODES or code.startswith('399'):
