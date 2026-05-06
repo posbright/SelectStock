@@ -54,6 +54,9 @@ def serialize_portfolio(context):
         'g_vars': g_vars,
         'current_dt': str(context.current_dt) if context.current_dt else None,
         'benchmark': context.benchmark,
+        'benchmark_base_code': getattr(context, 'benchmark_base_code', context.benchmark),
+        'benchmark_base_date': getattr(context, 'benchmark_base_date', None),
+        'benchmark_base_price': getattr(context, 'benchmark_base_price', None),
         'commission_rate': context.commission_rate,
         'stamp_tax_rate': context.stamp_tax_rate,
         'slippage_rate': context.slippage_rate,
@@ -99,6 +102,9 @@ def restore_portfolio(context, state_json, g_obj=None):
 
     # 恢复交易成本
     context.benchmark = state.get('benchmark', '000300')
+    context.benchmark_base_code = state.get('benchmark_base_code') or context.benchmark
+    context.benchmark_base_date = state.get('benchmark_base_date')
+    context.benchmark_base_price = state.get('benchmark_base_price')
     context.commission_rate = state.get('commission_rate', 0.0003)
     context.stamp_tax_rate = state.get('stamp_tax_rate', 0.001)
     context.slippage_rate = state.get('slippage_rate', 0.002)

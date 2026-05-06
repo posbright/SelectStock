@@ -67,11 +67,14 @@
             <span class="val-green">{{ row.max_drawdown ? '-' + row.max_drawdown.toFixed(2) + '%' : '——' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="230" align="center" fixed="right">
+        <el-table-column label="详情" width="72" align="center">
+          <template #default="{ row }">
+            <a class="jq-op jq-op-primary" @click="viewDetail(row.id)">查看</a>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="190" align="center" fixed="right">
           <template #default="{ row }">
             <div class="jq-ops">
-              <a class="jq-op" @click="viewDetail(row.id)">详情</a>
-              <span class="jq-op-sep">|</span>
               <a class="jq-op" :class="{ 'jq-op-disabled': row.status === 'stopped' }"
                  @click="row.status !== 'stopped' && doAction(row.id, row.status === 'paused' ? 'resume' : 'pause')">
                 {{ row.status === 'paused' ? '恢复' : '暂停' }}
@@ -216,7 +219,18 @@
                 <div class="jq-section">
                   <el-tabs v-model="chartTab" class="jq-inner-tabs">
                     <el-tab-pane label="历史收益" name="returns">
-                      <div v-if="detailData.nav && detailData.nav.length > 1">
+                      <div class="jq-chart-toolbar" v-if="detailData.nav && detailData.nav.length">
+                        <el-radio-group v-model="benchmarkStartMode" size="small" @change="onBenchmarkStartModeChange">
+                          <el-radio-button label="paper_start">模拟开始</el-radio-button>
+                          <el-radio-button label="first_trade">首次成交</el-radio-button>
+                        </el-radio-group>
+                        <el-checkbox-group v-model="visibleReturnSeries" size="small" @change="initNavChart">
+                          <el-checkbox-button v-for="item in returnSeriesOptions" :key="item.key" :label="item.key">
+                            {{ item.label }}
+                          </el-checkbox-button>
+                        </el-checkbox-group>
+                      </div>
+                      <div v-if="detailData.nav && detailData.nav.length">
                         <div ref="navChartRef" style="height: 320px; width: 100%;"></div>
                       </div>
                       <div v-else class="jq-empty-chart">未开始，暂无数据</div>
@@ -430,46 +444,46 @@
               <el-tab-pane name="settings">
                 <template #label><el-icon><Setting /></el-icon><span>设置</span></template>
                 <div class="jq-section">
-                  <div class="jq-settings">
-                    <div class="jq-set-row">
-                      <span class="jq-set-label">模拟盘名称</span>
-                      <span class="jq-set-value">{{ detailData.info.name }}</span>
-                    </div>
-                    <div class="jq-set-row">
-                      <span class="jq-set-label">策略名称</span>
-                      <span class="jq-set-value">{{ detailData.info.strategy_name }}</span>
-                    </div>
-                    <div class="jq-set-row">
-                      <span class="jq-set-label">初始资金</span>
-                      <span class="jq-set-value">¥{{ formatMoneyFull(detailData.info.initial_cash) }}</span>
-                    </div>
-                    <div class="jq-set-row">
-                      <span class="jq-set-label">运行频率</span>
-                      <span class="jq-set-value">{{ frequencyLabel(detailData.info.run_frequency) }}</span>
-                    </div>
-                    <div class="jq-set-row">
-                      <span class="jq-set-label">回测版本</span>
-                      <span class="jq-set-value">
-                        {{ hasBacktest(detailData.info) ? backtestLabel(detailData.info) : '未绑定' }}
-                      </span>
-                    </div>
-                    <div class="jq-set-row">
-                      <span class="jq-set-label">开始日期</span>
-                      <span class="jq-set-value">{{ detailData.info.start_at || detailData.info.started_at || '--' }}</span>
-                    </div>
-                    <div class="jq-set-row">
-                      <span class="jq-set-label">最后运行</span>
-                      <span class="jq-set-value">{{ detailData.info.last_run_date || '--' }}</span>
-                    </div>
-                    <div class="jq-set-row">
-                      <span class="jq-set-label">当前状态</span>
-                      <span class="jq-set-value">
-                        <el-tag :type="statusType(detailData.info.status)" size="small">
-                          {{ statusLabel(detailData.info.status) }}
-                        </el-tag>
-                      </span>
-                    </div>
-                  </div>
+                  <el-form class="jq-settings-form" label-width="96px" size="default">
+                    <el-form-item label="模拟盘名称" required>
+                      <el-input v-model="settingsForm.name" maxlength="100" show-word-limit />
+                    </el-form-item>
+                    <el-form-item label="运行频率" required>
+                      <el-select v-model="settingsForm.run_frequency" style="width: 180px;">
+                        <el-option v-for="item in frequencyOptions" :key="item.value" :label="item.label" :value="item.value" />
+                      </el-select>
+                    </el-form-item>
+                    <el-form-item label="开始日期" required>
+                      <el-date-picker v-model="settingsForm.start_at" type="datetime"
+                                      value-format="YYYY-MM-DD HH:mm:ss" format="YYYY-MM-DD HH:mm"
+                                      style="width: 220px;" />
+                    </el-form-item>
+                    <el-form-item label="初始资金" required>
+                      <div class="settings-inline-control">
+                        <el-input-number v-model="settingsForm.initial_cash" :min="10000" :step="100000"
+                                         :disabled="paperHasStarted" style="width: 220px;" />
+                        <span v-if="paperHasStarted" class="settings-help">模拟盘已开始运行，初始资金不可修改</span>
+                      </div>
+                    </el-form-item>
+                    <el-form-item label="策略名称">
+                      <span class="jq-readonly-value">{{ detailData.info.strategy_name }}</span>
+                    </el-form-item>
+                    <el-form-item label="回测版本">
+                      <span class="jq-readonly-value">{{ hasBacktest(detailData.info) ? backtestLabel(detailData.info) : '未绑定' }}</span>
+                    </el-form-item>
+                    <el-form-item label="最后运行">
+                      <span class="jq-readonly-value">{{ detailData.info.last_run_date || '--' }}</span>
+                    </el-form-item>
+                    <el-form-item label="当前状态">
+                      <el-tag :type="statusType(detailData.info.status)" size="small">
+                        {{ statusLabel(detailData.info.status) }}
+                      </el-tag>
+                    </el-form-item>
+                    <el-form-item>
+                      <el-button type="primary" :loading="settingsSaving" @click="saveSettings">保存设置</el-button>
+                      <el-button @click="resetSettingsForm">重置</el-button>
+                    </el-form-item>
+                  </el-form>
                 </div>
               </el-tab-pane>
             </el-tabs>
@@ -644,7 +658,7 @@ import * as echarts from 'echarts'
 import {
   getPaperTradingList, getPaperTradingDetail, createPaperTrading,
   paperTradingAction, runPaperTrading, getStrategyCodeList, getPaperCompare,
-  deletePaperTrading, getPortfolioBacktestList, getKlineData,
+  deletePaperTrading, getPortfolioBacktestList, getKlineData, updatePaperTrading,
 } from '@/api/stock'
 import request from '@/api/request'
 
@@ -668,9 +682,19 @@ const detailData = ref<any>(null)
 const detailLoading = ref(false)
 const sideTab = ref('overview')
 const chartTab = ref('returns')
+const benchmarkStartMode = ref<'paper_start' | 'first_trade'>('paper_start')
+const benchmarkReturnLabel = computed(() => detailData.value?.info?.benchmark_return_label || '基准收益')
+const returnSeriesOptions = computed(() => [
+  { key: 'strategy_return', label: '策略收益', color: '#e6a23c', yAxisIndex: 0, unit: '%' },
+  { key: 'benchmark_return', label: benchmarkReturnLabel.value, color: '#409eff', yAxisIndex: 0, unit: '%' },
+  { key: 'excess_return', label: '超额收益', color: '#f56c6c', yAxisIndex: 0, unit: '%' },
+  { key: 'total_value', label: '总资产', color: '#67c23a', yAxisIndex: 1, unit: ' 元' },
+])
+const visibleReturnSeries = ref(['strategy_return', 'benchmark_return', 'excess_return'])
 const compareData = ref<any[]>([])
 const compareLoading = ref(false)
 const creating = ref(false)
+const settingsSaving = ref(false)
 const runningId = ref<number | null>(null)
 const selectedRows = ref<any[]>([])
 const frequencyOptions = [
@@ -691,6 +715,16 @@ function defaultCreateForm() {
 }
 
 const createForm = ref(defaultCreateForm())
+const settingsForm = ref({
+  name: '',
+  initial_cash: 1000000,
+  run_frequency: 'daily' as 'daily' | 'hourly' | '15m',
+  start_at: '',
+})
+const paperHasStarted = computed(() => {
+  const info = detailData.value?.info || {}
+  return Boolean(info.last_run_date || detailData.value?.nav?.length || detailData.value?.trades?.length)
+})
 const navChartRef = ref<HTMLElement | null>(null)
 const compareChartRef = ref<HTMLElement | null>(null)
 const stockDailyEl = ref<HTMLElement | null>(null)
@@ -910,9 +944,37 @@ function initNavChart() {
   navChart = echarts.init(navChartRef.value)
   const nav = detailData.value.nav as any[]
   const dates = nav.map((n: any) => n.date)
-  const initial = nav[0]?.total_value || 1
-  const returns = nav.map((n: any) => +(((n.total_value ?? initial) / initial - 1) * 100).toFixed(2))
-  const values = nav.map((n: any) => n.total_value ?? 0)
+  const pointSymbol = nav.length === 1 ? 'circle' : 'none'
+  const activeKeys = visibleReturnSeries.value.length
+    ? visibleReturnSeries.value
+    : ['strategy_return']
+  const options = returnSeriesOptions.value
+  const activeOptions = options.filter(item => activeKeys.includes(item.key))
+  const initial = detailData.value.info?.initial_cash || nav[0]?.total_value || 1
+  const fallbackStrategyReturns = nav.map((n: any) => +(((n.total_value ?? initial) / initial - 1) * 100).toFixed(2))
+  const series = activeOptions.map(item => ({
+    name: item.label,
+    type: 'line',
+    yAxisIndex: item.yAxisIndex,
+    data: nav.map((n: any, index: number) => {
+      if (item.key === 'strategy_return') return n.strategy_return ?? fallbackStrategyReturns[index]
+      if (item.key === 'benchmark_return') return n.benchmark_return ?? 0
+      if (item.key === 'excess_return') return n.excess_return ?? ((n.strategy_return ?? fallbackStrategyReturns[index]) - (n.benchmark_return ?? 0))
+      return n.total_value ?? 0
+    }),
+    symbol: pointSymbol,
+    smooth: false,
+    lineStyle: { width: item.key === 'total_value' ? 1.5 : 2, color: item.color },
+    itemStyle: { color: item.color },
+    ...(item.key === 'strategy_return' ? {
+      areaStyle: {
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: 'rgba(230,162,60,0.22)' },
+          { offset: 1, color: 'rgba(230,162,60,0.01)' },
+        ]),
+      },
+    } : {}),
+  }))
 
   navChart.setOption({
     tooltip: {
@@ -921,37 +983,24 @@ function initNavChart() {
         const d = p[0]?.axisValue
         let h = `<b>${d}</b>`
         p.forEach((s: any) => {
-          const unit = s.seriesIndex === 0 ? '%' : ' 元'
-          h += `<br/>${s.marker} ${s.seriesName}: ${s.seriesIndex === 0 ? (s.value >= 0 ? '+' : '') : ''}${s.value}${unit}`
+          const option = options.find(item => item.label === s.seriesName)
+          const unit = option?.unit || '%'
+          const prefix = unit === '%' && s.value >= 0 ? '+' : ''
+          h += `<br/>${s.marker} ${s.seriesName}: ${prefix}${s.value}${unit}`
         })
         return h
       },
     },
-    legend: { data: ['收益率', '总资产'], top: 4, textStyle: { fontSize: 11 } },
-    grid: { left: 55, right: 55, top: 40, bottom: 30 },
+    legend: { data: activeOptions.map(item => item.label), top: 4, textStyle: { fontSize: 11 } },
+    grid: { left: 55, right: 60, top: 42, bottom: 30 },
     dataZoom: [{ type: 'inside', start: 0, end: 100 }],
     xAxis: { type: 'category', data: dates, boundaryGap: false, axisLabel: { fontSize: 10 } },
     yAxis: [
-      { type: 'value', axisLabel: { formatter: '{value}%', fontSize: 10 },
+      { type: 'value', name: '收益率', axisLabel: { formatter: '{value}%', fontSize: 10 },
         splitLine: { lineStyle: { type: 'dashed', color: '#eee' } } },
-      { type: 'value', axisLabel: { fontSize: 10 }, splitLine: { show: false } },
+      { type: 'value', name: '总资产', axisLabel: { fontSize: 10 }, splitLine: { show: false } },
     ],
-    series: [
-      {
-        name: '收益率', type: 'line', yAxisIndex: 0, data: returns, symbol: 'none',
-        lineStyle: { width: 2, color: '#e6a23c' },
-        areaStyle: {
-          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: 'rgba(230,162,60,0.22)' },
-            { offset: 1, color: 'rgba(230,162,60,0.01)' },
-          ]),
-        },
-      },
-      {
-        name: '总资产', type: 'line', yAxisIndex: 1, data: values, symbol: 'none',
-        lineStyle: { width: 1.5, color: '#409eff' },
-      },
-    ],
+    series,
   })
 }
 
@@ -962,7 +1011,7 @@ function initCompareChart() {
   const series = compareData.value.map((p: any, i: number) => {
     const nav = p.nav || []
     if (!nav.length) return null
-    const initial = nav[0].total_value || 1
+    const initial = p.initial_cash || nav[0].total_value || 1
     return {
       name: p.name || p.strategy_name, type: 'line', smooth: true,
       data: nav.map((n: any) => [n.date, ((n.total_value / initial - 1) * 100).toFixed(2)]),
@@ -1263,6 +1312,8 @@ async function loadList() {
     const res = await getPaperTradingList()
     if ((res as any)?.code === 0) paperList.value = (res as any).data
     else if (res.data?.code === 0) paperList.value = res.data.data
+  } catch (error) {
+    console.error('加载模拟盘列表失败', error)
   } finally { loading.value = false }
 }
 
@@ -1283,6 +1334,8 @@ async function loadStrategyBacktests(strategyId: number) {
     const body = res?.code !== undefined ? res : res.data
     const rows = body?.code === 0 ? (body.data || []) : []
     strategyBacktests.value = rows.filter((bt: any) => (bt.status || '').toLowerCase() === 'completed')
+  } catch (error) {
+    console.error('加载策略回测版本失败', error)
   } finally {
     backtestsLoading.value = false
   }
@@ -1294,20 +1347,34 @@ function openCreateDialog() {
   showCreateDialog.value = true
 }
 
+function resetSettingsForm() {
+  const info = detailData.value?.info
+  if (!info) return
+  settingsForm.value = {
+    name: info.name || '',
+    initial_cash: Number(info.initial_cash || 1000000),
+    run_frequency: (info.run_frequency || 'daily') as 'daily' | 'hourly' | '15m',
+    start_at: info.start_at || info.started_at || formatDateTime(new Date()),
+  }
+}
+
 async function onCreateStrategyChange(strategyId: number) {
   createForm.value.backtest_id = null
   if (strategyId) await loadStrategyBacktests(strategyId)
 }
 
-async function loadDetailData(id: number) {
+async function loadDetailData(id: number, resetView = true) {
   detailLoading.value = true
-  sideTab.value = 'overview'
-  chartTab.value = 'returns'
-  detailData.value = null
+  if (resetView) {
+    sideTab.value = 'overview'
+    chartTab.value = 'returns'
+    detailData.value = null
+  }
   try {
-    const res = await getPaperTradingDetail(id)
+    const res = await getPaperTradingDetail(id, undefined, benchmarkStartMode.value)
     if ((res as any)?.code === 0) detailData.value = (res as any).data
     else if (res.data?.code === 0) detailData.value = res.data.data
+    resetSettingsForm()
     // 设置日期选择器为最后运行日期
     if (detailData.value?.info?.last_run_date) {
       posHistDate.value = detailData.value.info.last_run_date
@@ -1318,14 +1385,50 @@ async function loadDetailData(id: number) {
     }
     await nextTick()
     initNavChart()
+    setTimeout(initNavChart, 120)
+  } catch (error) {
+    console.error('加载模拟盘详情失败', error)
+    if (resetView) detailData.value = null
   } finally { detailLoading.value = false }
+}
+
+async function saveSettings() {
+  if (!detailId.value) return
+  const form = settingsForm.value
+  if (!form.name.trim()) { ElMessage.warning('请输入模拟盘名称'); return }
+  if (!form.start_at) { ElMessage.warning('请选择开始日期'); return }
+  if (!form.initial_cash || form.initial_cash < 10000) { ElMessage.warning('初始资金不能低于 10000'); return }
+  settingsSaving.value = true
+  try {
+    const payload: any = {
+      id: detailId.value,
+      name: form.name.trim(),
+      run_frequency: form.run_frequency,
+      start_at: form.start_at,
+    }
+    if (!paperHasStarted.value) payload.initial_cash = form.initial_cash
+    const res = await updatePaperTrading(payload)
+    const body = (res as any)?.code !== undefined ? (res as any) : res.data
+    if (body?.code === 0) {
+      ElMessage.success('设置已保存')
+      await loadDetailData(detailId.value, false)
+      loadList()
+    } else {
+      ElMessage.error(body?.msg || '保存失败')
+    }
+  } finally { settingsSaving.value = false }
+}
+
+async function onBenchmarkStartModeChange() {
+  if (!detailId.value) return
+  await loadDetailData(detailId.value, false)
 }
 
 // ── 按日期重新加载持仓 ──
 async function reloadPositionsByDate(date: string) {
   if (!detailId.value || !detailData.value) return
   try {
-    const res = await getPaperTradingDetail(detailId.value, date)
+    const res = await getPaperTradingDetail(detailId.value, date, benchmarkStartMode.value)
     const body = (res as any)?.code !== undefined ? (res as any) : res.data
     if (body?.code === 0 && body.data?.positions) {
       detailData.value.positions = body.data.positions
@@ -1556,6 +1659,14 @@ onUnmounted(() => {
 }
 .jq-inner-tabs { margin: 0; }
 :deep(.jq-inner-tabs .el-tabs__header) { margin-bottom: 8px; }
+.jq-chart-toolbar {
+  display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap;
+  min-height: 30px; margin: -2px 0 8px;
+}
+:deep(.jq-chart-toolbar .el-checkbox-button__inner),
+:deep(.jq-chart-toolbar .el-radio-button__inner) {
+  padding: 5px 10px; font-size: 12px;
+}
 
 /* 统计指标网格 */
 .jq-stats-grid {
@@ -1586,13 +1697,10 @@ onUnmounted(() => {
 .jq-log-empty { padding: 40px; text-align: center; color: #909399; }
 
 /* 设置 */
-.jq-settings { max-width: 500px; }
-.jq-set-row {
-  display: flex; justify-content: space-between; padding: 10px 0;
-  border-bottom: 1px solid #f5f5f5; font-size: 13px;
-}
-.jq-set-label { color: #909399; }
-.jq-set-value { color: #303133; font-weight: 500; }
+.jq-settings-form { max-width: 620px; }
+.settings-inline-control { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.settings-help { color: #909399; font-size: 12px; }
+.jq-readonly-value { color: #303133; font-weight: 500; }
 
 /* ── 颜色 ── */
 .val-red { color: #f56c6c !important; }

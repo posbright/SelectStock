@@ -18,6 +18,22 @@ __author__ = 'InStock'
 __date__ = '2026/03/13'
 
 
+_BENCHMARK_NAME_MAP = {
+    '000001': '上证指数',
+    '000016': '上证50',
+    '000300': '沪深300',
+    '000688': '科创50',
+    '000852': '中证1000',
+    '000905': '中证500',
+    '000985': '中证全指',
+    '399001': '深证成指',
+    '399005': '中小综指',
+    '399006': '创业板指',
+}
+
+_RUN_FREQUENCIES = ('daily', 'hourly', '15m')
+
+
 class CreatePaperTradingHandler(webBase.BaseHandler, ABC):
     """创建模拟盘"""
 
@@ -35,7 +51,7 @@ class CreatePaperTradingHandler(webBase.BaseHandler, ABC):
             if not strategy_id:
                 self.write(json.dumps({'code': -1, 'msg': '缺少 strategy_id'}))
                 return
-            if run_frequency not in ('daily', 'hourly', '15m'):
+            if run_frequency not in _RUN_FREQUENCIES:
                 self.write(json.dumps({'code': -1, 'msg': '运行频率参数错误'}))
                 return
 
@@ -104,8 +120,78 @@ def _parse_optional_int(value):
         return None
 
 
+def _parse_initial_cash(value):
+    try:
+        initial_cash = float(value)
+    except (TypeError, ValueError):
+        return None
+    return initial_cash if initial_cash >= 10000 else None
+
+
+def _paper_has_started(last_run_date=None, nav_count=0, trade_count=0):
+    return bool(last_run_date or (nav_count or 0) > 0 or (trade_count or 0) > 0)
+
+
+def _build_paper_update_fields(body, can_update_initial_cash):
+    fields = []
+    params = []
+
+    if 'name' in body:
+        name = str(body.get('name') or '').strip()
+        if not name:
+            return None, None, '模拟盘名称不能为空'
+        fields.append('name=%s')
+        params.append(name[:100])
+
+    if 'run_frequency' in body:
+        run_frequency = body.get('run_frequency')
+        if run_frequency not in _RUN_FREQUENCIES:
+            return None, None, '运行频率参数错误'
+        fields.append('run_frequency=%s')
+        params.append(run_frequency)
+
+    if 'start_at' in body:
+        start_dt = _parse_datetime(body.get('start_at'))
+        if start_dt is None:
+            return None, None, '开始时间格式错误'
+        fields.append('start_at=%s')
+        params.append(start_dt)
+
+    if 'initial_cash' in body:
+        if not can_update_initial_cash:
+            return None, None, '模拟盘已开始运行，不能修改初始资金'
+        initial_cash = _parse_initial_cash(body.get('initial_cash'))
+        if initial_cash is None:
+            return None, None, '初始资金不能低于 10000'
+        fields.extend(['initial_cash=%s', 'current_cash=%s', 'current_value=%s'])
+        params.extend([initial_cash, initial_cash, initial_cash])
+
+    if not fields:
+        return None, None, '没有可更新的字段'
+    return fields, params, None
+
+
 def _json_int(value):
     return int(value) if value is not None else None
+
+
+def _normalize_benchmark_code(code):
+    text = str(code or '000300').strip().upper()
+    if '.' in text:
+        text = text.split('.', 1)[0]
+    if len(text) > 6 and text[:6].isdigit():
+        text = text[:6]
+    return text or '000300'
+
+
+def _get_benchmark_name(code):
+    clean_code = _normalize_benchmark_code(code)
+    return _BENCHMARK_NAME_MAP.get(clean_code, clean_code)
+
+
+def _get_benchmark_return_label(code):
+    name = _get_benchmark_name(code)
+    return f'基准收益（{name}）' if name else '基准收益'
 
 
 def _resolve_backtest_id(strategy_id, requested_backtest_id=None):
@@ -164,6 +250,88 @@ def _get_stock_name_map(codes):
         return {}
 
 
+def _date_text(value):
+    if value is None:
+        return ''
+    if hasattr(value, 'strftime'):
+        return value.strftime('%Y-%m-%d')
+    text = str(value).strip()
+    return text[:10]
+
+
+def _build_benchmark_values(benchmark_code, date_values, base_date=None):
+    dates = [_date_text(value) for value in date_values]
+    dates = [value for value in dates if value]
+    if not dates:
+        return {}
+    start_date = _date_text(base_date) or min(dates)
+    end_date = max(dates)
+    try:
+        from instock.core.backtest.data_feed import load_benchmark_data
+        df = load_benchmark_data(benchmark_code or '000300', start_date, end_date)
+        if df is None or len(df) == 0:
+            return {}
+        df = df.copy()
+        df['date_key'] = df['date'].apply(_date_text)
+        df = df.sort_values('date_key')
+        base_rows = df[df['date_key'] >= start_date]
+        if len(base_rows) == 0:
+            return {}
+        base_price = float(base_rows.iloc[0]['close'])
+        if base_price <= 0:
+            return {}
+        result = {}
+        for date_key in dates:
+            rows = df[df['date_key'] <= date_key]
+            if len(rows) > 0:
+                result[date_key] = round(float(rows.iloc[-1]['close']) / base_price, 6)
+        return result
+    except Exception:
+        logging.debug("模拟盘基准曲线补算失败", exc_info=True)
+        return {}
+
+
+def _should_rebuild_benchmark_values(values):
+    clean_values = []
+    for value in values or []:
+        try:
+            clean_values.append(float(value or 1))
+        except (TypeError, ValueError):
+            clean_values.append(1.0)
+    if not clean_values:
+        return True
+    return all(abs(value - 1.0) < 1e-9 for value in clean_values)
+
+
+def _latest_nav_snapshot(nav_rows):
+    if not nav_rows:
+        return None
+    row = nav_rows[-1]
+    if len(row) < 2 or row[1] is None:
+        return None
+    return {
+        'date': _date_text(row[0]),
+        'total_value': float(row[1] or 0),
+        'cash': float(row[2] or 0) if len(row) >= 3 else None,
+        'position_value': float(row[3] or 0) if len(row) >= 4 else None,
+    }
+
+
+def _apply_nav_snapshot(info, snapshot):
+    if not snapshot:
+        return info
+    initial = float(info.get('initial_cash') or 0)
+    total_value = float(snapshot.get('total_value') or 0)
+    info['current_value'] = total_value
+    if snapshot.get('cash') is not None:
+        info['current_cash'] = float(snapshot.get('cash') or 0)
+    if snapshot.get('position_value') is not None:
+        info['position_value'] = float(snapshot.get('position_value') or 0)
+    info['current_value_date'] = snapshot.get('date') or ''
+    info['profit_rate'] = round((total_value / initial - 1) * 100, 2) if initial > 0 else 0
+    return info
+
+
 class PaperTradingActionHandler(webBase.BaseHandler, ABC):
     """暂停/恢复/停止模拟盘"""
 
@@ -188,6 +356,60 @@ class PaperTradingActionHandler(webBase.BaseHandler, ABC):
             self.write(json.dumps({'code': 0}))
         except Exception as e:
             self.write(json.dumps({'code': -1, 'msg': str(e)}))
+
+
+class UpdatePaperTradingHandler(webBase.BaseHandler, ABC):
+    """更新模拟盘设置"""
+
+    @gen.coroutine
+    def post(self):
+        try:
+            body = json.loads(self.request.body)
+            paper_id = body.get('id')
+            if not paper_id:
+                self.write(json.dumps({'code': -1, 'msg': '缺少 id'}, ensure_ascii=False))
+                return
+
+            from instock.paper_trading.paper_engine import _ensure_paper_table
+            _ensure_paper_table()
+
+            rows = mdb.executeSqlFetch(
+                'SELECT last_run_date FROM cn_stock_paper_trading WHERE id=%s',
+                (paper_id,))
+            if not rows:
+                self.write(json.dumps({'code': -1, 'msg': '模拟盘不存在'}, ensure_ascii=False))
+                return
+
+            nav_count = 0
+            if mdb.checkTableIsExist('cn_stock_paper_nav'):
+                count_rows = mdb.executeSqlFetch(
+                    'SELECT COUNT(1) FROM cn_stock_paper_nav WHERE paper_id=%s',
+                    (paper_id,))
+                nav_count = int(count_rows[0][0] or 0) if count_rows else 0
+
+            trade_count = 0
+            if mdb.checkTableIsExist('cn_stock_backtest_trade'):
+                count_rows = mdb.executeSqlFetch(
+                    'SELECT COUNT(1) FROM cn_stock_backtest_trade WHERE paper_id=%s',
+                    (paper_id,))
+                trade_count = int(count_rows[0][0] or 0) if count_rows else 0
+
+            has_started = _paper_has_started(rows[0][0], nav_count, trade_count)
+            fields, params, error_msg = _build_paper_update_fields(body, not has_started)
+            if error_msg:
+                self.write(json.dumps({'code': -1, 'msg': error_msg}, ensure_ascii=False))
+                return
+
+            params.append(paper_id)
+            mdb.executeSql(
+                f"UPDATE cn_stock_paper_trading SET {', '.join(fields)} WHERE id=%s",
+                tuple(params))
+
+            self.write(json.dumps({'code': 0}, ensure_ascii=False))
+        except Exception as e:
+            mdb._invalidate_shared_conn()
+            logging.error("UpdatePaperTrading异常", exc_info=True)
+            self.write(json.dumps({'code': -1, 'msg': str(e)}, ensure_ascii=False))
 
 
 class GetPaperTradingListHandler(webBase.BaseHandler, ABC):
@@ -215,43 +437,49 @@ class GetPaperTradingListHandler(webBase.BaseHandler, ABC):
             if rows:
                 # 批量获取所有模拟盘的 NAV 数据，用于计算年化收益、最大回撤、今日收益
                 paper_ids = [r[0] for r in rows]
-                nav_map = {}  # paper_id -> [(date, total_value), ...]
+                nav_map = {}  # paper_id -> [(date, total_value, cash, position_value), ...]
                 if mdb.checkTableIsExist('cn_stock_paper_nav') and paper_ids:
                     placeholders = ','.join(['%s'] * len(paper_ids))
                     nav_rows = mdb.executeSqlFetch(
-                        f'SELECT paper_id, date, total_value '
+                        f'SELECT paper_id, date, total_value, cash, position_value '
                         f'FROM cn_stock_paper_nav '
                         f'WHERE paper_id IN ({placeholders}) '
                         f'ORDER BY paper_id, date ASC', tuple(paper_ids))
                     if nav_rows:
                         for nr in nav_rows:
-                            nav_map.setdefault(nr[0], []).append((nr[1], float(nr[2]) if nr[2] else 0))
+                            nav_map.setdefault(nr[0], []).append(nr[1:])
 
                 for r in rows:
                     initial = float(r[3]) if r[3] else 1000000
                     current = float(r[5]) if r[5] else initial
-                    profit_rate = (current / initial - 1) * 100 if initial > 0 else 0
+                    current_cash = float(r[4]) if r[4] else initial
 
                     # 从 NAV 序列计算年化收益、最大回撤、今日收益
                     annual_return = 0
                     max_drawdown = 0
                     today_return = 0
                     nav_list = nav_map.get(r[0], [])
+                    latest_snapshot = _latest_nav_snapshot(nav_list)
+                    if latest_snapshot:
+                        current = latest_snapshot['total_value']
+                        current_cash = latest_snapshot['cash'] if latest_snapshot['cash'] is not None else current_cash
+                    profit_rate = (current / initial - 1) * 100 if initial > 0 else 0
                     if len(nav_list) >= 2:
-                        first_val = nav_list[0][1]
-                        last_val = nav_list[-1][1]
+                        first_val = float(nav_list[0][1] or 0)
+                        last_val = float(nav_list[-1][1] or 0)
                         first_date = nav_list[0][0]
                         last_date = nav_list[-1][0]
                         days = (last_date - first_date).days if hasattr(first_date, '__sub__') else 0
 
                         # 年化收益
-                        if days > 0 and first_val > 0:
+                        if days > 0 and initial > 0:
                             ann_factor = 365.0 / days
-                            annual_return = round(((last_val / first_val) ** ann_factor - 1) * 100, 2)
+                            annual_return = round(((last_val / initial) ** ann_factor - 1) * 100, 2)
 
                         # 最大回撤
-                        peak = nav_list[0][1]
-                        for _, v in nav_list:
+                        peak = initial if initial > 0 else first_val
+                        for nav_row in nav_list:
+                            v = float(nav_row[1] or 0)
                             if v > peak:
                                 peak = v
                             dd = (peak - v) / peak * 100 if peak > 0 else 0
@@ -260,7 +488,7 @@ class GetPaperTradingListHandler(webBase.BaseHandler, ABC):
                         max_drawdown = round(max_drawdown, 2)
 
                         # 今日收益（最近两个 NAV 的变化率）
-                        prev_val = nav_list[-2][1]
+                        prev_val = float(nav_list[-2][1] or 0)
                         if prev_val > 0:
                             today_return = round((last_val / prev_val - 1) * 100, 2)
 
@@ -269,7 +497,7 @@ class GetPaperTradingListHandler(webBase.BaseHandler, ABC):
                         'strategy_name': r[1] or '未知策略',
                         'name': r[2] or f'模拟盘-{r[0]}',
                         'initial_cash': initial,
-                        'current_cash': float(r[4]) if r[4] else initial,
+                        'current_cash': current_cash,
                         'current_value': current,
                         'profit_rate': round(profit_rate, 2),
                         'annual_return': annual_return,
@@ -289,7 +517,7 @@ class GetPaperTradingListHandler(webBase.BaseHandler, ABC):
             self.write(json.dumps({'code': -1, 'msg': str(e)}))
 
 
-def _compute_paper_metrics(nav_rows, trade_rows):
+def _compute_paper_metrics(nav_rows, trade_rows, initial_cash=None):
     """
     从 NAV 序列和交易记录计算模拟盘绩效指标。
 
@@ -305,16 +533,25 @@ def _compute_paper_metrics(nav_rows, trade_rows):
         'total_return': 0, 'annual_return': 0, 'max_drawdown': 0,
         'sharpe_ratio': 0, 'sortino_ratio': 0, 'win_rate': 0,
         'profit_loss_ratio': 0, 'trade_count': 0, 'running_days': 0,
-        'today_return': 0,
+        'today_return': 0, 'benchmark_return': 0, 'excess_return': 0,
     }
 
     if not nav_rows or len(nav_rows) < 2:
         return metrics
 
     values = [float(r[1]) for r in nav_rows]
-    initial = values[0]
+    try:
+        initial = float(initial_cash) if initial_cash else values[0]
+    except (TypeError, ValueError):
+        initial = values[0]
     final = values[-1]
     metrics['total_return'] = round((final / initial - 1) * 100, 2) if initial > 0 else 0
+
+    if len(nav_rows[0]) >= 5:
+        benchmarks = [float(r[4] or 1) for r in nav_rows]
+        bm_final = benchmarks[-1] or 1
+        metrics['benchmark_return'] = round((bm_final - 1) * 100, 2)
+        metrics['excess_return'] = round(metrics['total_return'] - metrics['benchmark_return'], 2)
 
     first_date = nav_rows[0][0]
     last_date = nav_rows[-1][0]
@@ -324,8 +561,8 @@ def _compute_paper_metrics(nav_rows, trade_rows):
         ann_factor = 365.0 / days
         metrics['annual_return'] = round(((final / initial) ** ann_factor - 1) * 100, 2)
 
-    # 最大回撤
-    peak = values[0]
+    # 最大回撤：以初始资金作为生命周期基准，避免第一条 NAV 已亏损时低估回撤。
+    peak = initial if initial > 0 else values[0]
     max_dd = 0
     for v in values:
         if v > peak:
@@ -404,6 +641,9 @@ class GetPaperTradingDetailHandler(webBase.BaseHandler, ABC):
         try:
             paper_id = self.get_argument('id', None)
             pos_date = self.get_argument('pos_date', None)
+            benchmark_start_mode = self.get_argument('benchmark_start_mode', 'paper_start')
+            if benchmark_start_mode not in ('paper_start', 'first_trade'):
+                benchmark_start_mode = 'paper_start'
             if not paper_id:
                 self.write(json.dumps({'code': -1, 'msg': '缺少 id'}))
                 return
@@ -415,7 +655,7 @@ class GetPaperTradingDetailHandler(webBase.BaseHandler, ABC):
                 'pt.current_cash, pt.current_value, pt.status, '
                 'pt.started_at, pt.last_run_date, pt.run_frequency, '
                 'pt.start_at, pt.backtest_id, bp.total_return, '
-                'bp.strategy_name as backtest_name '
+                'bp.strategy_name as backtest_name, bp.benchmark '
                 'FROM cn_stock_paper_trading pt '
                 'LEFT JOIN cn_stock_strategy_code sc ON pt.strategy_id = sc.id '
                 'LEFT JOIN cn_stock_backtest_portfolio bp ON pt.backtest_id = bp.id '
@@ -428,6 +668,8 @@ class GetPaperTradingDetailHandler(webBase.BaseHandler, ABC):
             r = rows[0]
             initial = float(r[3]) if r[3] else 1000000
             current = float(r[5]) if r[5] else initial
+            benchmark_code = _normalize_benchmark_code(r[14] or '000300')
+            paper_start_date = r[10] or r[7]
 
             info = {
                 'id': r[0],
@@ -445,26 +687,38 @@ class GetPaperTradingDetailHandler(webBase.BaseHandler, ABC):
                 'backtest_id': _json_int(r[11]),
                 'backtest_return': float(r[12]) if r[12] is not None else None,
                 'backtest_name': r[13] or '',
+                'benchmark_code': benchmark_code,
+                'benchmark_name': _get_benchmark_name(benchmark_code),
+                'benchmark_return_label': _get_benchmark_return_label(benchmark_code),
+                'benchmark_start_mode': benchmark_start_mode,
+                'benchmark_start_mode_label': '首次成交' if benchmark_start_mode == 'first_trade' else '模拟开始',
+                'benchmark_start_date': '',
+                'first_trade_date': '',
             }
 
             # 当前持仓（支持按日期查询历史持仓）
             positions = []
             if mdb.checkTableIsExist('cn_stock_backtest_position'):
-                if pos_date:
+                position_date = pos_date
+                if not position_date:
+                    latest_rows = mdb.executeSqlFetch(
+                        'SELECT MAX(date) FROM cn_stock_backtest_position WHERE paper_id = %s',
+                        (paper_id,))
+                    position_date = str(latest_rows[0][0]) if latest_rows and latest_rows[0] and latest_rows[0][0] else None
+                if position_date:
                     pos_rows = mdb.executeSqlFetch(
-                        'SELECT code, name, amount, avg_cost, close_price, '
-                        'market_value, profit, profit_rate, weight '
-                        'FROM cn_stock_backtest_position '
-                        'WHERE paper_id = %s AND date = %s '
-                        'ORDER BY market_value DESC', (paper_id, pos_date))
+                        'SELECT p.code, p.name, p.amount, p.avg_cost, p.close_price, '
+                        'p.market_value, p.profit, p.profit_rate, p.weight '
+                        'FROM cn_stock_backtest_position p '
+                        'INNER JOIN ('
+                        '  SELECT code, MAX(id) AS id '
+                        '  FROM cn_stock_backtest_position '
+                        '  WHERE paper_id = %s AND date = %s '
+                        '  GROUP BY code'
+                        ') latest ON latest.id = p.id '
+                        'ORDER BY p.market_value DESC', (paper_id, position_date))
                 else:
-                    pos_rows = mdb.executeSqlFetch(
-                        'SELECT code, name, amount, avg_cost, close_price, '
-                        'market_value, profit, profit_rate, weight '
-                        'FROM cn_stock_backtest_position '
-                        'WHERE paper_id = %s AND date = ('
-                        '  SELECT MAX(date) FROM cn_stock_backtest_position WHERE paper_id = %s'
-                        ') ORDER BY market_value DESC', (paper_id, paper_id))
+                    pos_rows = []
                 if pos_rows:
                     stock_name_map = _get_stock_name_map([p[0] for p in pos_rows])
                     for p in pos_rows:
@@ -484,6 +738,7 @@ class GetPaperTradingDetailHandler(webBase.BaseHandler, ABC):
             # 最近交易
             trades = []
             trade_rows_raw = []
+            first_trade_date = ''
             if mdb.checkTableIsExist('cn_stock_backtest_trade'):
                 trade_rows_raw = mdb.executeSqlFetch(
                     'SELECT date, code, name, direction, price, amount, value, commission, tax '
@@ -505,26 +760,112 @@ class GetPaperTradingDetailHandler(webBase.BaseHandler, ABC):
                             'commission': float(t[7]) if t[7] else 0,
                             'tax': float(t[8]) if t[8] else 0,
                         })
+                    trade_dates = [_date_text(t[0]) for t in trade_rows_raw]
+                    trade_dates = [value for value in trade_dates if value]
+                    first_trade_date = min(trade_dates) if trade_dates else ''
+
+            effective_start_mode = benchmark_start_mode if benchmark_start_mode != 'first_trade' or first_trade_date else 'paper_start'
+            benchmark_base_date = first_trade_date if effective_start_mode == 'first_trade' else paper_start_date
+            benchmark_start_date = _date_text(benchmark_base_date)
+            info.update({
+                'benchmark_start_mode': effective_start_mode,
+                'benchmark_start_mode_label': '首次成交' if effective_start_mode == 'first_trade' else '模拟开始',
+                'benchmark_start_date': benchmark_start_date,
+                'first_trade_date': first_trade_date,
+            })
 
             # NAV 曲线
             nav = []
             nav_rows_raw = []
+            daily_benchmark_by_date = {}
             if mdb.checkTableIsExist('cn_stock_paper_nav'):
+                benchmark_cols = mdb.executeSqlFetch(
+                    "SHOW COLUMNS FROM cn_stock_paper_nav LIKE 'benchmark_value'")
+                benchmark_expr = 'benchmark_value' if benchmark_cols else '1.0 AS benchmark_value'
                 nav_rows_raw = mdb.executeSqlFetch(
-                    'SELECT date, total_value, cash, position_value '
+                    f'SELECT date, total_value, cash, position_value, {benchmark_expr} '
                     'FROM cn_stock_paper_nav '
                     'WHERE paper_id = %s ORDER BY date ASC', (paper_id,))
                 if nav_rows_raw:
+                    raw_benchmark_values = [n[4] if len(n) >= 5 else 1 for n in nav_rows_raw]
+                    rebuilt_benchmark = {}
+                    if effective_start_mode == 'first_trade' or (not benchmark_cols) or _should_rebuild_benchmark_values(raw_benchmark_values):
+                        rebuilt_benchmark = _build_benchmark_values(
+                            benchmark_code, [n[0] for n in nav_rows_raw], benchmark_base_date)
+                    enriched_nav_rows = []
+                    display_strategy_base = None
                     for n in nav_rows_raw:
+                        total_value = float(n[1]) if n[1] else 0
+                        date_key = _date_text(n[0])
+                        stored_benchmark = float(n[4]) if len(n) >= 5 and n[4] else 1
+                        benchmark_value = rebuilt_benchmark.get(date_key, stored_benchmark) if date_key else stored_benchmark
+                        if date_key:
+                            daily_benchmark_by_date[date_key] = benchmark_value
+                        enriched_nav_rows.append((n[0], n[1], n[2], n[3], benchmark_value))
+                        if effective_start_mode == 'first_trade' and benchmark_start_date and date_key < benchmark_start_date:
+                            continue
+                        if effective_start_mode == 'first_trade':
+                            display_strategy_base = display_strategy_base or total_value or initial
+                            strategy_base = display_strategy_base
+                        else:
+                            strategy_base = initial
+                        strategy_return = round((total_value / strategy_base - 1) * 100, 2) if strategy_base > 0 else 0
+                        benchmark_return = round((benchmark_value - 1) * 100, 2)
                         nav.append({
                             'date': str(n[0]) if n[0] else '',
-                            'total_value': float(n[1]) if n[1] else 0,
+                            'total_value': total_value,
                             'cash': float(n[2]) if n[2] else 0,
                             'position_value': float(n[3]) if n[3] else 0,
+                            'benchmark_value': benchmark_value,
+                            'strategy_return': strategy_return,
+                            'benchmark_return': benchmark_return,
+                            'excess_return': round(strategy_return - benchmark_return, 2),
                         })
+                    nav_rows_raw = enriched_nav_rows
+            if len(nav) < 2 and mdb.checkTableIsExist('cn_stock_paper_nav_intraday'):
+                intraday_rows = mdb.executeSqlFetch(
+                    'SELECT datetime, total_value, cash, position_value '
+                    'FROM cn_stock_paper_nav_intraday '
+                    'WHERE paper_id = %s ORDER BY datetime ASC', (paper_id,))
+                if intraday_rows and len(intraday_rows) > len(nav):
+                    enriched_intraday_rows = []
+                    nav = []
+                    if not daily_benchmark_by_date:
+                        daily_benchmark_by_date = _build_benchmark_values(
+                            benchmark_code, [n[0] for n in intraday_rows], benchmark_base_date)
+                    display_strategy_base = None
+                    for n in intraday_rows:
+                        dt_value = n[0]
+                        nav_date = str(dt_value.date()) if hasattr(dt_value, 'date') else str(dt_value or '')[:10]
+                        total_value = float(n[1]) if n[1] else 0
+                        benchmark_value = daily_benchmark_by_date.get(nav_date, 1) or 1
+                        enriched_intraday_rows.append((n[0], n[1], n[2], n[3], benchmark_value))
+                        if effective_start_mode == 'first_trade' and benchmark_start_date and nav_date < benchmark_start_date:
+                            continue
+                        if effective_start_mode == 'first_trade':
+                            display_strategy_base = display_strategy_base or total_value or initial
+                            strategy_base = display_strategy_base
+                        else:
+                            strategy_base = initial
+                        strategy_return = round((total_value / strategy_base - 1) * 100, 2) if strategy_base > 0 else 0
+                        benchmark_return = round((benchmark_value - 1) * 100, 2)
+                        nav.append({
+                            'date': dt_value.strftime('%Y-%m-%d %H:%M:%S') if hasattr(dt_value, 'strftime') else str(dt_value or ''),
+                            'total_value': total_value,
+                            'cash': float(n[2]) if n[2] else 0,
+                            'position_value': float(n[3]) if n[3] else 0,
+                            'benchmark_value': benchmark_value,
+                            'strategy_return': strategy_return,
+                            'benchmark_return': benchmark_return,
+                            'excess_return': round(strategy_return - benchmark_return, 2),
+                        })
+                    nav_rows_raw = enriched_intraday_rows
+
+            # 当前资产展示以最新 NAV 为准，避免主表旧值与收益曲线分叉。
+            _apply_nav_snapshot(info, _latest_nav_snapshot(nav_rows_raw))
 
             # 绩效指标
-            metrics = _compute_paper_metrics(nav_rows_raw, trade_rows_raw)
+            metrics = _compute_paper_metrics(nav_rows_raw, trade_rows_raw, initial)
             info.update(metrics)
 
             # 执行日志
@@ -743,9 +1084,11 @@ class GetPaperCompareHandler(webBase.BaseHandler, ABC):
 
             for pid in paper_ids:
                 if pid in papers:
+                    _apply_nav_snapshot(papers[pid], _latest_nav_snapshot(nav_by_paper.get(pid, [])))
                     papers[pid]['metrics'] = _compute_paper_metrics(
                         nav_by_paper.get(pid, []),
-                        trade_by_paper.get(pid, []))
+                        trade_by_paper.get(pid, []),
+                        papers[pid].get('initial_cash'))
 
             result = [papers[pid] for pid in paper_ids if pid in papers]
             self.write(json.dumps({'code': 0, 'data': result}, ensure_ascii=False))

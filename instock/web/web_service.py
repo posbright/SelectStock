@@ -113,6 +113,7 @@ class Application(tornado.web.Application):
             # 模拟交易
             (r"/instock/api/paper/create", paperTradingHandler.CreatePaperTradingHandler),
             (r"/instock/api/paper/action", paperTradingHandler.PaperTradingActionHandler),
+            (r"/instock/api/paper/update", paperTradingHandler.UpdatePaperTradingHandler),
             (r"/instock/api/paper/list", paperTradingHandler.GetPaperTradingListHandler),
             (r"/instock/api/paper/detail", paperTradingHandler.GetPaperTradingDetailHandler),
             (r"/instock/api/paper/run", paperTradingHandler.RunPaperTradingHandler),

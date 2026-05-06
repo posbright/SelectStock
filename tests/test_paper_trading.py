@@ -37,6 +37,17 @@ from instock.paper_trading.paper_engine import (
     run_paper_trading_daily,
     run_all_paper_trading,
 )
+from instock.web.paperTradingHandler import (
+    _apply_nav_snapshot,
+    _build_paper_update_fields,
+    _compute_paper_metrics,
+    _get_benchmark_name,
+    _get_benchmark_return_label,
+    _paper_has_started,
+    _latest_nav_snapshot,
+    _normalize_benchmark_code,
+    _should_rebuild_benchmark_values,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -741,11 +752,22 @@ class TestEnsureTradeAndPositionTables:
         assert 'paper_id' in sql
 
     @patch('instock.lib.database.checkTableIsExist', return_value=True)
+    @patch('instock.lib.database.executeSqlFetch', return_value=[('uq_paper_position',)])
     @patch('instock.lib.database.executeSql')
-    def test_ensure_position_table_exists(self, mock_exec, mock_check):
+    def test_ensure_position_table_exists(self, mock_exec, mock_fetch, mock_check):
         _ensure_position_table()
         mock_check.assert_called_once_with('cn_stock_backtest_position')
         mock_exec.assert_not_called()
+
+    @patch('instock.lib.database.checkTableIsExist', return_value=True)
+    @patch('instock.lib.database.executeSqlFetch', return_value=[])
+    @patch('instock.lib.database.executeSql')
+    def test_ensure_position_table_migrates_unique_index(self, mock_exec, mock_fetch, mock_check):
+        _ensure_position_table()
+        mock_exec.assert_called_once()
+        sql = mock_exec.call_args[0][0]
+        assert 'ALTER TABLE cn_stock_backtest_position' in sql
+        assert 'uq_paper_position' in sql
 
     @patch('instock.lib.database.checkTableIsExist', return_value=False)
     @patch('instock.lib.database.executeSql')
@@ -757,6 +779,7 @@ class TestEnsureTradeAndPositionTables:
         assert 'cn_stock_backtest_position' in sql
         assert 'avg_cost' in sql
         assert 'weight' in sql
+        assert 'uq_paper_position' in sql
 
     @patch('instock.lib.database.checkTableIsExist', return_value=False)
     @patch('instock.lib.database.executeSql')
@@ -781,7 +804,161 @@ class TestEnsureTradeAndPositionTables:
 
 
 # ===========================================================================
-#  6. _update_paper_error tests
+#  6. paperTradingHandler NAV metric tests
+# ===========================================================================
+
+class TestPaperTradingNavMetrics:
+    """Regression tests for paper detail historical return curves."""
+
+    def test_latest_nav_snapshot_uses_newest_nav_row(self):
+        nav_rows = [
+            (datetime.date(2026, 4, 29), 100000.00, 90000.00, 10000.00),
+            (datetime.date(2026, 4, 30), 98707.13, 88000.00, 10707.13),
+        ]
+
+        snapshot = _latest_nav_snapshot(nav_rows)
+
+        assert snapshot == {
+            'date': '2026-04-30',
+            'total_value': 98707.13,
+            'cash': 88000.00,
+            'position_value': 10707.13,
+        }
+
+    def test_apply_nav_snapshot_overrides_stale_current_value(self):
+        info = {
+            'initial_cash': 100000,
+            'current_value': 100000,
+            'current_cash': 100000,
+            'position_value': 0,
+            'profit_rate': 0,
+        }
+        snapshot = {
+            'date': '2026-04-30',
+            'total_value': 98707.13,
+            'cash': 88000.00,
+            'position_value': 10707.13,
+        }
+
+        _apply_nav_snapshot(info, snapshot)
+
+        assert info['current_value'] == 98707.13
+        assert info['current_cash'] == 88000.00
+        assert info['position_value'] == 10707.13
+        assert info['current_value_date'] == '2026-04-30'
+        assert info['profit_rate'] == -1.29
+
+    def test_apply_nav_snapshot_ignores_missing_snapshot(self):
+        info = {'initial_cash': 100000, 'current_value': 100000}
+
+        result = _apply_nav_snapshot(info, None)
+
+        assert result == {'initial_cash': 100000, 'current_value': 100000}
+
+    def test_metrics_use_initial_cash_not_first_nav(self):
+        nav_rows = [
+            (datetime.date(2026, 4, 29), 99771.13, 99771.13, 0, 1.0),
+            (datetime.date(2026, 4, 30), 98710.00, 98710.00, 0, 1.0),
+        ]
+
+        metrics = _compute_paper_metrics(nav_rows, [], initial_cash=100000)
+
+        assert metrics['total_return'] == -1.29
+
+    def test_benchmark_return_uses_normalized_benchmark_value(self):
+        nav_rows = [
+            (datetime.date(2026, 4, 29), 99771.13, 99771.13, 0, 1.01),
+            (datetime.date(2026, 4, 30), 98710.00, 98710.00, 0, 1.03),
+        ]
+
+        metrics = _compute_paper_metrics(nav_rows, [], initial_cash=100000)
+
+        assert metrics['benchmark_return'] == 3.0
+        assert metrics['excess_return'] == -4.29
+
+    def test_rebuilds_only_default_benchmark_series(self):
+        assert _should_rebuild_benchmark_values([1, 1.0, None]) is True
+        assert _should_rebuild_benchmark_values([1.0, 1.002]) is False
+
+    def test_benchmark_display_name_normalizes_common_codes(self):
+        assert _normalize_benchmark_code('000300.XSHG') == '000300'
+        assert _get_benchmark_name('000300.XSHG') == '沪深300'
+        assert _get_benchmark_name('000016') == '上证50'
+        assert _get_benchmark_return_label('000905') == '基准收益（中证500）'
+
+
+class TestPaperTradingSettingsUpdate:
+    """Regression tests for editable paper trading settings."""
+
+    def test_paper_has_started_detects_nav_or_trade_rows(self):
+        assert _paper_has_started(None, 0, 0) is False
+        assert _paper_has_started(datetime.date(2026, 4, 30), 0, 0) is True
+        assert _paper_has_started(None, 1, 0) is True
+        assert _paper_has_started(None, 0, 1) is True
+
+    def test_build_update_fields_allows_initial_cash_before_started(self):
+        fields, params, error = _build_paper_update_fields({
+            'name': '新模拟盘',
+            'run_frequency': 'hourly',
+            'start_at': '2026-05-06 09:30:00',
+            'initial_cash': 200000,
+        }, can_update_initial_cash=True)
+
+        assert error is None
+        assert fields == [
+            'name=%s', 'run_frequency=%s', 'start_at=%s',
+            'initial_cash=%s', 'current_cash=%s', 'current_value=%s',
+        ]
+        assert params[0] == '新模拟盘'
+        assert params[1] == 'hourly'
+        assert params[2] == datetime.datetime(2026, 5, 6, 9, 30, 0)
+        assert params[3:] == [200000.0, 200000.0, 200000.0]
+
+    def test_build_update_fields_blocks_initial_cash_after_started(self):
+        fields, params, error = _build_paper_update_fields({
+            'name': '可改名称',
+            'run_frequency': '15m',
+            'initial_cash': 200000,
+        }, can_update_initial_cash=False)
+
+        assert fields is None
+        assert params is None
+        assert error == '模拟盘已开始运行，不能修改初始资金'
+
+    def test_build_update_fields_validates_frequency_and_start_time(self):
+        assert _build_paper_update_fields({'run_frequency': 'weekly'}, True)[2] == '运行频率参数错误'
+        assert _build_paper_update_fields({'start_at': 'not-a-date'}, True)[2] == '开始时间格式错误'
+        assert _build_paper_update_fields({'name': '   '}, True)[2] == '模拟盘名称不能为空'
+
+    def test_build_update_fields_rejects_low_initial_cash(self):
+        fields, params, error = _build_paper_update_fields(
+            {'initial_cash': 5000}, can_update_initial_cash=True)
+        assert fields is None
+        assert params is None
+        assert error == '初始资金不能低于 10000'
+
+    def test_build_update_fields_rejects_empty_payload(self):
+        fields, params, error = _build_paper_update_fields({}, can_update_initial_cash=True)
+        assert fields is None
+        assert params is None
+        assert error == '没有可更新的字段'
+
+    def test_parse_optional_int_round_trips_numeric_values(self):
+        # Regression: _parse_optional_int previously fell into dead code after a
+        # refactor and returned None for any non-empty value, which broke
+        # CreatePaperTradingHandler / _resolve_backtest_id. Make sure it still
+        # parses numeric inputs correctly.
+        from instock.web.paperTradingHandler import _parse_optional_int
+
+        assert _parse_optional_int(None) is None
+        assert _parse_optional_int('') is None
+        assert _parse_optional_int('123') == 123
+        assert _parse_optional_int(456) == 456
+        assert _parse_optional_int('not-a-number') is None
+
+
+# ===========================================================================
+#  7. _update_paper_error tests
 # ===========================================================================
 
 class TestUpdatePaperError:
@@ -806,7 +983,7 @@ class TestUpdatePaperError:
 
 
 # ===========================================================================
-#  7. run_paper_trading_daily tests
+#  8. run_paper_trading_daily tests
 # ===========================================================================
 
 class TestRunPaperTradingDaily:
@@ -1295,7 +1472,7 @@ class TestRunPaperTradingDaily:
 
 
 # ===========================================================================
-#  8. run_all_paper_trading tests
+#  9. run_all_paper_trading tests
 # ===========================================================================
 
 class TestRunAllPaperTrading:
@@ -1353,7 +1530,7 @@ class TestRunAllPaperTrading:
 
 
 # ===========================================================================
-#  9. Context / Portfolio / Position integration edge-case tests
+#  10. Context / Portfolio / Position integration edge-case tests
 # ===========================================================================
 
 class TestContextPositionEdgeCases:

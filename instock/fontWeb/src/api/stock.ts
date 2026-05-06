@@ -341,6 +341,17 @@ export function createPaperTrading(data: {
   return request({ url: '/api/paper/create', method: 'post', data })
 }
 
+/** 更新模拟盘设置 */
+export function updatePaperTrading(data: {
+  id: number
+  name?: string
+  initial_cash?: number
+  run_frequency?: 'daily' | 'hourly' | '15m'
+  start_at?: string
+}) {
+  return request({ url: '/api/paper/update', method: 'post', data })
+}
+
 /** 模拟盘操作（暂停/恢复/停止） */
 export function paperTradingAction(data: { id: number; action: 'pause' | 'resume' | 'stop' }) {
   return request({ url: '/api/paper/action', method: 'post', data })
@@ -352,9 +363,10 @@ export function getPaperTradingList() {
 }
 
 /** 获取模拟盘详情 */
-export function getPaperTradingDetail(id: number, posDate?: string) {
+export function getPaperTradingDetail(id: number, posDate?: string, benchmarkStartMode?: 'paper_start' | 'first_trade') {
   const params: any = { id }
   if (posDate) params.pos_date = posDate
+  if (benchmarkStartMode) params.benchmark_start_mode = benchmarkStartMode
   return request({ url: '/api/paper/detail', method: 'get', params })
 }
 

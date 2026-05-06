@@ -73,6 +73,85 @@ def _cache_security_data(context, data_proxy, code, loaded_df):
             'pre_close': row_data.get('pre_close', row_data['close']),
         })
 
+
+def _date_text(value):
+    if value is None:
+        return None
+    if hasattr(value, 'strftime'):
+        return value.strftime('%Y-%m-%d')
+    text = str(value).strip()
+    return text[:10] if text else None
+
+
+def _first_close_on_or_after(df, date_text):
+    if df is None or len(df) == 0:
+        return None
+    target = pd.Timestamp(date_text).normalize()
+    rows = df[pd.to_datetime(df['date']).dt.normalize() >= target]
+    if len(rows) == 0:
+        return None
+    return float(rows.iloc[0]['close'])
+
+
+def _last_close_on_or_before(df, date_text):
+    if df is None or len(df) == 0:
+        return None
+    target = pd.Timestamp(date_text).normalize()
+    rows = df[pd.to_datetime(df['date']).dt.normalize() <= target]
+    if len(rows) == 0:
+        return None
+    return float(rows.iloc[-1]['close'])
+
+
+def _compute_paper_benchmark_value(context, paper_id, date_str):
+    """Return normalized benchmark NAV for the paper account current date."""
+    benchmark_code = _normalize_security_code(getattr(context, 'benchmark', '000300') or '000300')
+    base_code = _normalize_security_code(getattr(context, 'benchmark_base_code', None) or '')
+    base_price = getattr(context, 'benchmark_base_price', None)
+    base_date = _date_text(getattr(context, 'benchmark_base_date', None))
+
+    try:
+        base_price = float(base_price) if base_price else None
+    except (TypeError, ValueError):
+        base_price = None
+
+    if base_code and base_code != benchmark_code:
+        base_price = None
+        base_date = None
+
+    if not base_date:
+        base_date = date_str
+        try:
+            import instock.lib.database as mdb
+            rows = mdb.executeSqlFetch(
+                'SELECT MIN(date) FROM cn_stock_paper_nav WHERE paper_id=%s',
+                (paper_id,))
+            if rows and rows[0] and rows[0][0]:
+                candidate = _date_text(rows[0][0])
+                if candidate:
+                    base_date = candidate
+        except Exception:
+            logging.debug("[模拟交易] 获取模拟盘基准起点失败", exc_info=True)
+
+    try:
+        df = load_benchmark_data(benchmark_code, base_date, date_str)
+        if base_price is None or base_price <= 0:
+            base_price = _first_close_on_or_after(df, base_date)
+        current_price = _last_close_on_or_before(df, date_str)
+        if base_price and current_price:
+            context.benchmark_base_code = benchmark_code
+            context.benchmark_base_date = base_date
+            context.benchmark_base_price = base_price
+            return round(current_price / base_price, 6)
+    except Exception:
+        logging.warning(f"[模拟交易] 基准 {benchmark_code} NAV 计算失败", exc_info=True)
+
+    context.benchmark_base_code = benchmark_code
+    context.benchmark_base_date = base_date
+    if base_price:
+        context.benchmark_base_price = base_price
+    return 1.0
+
 # 基本面数据提供器（延迟初始化，仅在策略需要时加载）
 _fundamental_provider = None
 
@@ -467,8 +546,9 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
         _ensure_nav_table()
         _ensure_intraday_nav_table()
 
-        new_state = serialize_portfolio(context)
         position_value = context.portfolio.total_value - context.portfolio.available_cash
+        benchmark_value = _compute_paper_benchmark_value(context, paper_id, date_str)
+        new_state = serialize_portfolio(context)
 
         with mdb.get_connection() as conn:
             conn.autocommit(False)
@@ -514,6 +594,9 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                              t.price, t.amount, t.value, t.commission, t.tax))
 
                 # 10. 持仓快照
+                cur.execute(
+                    'DELETE FROM cn_stock_backtest_position WHERE paper_id=%s AND date=%s',
+                    (paper_id, date_str))
                 for code, pos in context.portfolio.positions.items():
                     if pos.amount > 0:
                         weight = pos.value / context.portfolio.total_value * 100 if context.portfolio.total_value > 0 else 0
@@ -530,14 +613,16 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                 # 11. 每日 NAV 记录（UPSERT）
                 cur.execute(
                     'INSERT INTO cn_stock_paper_nav '
-                    '(paper_id, date, total_value, cash, position_value) '
-                    'VALUES (%s,%s,%s,%s,%s) '
+                    '(paper_id, date, total_value, cash, position_value, benchmark_value) '
+                    'VALUES (%s,%s,%s,%s,%s,%s) '
                     'ON DUPLICATE KEY UPDATE total_value=VALUES(total_value), '
-                    'cash=VALUES(cash), position_value=VALUES(position_value)',
+                    'cash=VALUES(cash), position_value=VALUES(position_value), '
+                    'benchmark_value=VALUES(benchmark_value)',
                     (paper_id, date_str,
                      round(context.portfolio.total_value, 2),
                      round(context.portfolio.available_cash, 2),
-                     round(position_value, 2)))
+                     round(position_value, 2),
+                     benchmark_value))
 
                 # 11b. 日内实时 NAV 快照（hourly/15m 调度下每次写入，日级调度仅在收盘后一条）
                 try:
@@ -1209,6 +1294,16 @@ def _ensure_trade_table():
 def _ensure_position_table():
     import instock.lib.database as mdb
     if mdb.checkTableIsExist('cn_stock_backtest_position'):
+        try:
+            indexes = mdb.executeSqlFetch(
+                "SHOW INDEX FROM cn_stock_backtest_position WHERE Key_name = 'uq_paper_position'")
+            if not indexes:
+                logging.info("[模拟交易] 为 cn_stock_backtest_position 添加模拟盘持仓唯一索引")
+                mdb.executeSql(
+                    'ALTER TABLE cn_stock_backtest_position '
+                    'ADD UNIQUE KEY uq_paper_position (paper_id, date, code)')
+        except Exception as e:
+            logging.warning(f"[模拟交易] 持仓唯一索引检查/迁移失败(不影响主逻辑): {e}")
         return
     mdb.executeSql('''
         CREATE TABLE IF NOT EXISTS `cn_stock_backtest_position` (
@@ -1226,7 +1321,8 @@ def _ensure_position_table():
             `profit_rate` DECIMAL(10,6),
             `weight` DECIMAL(10,6),
             INDEX `idx_bt_date` (`backtest_id`, `date`),
-            INDEX `idx_paper_date` (`paper_id`, `date`)
+            INDEX `idx_paper_date` (`paper_id`, `date`),
+            UNIQUE KEY `uq_paper_position` (`paper_id`, `date`, `code`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     ''')
 
@@ -1235,6 +1331,16 @@ def _ensure_nav_table():
     """确保模拟盘每日 NAV 记录表存在"""
     import instock.lib.database as mdb
     if mdb.checkTableIsExist('cn_stock_paper_nav'):
+        try:
+            cols = mdb.executeSqlFetch(
+                "SHOW COLUMNS FROM cn_stock_paper_nav LIKE 'benchmark_value'")
+            if not cols:
+                logging.info("[模拟交易] 为 cn_stock_paper_nav 添加 benchmark_value 列")
+                mdb.executeSql(
+                    'ALTER TABLE cn_stock_paper_nav '
+                    'ADD COLUMN benchmark_value DECIMAL(10,6) DEFAULT 1.0 AFTER position_value')
+        except Exception as e:
+            logging.warning(f"[模拟交易] benchmark_value 列检查/迁移失败(不影响主逻辑): {e}")
         return
     mdb.executeSql('''
         CREATE TABLE IF NOT EXISTS `cn_stock_paper_nav` (
