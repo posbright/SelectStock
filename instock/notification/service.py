@@ -211,6 +211,7 @@ def enqueue_trade_notification(
     executed_at: Optional[datetime.datetime] = None,
     send_now: bool = True,
     signal_id: Optional[int] = None,
+    extra_meta: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     ensure_notification_tables()
     channel = "dingtalk"
@@ -231,8 +232,23 @@ def enqueue_trade_notification(
         "value": getattr(trade, "value", None),
         "commission": getattr(trade, "commission", None),
         "tax": getattr(trade, "tax", None),
+        # 文档 §7 模板字段：滑点 / 平仓盈亏 / 收益率（卖出时由 TradeRecord 填充）
+        "slippage_cost": getattr(trade, "slippage_cost", None),
+        "close_profit": getattr(trade, "close_profit", None),
+        "return_rate": getattr(trade, "return_rate", None),
         "signal_id": signal_id,
     }
+    # 文档 §7：模拟盘名称 / 策略名称 / 运行 ID / 成交后仓位 由 paper_engine
+    # 通过 signal_meta 透传，避免模板再回查 DB。
+    if isinstance(extra_meta, dict):
+        for key in ("paper_name", "strategy_name", "strategy_code",
+                    "run_id", "position_after_pct"):
+            if key in extra_meta and extra_meta[key] is not None:
+                event_data[key] = extra_meta[key]
+        # 若 trade 已带这些字段则保留，否则用 meta 兜底
+        for key in ("slippage_cost", "close_profit", "return_rate"):
+            if event_data.get(key) in (None, 0, 0.0) and extra_meta.get(key) is not None:
+                event_data[key] = extra_meta[key]
     # Phase 2: 若提供 signal_id，加载真实策略 reason/decision 注入模板上下文。
     if signal_id:
         try:
@@ -310,15 +326,14 @@ def notify_trade_records(
     meta_list = list(signal_meta or [])
     for idx, trade in enumerate(trade_records or []):
         signal_id = None
-        if idx < len(meta_list):
-            try:
-                signal_id = meta_list[idx].get("signal_id") if isinstance(meta_list[idx], dict) else None
-            except Exception:
-                signal_id = None
+        meta = meta_list[idx] if idx < len(meta_list) and isinstance(meta_list[idx], dict) else {}
+        if meta:
+            signal_id = meta.get("signal_id")
         try:
             result = enqueue_trade_notification(
                 paper_id, trade, trade_date,
-                executed_at=executed_at, send_now=True, signal_id=signal_id)
+                executed_at=executed_at, send_now=True, signal_id=signal_id,
+                extra_meta=meta or None)
             if not result.get("created"):
                 stats["duplicates"] += 1
             elif result.get("sent"):

@@ -204,7 +204,8 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
         rows = mdb.executeSqlFetch(
             'SELECT pt.id, pt.strategy_id, pt.initial_cash, pt.status, '
             'pt.last_run_date, pt.state_json, sc.code as strategy_code, '
-            'pt.run_frequency, pt.start_at, pt.last_run_at '
+            'pt.run_frequency, pt.start_at, pt.last_run_at, '
+            'pt.name as paper_name, sc.name as strategy_name '
             'FROM cn_stock_paper_trading pt '
             'JOIN cn_stock_strategy_code sc ON pt.strategy_id = sc.id '
             'WHERE pt.id = %s', (paper_id,))
@@ -222,6 +223,8 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
         start_at = row[8] if len(row) > 8 else None
         last_run_at = row[9] if len(row) > 9 else None
         initial_cash = float(row[2]) if row[2] else 1000000
+        paper_name = row[10] if len(row) > 10 else None
+        strategy_name = row[11] if len(row) > 11 else None
 
         if status != 'running':
             result = {'status': 'skipped', 'message': f'模拟盘状态为 {status}'}
@@ -775,11 +778,30 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
         if trade_records:
             try:
                 from instock.notification import notify_trade_records
-                # Phase 2: 把策略原始 signal_id 透传给通知层，模板可读取真实 reason/decision 渲染。
-                signal_meta = [
-                    {'signal_id': signal_id_by_index.get(idx)}
-                    for idx in range(len(trade_records))
-                ]
+                # Phase 2 / 文档 §7：把策略原始 signal_id + 模拟盘/策略/运行 元数据 +
+                # 成交后仓位/平仓盈亏/收益率/滑点透传给通知层，使钉钉 markdown
+                # 与文档 §7.1 / §7.2 模板一一对应。
+                total_value_now = float(getattr(context.portfolio, 'total_value', 0.0) or 0.0)
+                signal_meta = []
+                for idx, t in enumerate(trade_records):
+                    pos_after_pct = None
+                    try:
+                        if total_value_now > 0:
+                            pos_value = float(getattr(t, 'value', 0) or 0)
+                            pos_after_pct = pos_value / total_value_now
+                    except Exception:
+                        pos_after_pct = None
+                    signal_meta.append({
+                        'signal_id': signal_id_by_index.get(idx),
+                        'paper_name': paper_name,
+                        'strategy_name': strategy_name or strategy_code,
+                        'strategy_code': strategy_code,
+                        'run_id': run_id if 'run_id' in locals() else None,
+                        'slippage_cost': getattr(t, 'slippage_cost', None),
+                        'close_profit': getattr(t, 'close_profit', None),
+                        'return_rate': getattr(t, 'return_rate', None),
+                        'position_after_pct': pos_after_pct,
+                    })
                 notify_stats = notify_trade_records(
                     paper_id, trade_records, date_str,
                     executed_at=now_dt, signal_meta=signal_meta)

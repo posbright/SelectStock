@@ -51,6 +51,86 @@ def test_trade_markdown_summary_is_before_details():
     assert "600016 民生银行" in message["markdown"]
 
 
+def test_trade_markdown_buy_matches_doc_section_7_1():
+    """文档 §7.1 买入通知模板：标题、6 项摘要、标的与运行、成交信息字段。"""
+    md = build_trade_markdown({
+        "paper_id": 4, "trade_date": "2026-04-27",
+        "executed_at": datetime.datetime(2026, 4, 27, 15, 30, 0),
+        "code": "600016", "name": "民生银行", "direction": "buy",
+        "price": 3.74, "amount": 26600, "value": 99484.0,
+        "commission": 29.85, "tax": 0, "slippage_cost": 49.74,
+        "position_after_pct": 0.498,
+        "paper_name": "BOLL 下轨策略模拟盘",
+        "strategy_name": "BOLL 下轨反弹策略",
+        "run_id": "paper-4-20260427-153000",
+        "reason": "BOLL 下轨附近反弹，MA5 上穿 MA20",
+        "reason_source": "strategy",
+        "ai_score": 82.5, "ai_action": "buy", "ai_gate_result": "pass",
+        "ai_risk_flags": ["MA60 仍偏弱，跌破下轨需复核止损"],
+    })
+    assert md["title"] == "【模拟盘买入信号】600016 民生银行"
+    body = md["markdown"]
+    # 摘要（含 6 项）
+    assert "## 摘要" in body
+    assert "- 标的：600016 民生银行" in body
+    assert "- 方向：买入" in body
+    assert "82.50/100" in body and "建议 buy" in body and "Gate 通过" in body
+    assert "99,484.00 元" in body and "成交后仓位 49.80%" in body
+    assert "核心理由：" in body
+    assert "关键风险：" in body
+    # 标的与运行
+    assert "BOLL 下轨策略模拟盘" in body and "#4" in body
+    assert "BOLL 下轨反弹策略" in body
+    assert "paper-4-20260427-153000" in body
+    assert "2026-04-27" in body
+    # 成交信息（命名为 ## 详情 以保持兼容）
+    assert "成交价" in body and "3.740" in body
+    assert "26,600 股" in body
+    assert "佣金：29.85 元" in body
+    assert "滑点成本：49.74 元" in body
+
+
+def test_trade_markdown_sell_includes_close_profit_and_return_rate():
+    """文档 §7.2 卖出通知模板：印花税、平仓盈亏、收益率、负号格式。"""
+    md = build_trade_markdown({
+        "paper_id": 4, "trade_date": "2026-05-07",
+        "executed_at": datetime.datetime(2026, 5, 7, 15, 0, 0),
+        "code": "600016", "name": "民生银行", "direction": "sell",
+        "price": 3.92, "amount": 26600, "value": 104272.0,
+        "commission": 31.28, "tax": 104.27, "slippage_cost": 52.14,
+        "close_profit": 4590.72, "return_rate": 4.61,
+        "position_after_pct": 0.0,
+    })["markdown"]
+    assert "【模拟盘卖出信号】600016 民生银行" not in md  # 在 title 不在 body
+    assert "- 方向：卖出" in md
+    assert "印花税：104.27 元" in md
+    assert "+4,590.72 元" in md
+    assert "收益率：+4.61%" in md
+
+
+def test_trade_markdown_omits_link_block_without_base_url(monkeypatch):
+    monkeypatch.delenv("INSTOCK_WEB_BASE_URL", raising=False)
+    md = build_trade_markdown({
+        "paper_id": 4, "trade_date": "2026-04-30",
+        "code": "600016", "name": "民生银行", "direction": "buy",
+        "price": 3.74, "amount": 100, "value": 374,
+    })["markdown"]
+    assert "查看详情" not in md
+
+
+def test_trade_markdown_renders_link_block_when_base_url_set(monkeypatch):
+    monkeypatch.setenv("INSTOCK_WEB_BASE_URL", "https://example.com/instock")
+    md = build_trade_markdown({
+        "paper_id": 4, "trade_date": "2026-04-30",
+        "code": "600016", "name": "民生银行", "direction": "buy",
+        "price": 3.74, "amount": 100, "value": 374, "signal_id": 12345,
+    })["markdown"]
+    assert "## 查看详情" in md
+    assert "https://example.com/instock/algo/paper?id=4" in md
+    assert "https://example.com/instock/trade/signal?signal_id=12345" in md
+
+
+
 def test_trade_dedupe_key_is_stable_and_channel_scoped():
     trade = TradeRecord(datetime.date(2026, 4, 30), "600016", "民生银行", "buy", 4.32, 1000)
 
