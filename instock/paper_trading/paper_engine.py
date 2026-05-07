@@ -593,7 +593,7 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                             (paper_id, date_str, t.code, t.name, t.direction,
                              t.price, t.amount, t.value, t.commission, t.tax))
 
-                # 10. 持仓快照
+                # 10. 持仓快照（DELETE + UPSERT；UPSERT 兜底防止并发调度撞 unique key）
                 cur.execute(
                     'DELETE FROM cn_stock_backtest_position WHERE paper_id=%s AND date=%s',
                     (paper_id, date_str))
@@ -604,7 +604,11 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                             'INSERT INTO cn_stock_backtest_position '
                             '(paper_id, date, code, name, amount, avg_cost, close_price, '
                             'market_value, profit, profit_rate, weight) '
-                            'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                            'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) '
+                            'ON DUPLICATE KEY UPDATE name=VALUES(name), amount=VALUES(amount), '
+                            'avg_cost=VALUES(avg_cost), close_price=VALUES(close_price), '
+                            'market_value=VALUES(market_value), profit=VALUES(profit), '
+                            'profit_rate=VALUES(profit_rate), weight=VALUES(weight)',
                             (paper_id, date_str, code, pos.name, pos.amount,
                              round(pos.avg_cost, 3), round(pos.price, 3),
                              round(pos.value, 2), round(pos.profit, 2),
