@@ -1281,6 +1281,113 @@ GET /instock/api/trade/decision?signal_id=xxx
 4. 记录实盘委托、成交、撤单状态。
 5. 执行结果回发 IM。
 
+### Phase 8：鉴权与安全加固 ⏸️ 规划中
+
+> 触发条件：项目从「单管理员内网部署」演进为「多人协作 / 公网/混合云暴露」时，必须先落地 Phase 8，再开放更多事件类型与实盘 broker。
+> 当前部署阶段如仍在内网且单运维，可继续延后；本节作为后续展开的契约清单。
+
+#### 8.1 背景与遗留点
+
+§12 / §13 审计中显式记录了三项「设计上已知但当前未实现」的安全/审计欠账，全部依赖一个尚未引入的「登录 + 角色」体系：
+
+| 来源 | 描述 | 当前替代 |
+|---|---|---|
+| §12.4 | 详情链接 / 配置 API 无鉴权（`/api/notification/*`、`/api/ai/decision/*`、`/api/im/*`、`/api/live/*`） | 仅靠内网部署 + 反向代理 IP 白名单 |
+| §12.6 | 配置版本化已有 `config_version`，但缺 `modified_by`（修改人） | 仅 `updated_at`，谁改无法追溯 |
+| §14 风险 | 钉钉回调 / live execute_pending 无频率限制 | 依赖钉钉自身签名 + 服务端 503 短路 |
+
+#### 8.2 范围（must / should）
+
+**Must（与现有 Phase 1–7 兼容、不破坏既有 325 用例）**：
+
+1. **登录 + 会话**：单一管理员账户（env 注入用户名+bcrypt 密码哈希）+ Tornado `secure_cookie` 会话；前端 axios 统一带 `X-CSRF-Token`。
+2. **`modified_by` 透传**：`cn_stock_notification_config` / `cn_stock_ai_decision_config` 各加 `modified_by VARCHAR(64)`；保存时由 handler 从 session 写入。已有 `_ensure_*_column()` 自动迁移模板可复用。
+3. **回调速率限制**：`/instock/api/dingtalk/callback` 维护内存令牌桶（每个 `operator_id` 每分钟 ≤ N 次，默认 N=12，可由 `INSTOCK_DINGTALK_CALLBACK_RPM` 覆盖）；超限直接 429，不落库不通知。
+4. **Execute pending 速率限制**：`/instock/api/live/execute_pending` 同源 IP 每秒 ≤ 1 次（防误点 / 误调度），命中限速返回 429 + 当前剩余冷却时间。
+5. **钉钉回调来源校验**（强化）：除 HMAC 外，记录回调 IP 白名单 env `INSTOCK_DINGTALK_CALLBACK_ALLOW_IPS`（CIDR 列表，未配置时不强制）。
+
+**Should（对 UX 友好但优先级稍低）**：
+
+6. **登录页 + 会话续期**：[fontWeb/src/views/login.vue](instock/fontWeb/src/views/login.vue) + 401 自动跳转。
+7. **审计页**：在「设置」下加「修改记录」聚合页，按 `modified_by + updated_at` 倒序展示三类配置变更，不展示具体新旧值（点详情才查 `config_version`）。
+8. **多账户 + 角色**：`cn_stock_admin_user`（`role` ∈ `admin / operator / viewer`）。`viewer` 仅读 `/list /detail`；`operator` 可读写 `/save`；`admin` 可改白名单与实盘开关。
+
+#### 8.3 实现要点
+
+```text
+instock/
+├── auth/
+│   ├── __init__.py
+│   ├── service.py          # bcrypt verify, session token, CSRF
+│   └── decorators.py       # @require_login, @require_role
+├── web/
+│   ├── authHandler.py      # /api/auth/login, /logout, /me
+│   └── （所有现有 handler）#  在 prepare() 中调用 require_login()
+└── lib/
+    └── ratelimit.py        # in-memory token bucket（thread-safe）
+```
+
+约束：
+
+- `auth/service.py` 不引入新数据库连接池，沿用 `instock.lib.database`。
+- 速率限制实现为「进程内内存」即可（单实例部署）；多实例后续再切 Redis。本期不引入 Redis 依赖。
+- 默认账户名 `admin`，密码哈希通过 `q:\tools\SelectStock\.venv\Scripts\python.exe -m instock.auth.bootstrap` 一次性生成，写入 `INSTOCK_ADMIN_USER` / `INSTOCK_ADMIN_PASS_BCRYPT`；未注入时 web 启动直接 503，避免「无密码裸跑」。
+- 现有 `/api/im/dingtalk/callback`、`/api/live/execute_pending` 维持「无 cookie 鉴权」，因为前者来自钉钉服务器、后者来自 cron；改用 HMAC 时间戳 + IP 白名单 + 速率限制三层防护。
+
+#### 8.4 数据库迁移
+
+只增列、不改类型；启动时 `_ensure_modified_by_column()` 自动补：
+
+```sql
+ALTER TABLE cn_stock_notification_config ADD COLUMN modified_by VARCHAR(64) NULL AFTER updated_at;
+ALTER TABLE cn_stock_ai_decision_config  ADD COLUMN modified_by VARCHAR(64) NULL AFTER updated_at;
+ALTER TABLE cn_stock_im_operator_whitelist ADD COLUMN modified_by VARCHAR(64) NULL AFTER updated_at;
+CREATE TABLE IF NOT EXISTS `cn_stock_admin_user` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `username` VARCHAR(64) NOT NULL UNIQUE,
+  `password_bcrypt` VARCHAR(120) NOT NULL,
+  `role` ENUM('admin','operator','viewer') NOT NULL DEFAULT 'operator',
+  `enabled` TINYINT(1) NOT NULL DEFAULT 1,
+  `last_login_at` DATETIME NULL,
+  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+#### 8.5 环境变量约定（新增）
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `INSTOCK_AUTH_ENABLED` | `false` | 总开关；为兼容现网，未启用时 Phase 8 全部装饰器直通（保留 `modified_by='system'` 占位） |
+| `INSTOCK_ADMIN_USER` | `admin` | bootstrap 用户名 |
+| `INSTOCK_ADMIN_PASS_BCRYPT` | — | bcrypt 哈希；未配置且 `AUTH_ENABLED=true` → 启动失败 |
+| `INSTOCK_SESSION_SECRET` | 启动时随机 | Tornado `cookie_secret`；建议固化以保留会话 |
+| `INSTOCK_SESSION_TTL_HOURS` | `8` | 会话过期 |
+| `INSTOCK_DINGTALK_CALLBACK_RPM` | `12` | 回调速率限制（每 operator 每分钟） |
+| `INSTOCK_DINGTALK_CALLBACK_ALLOW_IPS` | — | 回调 IP CIDR 白名单（逗号分隔），空则不限制 |
+| `INSTOCK_LIVE_EXECUTE_RPS` | `1` | execute_pending 速率限制（每 IP 每秒） |
+
+#### 8.6 测试计划（增量）
+
+- `tests/test_auth_phase8.py`：登录/登出/会话过期、CSRF、bcrypt 校验、role 装饰器拒绝未授权、rate limit 命中 429。
+- `tests/test_modified_by_phase8.py`：保存通知/AI/白名单后 `modified_by` = 当前 session 用户；`AUTH_ENABLED=false` 时回落 `'system'`。
+- `tests/test_callback_security_phase8.py`：钉钉回调 IP 白名单、速率限制、HMAC + 时间戳防重放协同生效；execute_pending RPS 限制。
+- 已有 Phase 1–7 测试默认在 `INSTOCK_AUTH_ENABLED=false` 下执行，**保持 325 用例不动**；Phase 8 新增独立用例集。
+
+#### 8.7 前端
+
+- 新增 [fontWeb/src/views/login.vue](instock/fontWeb/src/views/login.vue) + 路由守卫（401 → `/login`）。
+- 在 [fontWeb/src/api/request.ts](instock/fontWeb/src/api/request.ts) 拦截器统一处理 401 / 403 / 429。
+- 「设置」三页（notification / ai-config / im-operator / live-trading）在 viewer 角色下表单只读，提交按钮禁用并提示「需要 operator 角色」。
+
+#### 8.8 推进策略
+
+1. **可分两次发版**：先做 Must 1–5（登录 + modified_by + 回调/execute 速率限制），跑一轮生产；Should 6–8 在下一周期补。
+2. **不影响现网**：默认 `INSTOCK_AUTH_ENABLED=false` → 行为与 Phase 7 完全一致；切换 true 时再走全量回归。
+3. **依赖**：仅新增 `bcrypt`（纯 Python 实现可选 `passlib[bcrypt]`），不引入 Redis / OAuth / JWT，控制运维复杂度。
+
+> 结论：Phase 8 不是 bug 修复，而是「单机内网 → 多人/公网」演进时的安全门槛。当前 1–7 阶段在内网部署下可直接上线；准备开放外网或新增协作者时，再启动 Phase 8。
+
 ---
 
 ## 12. 流程审计清单
