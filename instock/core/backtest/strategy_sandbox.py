@@ -7,8 +7,10 @@
 - 白名单导入（仅允许 math/numpy/pandas/talib）
 - 禁止危险函数（exec/eval/open/import os/sys）
 - 超时保护（回测引擎层面实现）
+- AI 通道可使用 ``validate_code_strict()`` 走 AST 双层校验
 """
 
+import ast
 import logging
 import re
 
@@ -89,6 +91,71 @@ def validate_code(code_str):
     # handle_data 可选：如果使用 run_daily 注册日级回调则不需要
     # if 'def handle_data' not in code_str:
     #     return False, "策略代码必须定义 handle_data(context, data) 函数"
+
+    return True, ""
+
+
+# ────────────────────────────────────────────────────────────────
+# AST 强校验（AI 生成通道使用，比正则黑名单更难绕过）
+# ────────────────────────────────────────────────────────────────
+
+# 危险的内置/全局名（直接调用形式）
+_AST_FORBIDDEN_NAMES = {
+    '__import__', 'eval', 'exec', 'compile', 'open',
+    'getattr', 'setattr', 'delattr', 'globals', 'locals', 'vars',
+    'breakpoint', 'help', 'input',
+}
+
+# 危险的属性名（属性访问形式）—— 防止 ().__class__.__bases__[0].__subclasses__() 等
+_AST_FORBIDDEN_ATTRS = {
+    '__class__', '__bases__', '__subclasses__', '__mro__',
+    '__dict__', '__globals__', '__code__', '__builtins__',
+    '__loader__', '__spec__', '__import__',
+    'f_locals', 'f_globals', 'gi_frame', 'cr_frame',
+}
+
+
+def validate_code_strict(code_str):
+    """
+    AST 级强校验 — 适用于 AI 通道、外部用户输入等不可信来源。
+
+    在 ``validate_code()`` 通过的基础上额外检查：
+    - import / from-import 的模块必须在白名单内（AST 层，不可被字符串拼接绕过）
+    - 任何属性访问中的属性名不得命中危险列表
+    - 任何 Name/Call 中的标识符不得命中危险列表
+
+    Returns:
+        (bool, str): (是否安全, 错误信息)
+    """
+    ok, err = validate_code(code_str)
+    if not ok:
+        return ok, err
+
+    try:
+        tree = ast.parse(code_str)
+    except SyntaxError as e:
+        return False, f"策略代码语法错误 (行{e.lineno}): {e.msg}"
+
+    for node in ast.walk(tree):
+        # import X / import X.Y
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                base = (alias.name or '').split('.')[0]
+                if base and base not in _ALLOWED_IMPORTS:
+                    return False, f"AST 拒绝导入模块: {alias.name}"
+        # from X import ...
+        elif isinstance(node, ast.ImportFrom):
+            base = (node.module or '').split('.')[0]
+            if base and base not in _ALLOWED_IMPORTS:
+                return False, f"AST 拒绝导入模块: {node.module}"
+        # foo.__class__.__bases__ 等
+        elif isinstance(node, ast.Attribute):
+            if node.attr in _AST_FORBIDDEN_ATTRS:
+                return False, f"AST 拒绝属性访问: {node.attr}"
+        # 直接引用危险标识符
+        elif isinstance(node, ast.Name):
+            if node.id in _AST_FORBIDDEN_NAMES:
+                return False, f"AST 拒绝标识符: {node.id}"
 
     return True, ""
 

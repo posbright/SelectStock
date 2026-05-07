@@ -2033,9 +2033,35 @@ class RunPortfolioBacktestHandler(webBase.BaseHandler, ABC):
 
             result['backtest_id'] = bt_id
             result['task_id'] = task_id
+            # M0: 引擎返回非 completed 状态也要入库（运行期逻辑错误等）
+            if result.get('status') and result.get('status') != 'completed':
+                try:
+                    from instock.core.backtest.task_recorder import record_failed
+                    record_failed(
+                        strategy_id=strategy_id, strategy_name=strategy_name,
+                        start_date=start_date, end_date=end_date,
+                        initial_cash=initial_cash, benchmark=benchmark,
+                        error_text=str(result.get('message') or result.get('error') or 'unknown'),
+                        traceback_text=str(result.get('traceback') or ''),
+                        extra_result=result,
+                    )
+                except Exception as rec_err:
+                    logging.warning(f"失败任务入库异常: {rec_err}")
             self.write(json.dumps({'code': 0, 'data': result}, ensure_ascii=False, default=str))
         except Exception as e:
             logging.error("RunPortfolioBacktest异常", exc_info=True)
+            # M0: handler 最外层异常也入库
+            try:
+                from instock.core.backtest.task_recorder import record_failed
+                record_failed(
+                    strategy_id=locals().get('strategy_id'), strategy_name=locals().get('strategy_name'),
+                    start_date=locals().get('start_date', ''), end_date=locals().get('end_date', ''),
+                    initial_cash=locals().get('initial_cash', 0),
+                    benchmark=locals().get('benchmark', '000300'),
+                    error_text=str(e), traceback_text=traceback.format_exc(),
+                )
+            except Exception:
+                pass
             self.write(json.dumps({'code': -1, 'msg': str(e)}))
 
 
@@ -2133,11 +2159,24 @@ class StartPortfolioBacktestHandler(webBase.BaseHandler, ABC):
                             except Exception as e:
                                 logging.warning(f"回测持久化异常: {e}")
                 except Exception as e:
+                    err_text = str(e)
+                    tb_text = traceback.format_exc()
                     task = _running_tasks.get(task_id)
                     if task:
                         task['status'] = 'done'
-                        task['result'] = {'status': 'error', 'message': str(e)}
+                        task['result'] = {'status': 'error', 'message': err_text, 'traceback': tb_text}
                     logging.error(f"异步回测异常: {e}", exc_info=True)
+                    # M0: 失败任务必须入库（为 AI 修复闭环提供 error_message）
+                    try:
+                        from instock.core.backtest.task_recorder import record_failed
+                        record_failed(
+                            strategy_id=strategy_id, strategy_name=strategy_name,
+                            start_date=start_date, end_date=end_date,
+                            initial_cash=initial_cash, benchmark=benchmark,
+                            error_text=err_text, traceback_text=tb_text,
+                        )
+                    except Exception as rec_err:
+                        logging.warning(f"失败任务入库异常: {rec_err}")
                 finally:
                     try:
                         import instock.lib.database as _mdb
