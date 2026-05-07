@@ -43,6 +43,8 @@ import instock.web.portfolioBacktestHandler as portfolioBacktestHandler
 import instock.web.paperTradingHandler as paperTradingHandler
 import instock.web.tradeSignalHandler as tradeSignalHandler
 import instock.web.notificationAdminHandler as notificationAdminHandler
+import instock.web.notificationConfigHandler as notificationConfigHandler
+import instock.web.aiDecisionConfigHandler as aiDecisionConfigHandler
 import instock.web.base as webBase
 
 __author__ = 'InStock'
@@ -126,6 +128,18 @@ class Application(tornado.web.Application):
             # Phase 3 扩展：通知事件后台查看（钉钉发送记录、payload、错误信息）
             (r"/instock/api/notification/event/list", notificationAdminHandler.GetNotificationEventListHandler),
             (r"/instock/api/notification/event/detail", notificationAdminHandler.GetNotificationEventDetailHandler),
+            # Phase 5: 通知配置 CRUD + 测试发送 + 单事件重试（仅引用环境变量名，不存密钥明文）
+            (r"/instock/api/notification/config/list", notificationConfigHandler.GetNotificationConfigListHandler),
+            (r"/instock/api/notification/config/detail", notificationConfigHandler.GetNotificationConfigDetailHandler),
+            (r"/instock/api/notification/config/save", notificationConfigHandler.SaveNotificationConfigHandler),
+            (r"/instock/api/notification/config/delete", notificationConfigHandler.DeleteNotificationConfigHandler),
+            (r"/instock/api/notification/config/test_send", notificationConfigHandler.TestSendNotificationHandler),
+            (r"/instock/api/notification/event/retry", notificationConfigHandler.RetryNotificationEventHandler),
+            # Phase 5: AI 决策配置 CRUD（前端调整 prompt/阈值/数据包范围；密钥仅引用环境变量名）
+            (r"/instock/api/ai/config/list", aiDecisionConfigHandler.GetAIDecisionConfigListHandler),
+            (r"/instock/api/ai/config/detail", aiDecisionConfigHandler.GetAIDecisionConfigDetailHandler),
+            (r"/instock/api/ai/config/save", aiDecisionConfigHandler.SaveAIDecisionConfigHandler),
+            (r"/instock/api/ai/config/delete", aiDecisionConfigHandler.DeleteAIDecisionConfigHandler),
             (r"/instock/api/paper/compare", paperTradingHandler.GetPaperCompareHandler),
             (r"/instock/api/paper/delete", paperTradingHandler.DeletePaperTradingHandler),
             # ── Vue SPA 路由 ──

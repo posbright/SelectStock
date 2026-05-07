@@ -361,6 +361,27 @@ const routes: RouteRecordRaw[] = [
     },
     meta: { hidden: true }
   },
+  // Phase 5：通知 / AI 研判配置（仅引用环境变量名，不持久化密钥明文）
+  {
+    path: '/settings',
+    component: Layout,
+    redirect: '/settings/notification',
+    meta: { title: '系统设置', icon: 'Setting' },
+    children: [
+      {
+        path: 'notification',
+        name: 'NotificationSettings',
+        component: () => import('@/views/settings/notification.vue'),
+        meta: { title: '通知配置' }
+      },
+      {
+        path: 'ai-config',
+        name: 'AIDecisionSettings',
+        component: () => import('@/views/settings/ai-config.vue'),
+        meta: { title: 'AI 研判配置' }
+      }
+    ]
+  },
   // 404 catch-all：放在最后，匹配所有未定义路径
   {
     path: '/:pathMatch(.*)*',

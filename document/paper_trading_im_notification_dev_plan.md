@@ -1090,7 +1090,36 @@ GET /instock/api/trade/decision?signal_id=xxx
 - AI 超时或返回格式错误时，按 `fail_closed` 配置决定放行或拒绝，并落库错误原因。
 - 修改 prompt 后，新交易记录保存新的 `prompt_version/prompt_hash`，历史记录不被覆盖。
 
-### Phase 5：前端配置管理页面
+### Phase 5：前端配置管理页面 ✅ 已完成 (2026-05-07)
+
+> 验收记录：
+> - 后端模块：
+>   - `instock/web/notificationConfigHandler.py`：`list/detail/save/delete/test_send/retry_event` 6 个 API + 服务函数。
+>   - `instock/web/aiDecisionConfigHandler.py`：AI 配置 `list/detail/save/delete` 4 个 API + 服务函数。
+>   - 路由注册（`instock/web/web_service.py`）：
+>     - `GET  /instock/api/notification/config/list`、`/detail`
+>     - `POST /instock/api/notification/config/save`、`/delete`
+>     - `POST /instock/api/notification/config/test_send`
+>     - `POST /instock/api/notification/event/retry`
+>     - `GET  /instock/api/ai/config/list`、`/detail`
+>     - `POST /instock/api/ai/config/save`、`/delete`
+> - 配置版本化（§3.6）：
+>   - `cn_stock_notification_config` 自动迁移补齐 `config_version` 列；`UPDATE` 时使用 `config_version=COALESCE(config_version,1)+1`，新建为 1。
+>   - `cn_stock_ai_decision_config` 同样语义；保存自动 `+1`。历史 `cn_stock_trade_ai_score` 已固化 `config_version + prompt_hash + input_hash`，前端修改 prompt/阈值不会改写历史评分（§14.7）。
+> - 安全（§3.7 / §14.3）：
+>   - 后端校验拒绝写入：`webhook_url` / `webhook` / `secret` / `secret_value` / `api_key` / `apiKey` / `token` / `password` 字段；`webhook_env` / `api_key_ref` 中含 `/`、`http`、空格、以 `sk-` 或 `Bearer ` 开头时直接 400 拒绝。
+>   - 响应永不回显环境变量明文，仅返回 `webhook_env/secret_env/api_key_ref` 引用名 + `webhook_is_configured/secret_is_configured/api_key_is_configured` 布尔值（基于 `os.getenv` 当前进程视角）。
+>   - 测试发送 `send_test_message` 使用专用 dedupe `test|<channel>|<paper_id>|<timestamp>`，与真实交易事件隔离；未启用或 webhook 未注入时返回 `skipped`，不抛异常、不影响业务流程。
+>   - 单事件重试 `retry_event` 仅重置目标事件状态为 pending，不会触发批量重发。
+> - 数值范围校验（前端 + 后端双重）：`temperature 0–2`、`max_tokens 1–32000`、`timeout_seconds 1–300`、`retry_count 0–5`、`buy_threshold/sell_threshold 0–100`；`enabled_as_gate=1 + enabled=0` 自动纠正为 `enabled=1`（与 §3.5 一致：gate 启用必须先启用 AI）。
+> - 前端：
+>   - `instock/fontWeb/src/api/settings.ts`：CRUD/test_send/retry 全套 axios 客户端 + TS 类型定义。
+>   - `instock/fontWeb/src/views/settings/notification.vue`：通知配置列表 + 编辑弹窗 + 测试发送按钮 + 删除；摘要/详情 JSON 编辑。
+>   - `instock/fontWeb/src/views/settings/ai-config.vue`：AI 配置列表 + 编辑弹窗（provider/model/base_url/api_key_ref + system/user prompt + temperature/tokens/timeout/retry + buy/sell threshold + gate/fail_closed 开关）。
+>   - 路由：`/settings/notification` 和 `/settings/ai-config` 注册到 `Layout`，左侧菜单图标 `Setting`。
+> - 测试：`tests/test_phase5_config_api.py` 24/24 通过（覆盖：保存版本=1 → 更新+1；拒绝 webhook_url/secret 明文写入；env 字段含 URL 拒绝；非法 channel/event_type/provider/source_type 拒绝；范围外 temperature/buy_threshold/timeout 拒绝；gate 隐含 enabled；list/get/delete；webhook_is_configured / api_key_is_configured 反映当前 env；test_send 在 webhook 缺失时 skipped；retry 不存在事件返回错误；响应 dict 不含任何密钥字段）。
+> - 联跑全量回归 **285/285 通过**（Phase1 6 + Phase2 16 + Phase3 11 + Phase3 admin 10 + Phase4 28 + Phase5 24 + portfolio_backtest 16 + recent_fixes 21 + paper_trading 138 + scheduler 15）。
+> - 部署提示：前端新增 2 个 .vue + 1 个 .ts，需要在 `instock/fontWeb/` 下执行 `npm run build` 后将 `dist/` 同步到 `instock/web/static/` 才会在生产 SPA 中可见；后端 API 部署立即生效。
 
 目标：用户可以在前端配置通知渠道、通知模板、AI 研判参数和展示范围，同时敏感密钥仍由环境变量或后端安全配置管理。
 
