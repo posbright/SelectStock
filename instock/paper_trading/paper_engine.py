@@ -723,6 +723,27 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                         requested_amount=order_info.get('amount'),
                         requested_value=order_info.get('value'),
                     )
+                    # Phase 4: AI 评分（默认禁用 → ai_* 全部 None；启用但非
+                    # gate → 仅留痕；启用 gate → 拒绝路径在 _order_proxy 处理，
+                    # 此处只把评分结果落库与 signal 关联）。
+                    ai_meta = {}
+                    try:
+                        from instock.ai_decision import service as _ai_svc
+                        from instock.ai_decision import config as _ai_cfg
+                        _cfg = _ai_cfg.load_config_for_source('paper', paper_id)
+                        if _cfg is not None and _cfg.is_enabled():
+                            ai_meta = _ai_svc.score_trade(
+                                cfg=_cfg, source_type='paper', source_id=paper_id, run_id=run_id,
+                                code=t.code, name=t.name,
+                                decision_date=date_str,
+                                decision_phase='post_signal',
+                                direction=t.direction,
+                                indicators=order_info.get('indicators'),
+                                selection=order_info.get('selection'),
+                            ) or {}
+                    except Exception as ai_err:
+                        logging.warning(f"[模拟交易] AI 评分调用失败(不影响交易): {ai_err}")
+                        ai_meta = {}
                     sig_id = _tss.persist_signal_with_relations(
                         source_type='paper', source_id=paper_id, run_id=run_id,
                         strategy_id=None, strategy_name=None,
@@ -737,6 +758,10 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                         decision_rules=norm.get('rules') or None,
                         indicators=norm.get('indicators') or None,
                         selection=norm.get('selection') or None,
+                        ai_score_id=ai_meta.get('ai_score_id'),
+                        ai_score=ai_meta.get('ai_score'),
+                        ai_action=ai_meta.get('ai_action'),
+                        ai_gate_result=ai_meta.get('ai_gate_result'),
                     )
                     if sig_id:
                         signal_id_by_index[idx] = sig_id

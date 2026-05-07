@@ -237,6 +237,10 @@ def persist_signal_with_relations(
     decision_rules: Optional[List[Dict[str, Any]]] = None,
     indicators: Optional[Dict[str, Any]] = None,
     selection: Optional[List[Dict[str, Any]]] = None,
+    ai_score_id: Optional[int] = None,
+    ai_score: Optional[float] = None,
+    ai_action: Optional[str] = None,
+    ai_gate_result: Optional[str] = None,
 ) -> Optional[int]:
     """聚合写入。返回 signal_id 或 None（失败时静默，不抛出）。"""
     try:
@@ -254,17 +258,23 @@ def persist_signal_with_relations(
                     "(source_type, source_id, run_id, strategy_id, strategy_name, "
                     " signal_date, code, name, direction, order_api, "
                     " requested_amount, requested_value, target_amount, target_percent, "
-                    " reason, reason_source, signal_hash) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                    " reason, reason_source, signal_hash, "
+                    " ai_score_id, ai_score, ai_action, ai_gate_result) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                     "ON DUPLICATE KEY UPDATE reason=VALUES(reason), reason_source=VALUES(reason_source), "
                     " requested_amount=VALUES(requested_amount), requested_value=VALUES(requested_value), "
                     " target_amount=VALUES(target_amount), target_percent=VALUES(target_percent), "
-                    " strategy_name=VALUES(strategy_name)",
+                    " strategy_name=VALUES(strategy_name), "
+                    " ai_score_id=COALESCE(VALUES(ai_score_id), ai_score_id), "
+                    " ai_score=COALESCE(VALUES(ai_score), ai_score), "
+                    " ai_action=COALESCE(VALUES(ai_action), ai_action), "
+                    " ai_gate_result=COALESCE(VALUES(ai_gate_result), ai_gate_result)",
                     (
                         source_type, int(source_id or 0), run_id, strategy_id, strategy_name,
                         signal_date, code, name, direction, order_api,
                         requested_amount, requested_value, target_amount, target_percent,
                         reason, reason_source, signal_hash,
+                        ai_score_id, ai_score, ai_action, ai_gate_result,
                     ),
                 )
                 cur.execute(
@@ -381,7 +391,8 @@ def fetch_signal_with_decision(signal_id: int) -> Dict[str, Any]:
         signal_rows = mdb.executeSqlFetch(
             f"SELECT id, reason, reason_source, code, name, direction, signal_date, "
             f" requested_amount, requested_value, target_amount, target_percent, "
-            f" order_api, source_type, source_id, run_id, trade_id "
+            f" order_api, source_type, source_id, run_id, trade_id, "
+            f" ai_score_id, ai_score, ai_action, ai_gate_result "
             f"FROM `{SIGNAL_TABLE}` WHERE id=%s",
             (int(signal_id),),
         ) or []
@@ -425,6 +436,7 @@ def fetch_signal_with_decision(signal_id: int) -> Dict[str, Any]:
             "target_amount": s[9], "target_percent": s[10],
             "order_api": s[11],
             "source_type": s[12], "source_id": s[13], "run_id": s[14], "trade_id": s[15],
+            "ai_score_id": s[16], "ai_score": s[17], "ai_action": s[18], "ai_gate_result": s[19],
             "rules": [
                 {
                     "rule_group": r[0], "rule_name": r[1], "threshold_expr": r[2],
@@ -523,6 +535,25 @@ def persist_backtest_signals(*, backtest_id: int, run_id: str,
                 requested_amount=order_info.get("amount"),
                 requested_value=order_info.get("value"),
             )
+            # Phase 4: AI 评分（默认禁用 → ai_meta = {}；持久化时所有 ai_* 字段为 None）
+            _ai_meta = {}
+            try:
+                from instock.ai_decision import service as _ai_svc
+                from instock.ai_decision import config as _ai_cfg
+                _cfg = _ai_cfg.load_config_for_source("backtest", backtest_id)
+                if _cfg is not None and _cfg.is_enabled():
+                    _ai_meta = _ai_svc.score_trade(
+                        cfg=_cfg, source_type="backtest", source_id=backtest_id, run_id=run_id,
+                        code=t.code, name=getattr(t, "name", None),
+                        decision_date=signal_date,
+                        decision_phase="post_signal",
+                        direction=t.direction,
+                        indicators=order_info.get("indicators"),
+                        selection=order_info.get("selection"),
+                    ) or {}
+            except Exception as _ai_err:
+                logging.warning("[trade_signal_store] AI 评分(回测)调用失败: %s", _ai_err)
+                _ai_meta = {}
             sig_id = persist_signal_with_relations(
                 source_type="backtest", source_id=backtest_id, run_id=run_id,
                 strategy_id=None, strategy_name=None,
@@ -537,6 +568,10 @@ def persist_backtest_signals(*, backtest_id: int, run_id: str,
                 decision_rules=norm.get("rules") or None,
                 indicators=norm.get("indicators") or None,
                 selection=norm.get("selection") or None,
+                ai_score_id=_ai_meta.get("ai_score_id") if _ai_meta else None,
+                ai_score=_ai_meta.get("ai_score") if _ai_meta else None,
+                ai_action=_ai_meta.get("ai_action") if _ai_meta else None,
+                ai_gate_result=_ai_meta.get("ai_gate_result") if _ai_meta else None,
             )
             if sig_id:
                 success += 1

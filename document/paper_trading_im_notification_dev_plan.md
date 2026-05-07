@@ -1045,7 +1045,28 @@ GET /instock/api/trade/decision?signal_id=xxx
 - 指标快照与 K 线图上的交易日期一致。
 - 前端 tooltip、详情面板、通知内容中的关键数据一致。
 
-### Phase 4：AI 综合评分扩展
+### Phase 4：AI 综合评分扩展 ✅ 已完成 (2026-05-07)
+
+> 验收记录：
+> - 新模块：`instock/ai_decision/{__init__,schema,config,context_builder,prompt_renderer,service}.py` + `providers/{__init__,openai_compatible}.py`。Provider 仅用 stdlib `urllib`，未新增供应链依赖。
+> - 新增 2 张表（DDL 幂等，§5.5/§5.6 严格对齐）：`cn_stock_ai_decision_config`（含 enabled/source_type/source_id/strategy_id/provider/model/base_url/api_key_ref/system_prompt/user_prompt_template/output_schema/temperature/max_tokens/timeout/retry/enabled_as_gate/fail_closed/buy_threshold/sell_threshold/config_version）、`cn_stock_trade_ai_score`（含 input_summary/prompt_messages/raw_response/score/action/confidence/reason_summary/evidence/risk_flags/threshold_result/gate_result/status/latency_ms/error_message + uk_input_phase 唯一键）。
+> - 决策流：`build_input_summary` 强制按 `decision_date` 截断 K 线（§14.6 防未来函数）；`compute_input_hash` / `compute_prompt_hash` 固化复现键；`render_messages` 提供默认 system+user prompt + `{{ var }}` 占位符渲染；`OpenAICompatibleProvider` 走 `/v1/chat/completions` + `response_format=json_object`；`normalize_ai_payload` 宽松解析（缺字段/非法 action/数值越界自动 clamp）。
+> - 接入点：
+>   - `paper_engine.py` 主事务提交后的 signal 持久化循环中：按 `(source_type='paper', source_id=paper_id)` 加载配置；启用时调用 `score_trade(decision_phase='post_signal')`，结果通过 `persist_signal_with_relations(ai_score_id, ai_score, ai_action, ai_gate_result)` 与 signal 关联；任何 AI 异常仅 warning，不影响交易主事务（§3.2 通知不阻塞交易主流程同样适用 AI）。
+>   - `trade_signal_store.persist_backtest_signals` 同样路径接入 `(source_type='backtest', source_id=backtest_id)`。
+>   - 持久化扩展：`persist_signal_with_relations` 接受 `ai_score_id/ai_score/ai_action/ai_gate_result`，使用 `ON DUPLICATE KEY UPDATE ... COALESCE(...)` 保护已有评分不被空值覆盖。
+>   - `fetch_signal_with_decision` 同步返回 ai_* 字段。
+> - 通知模板：新增 `_build_ai_block`，渲染评分/动作/置信度/Gate 标签/AI 摘要/最多 3 条证据/最多 3 条风险；保持「摘要 → 决策规则 → AI → 详情」顺序（§7 摘要在前）。`enqueue_trade_notification` 自动从 signal + ai_score 表加载 confidence/reason_summary/evidence/risk_flags 注入模板上下文；缺省时 AI 块自动隐藏（与 Phase 1/2/3 通知格式 100% 兼容）。
+> - 安全（§3.7 / §14.3）：
+>   - `api_key` **不**进数据库、**不**进日志，仅通过 `api_key_ref` 引用环境变量（默认 `INSTOCK_AI_API_KEY`）。
+>   - 通知中不展示完整 prompt、原始 raw_response、长 K 线（仅 `reason_summary`/`evidence`/`risk_flags`）。
+>   - `cn_stock_trade_ai_score.uk_input_phase` 同 (source/run/code/phase/input_hash) 幂等，重复调用不双写。
+> - Gate 行为对齐 §3.5 / §14.8：
+>   - 默认 `enabled=0` → `STATUS_SKIPPED`，gate=`not_enabled`，**完全不调用模型**。
+>   - `enabled=1, enabled_as_gate=0` → 仅留痕 + 通知摘要展示，**交易结果不变**。
+>   - `enabled=1, enabled_as_gate=1` → 买入 `score >= buy_threshold` 通过；卖出 `score <= sell_threshold` 通过；其余 `reject`。
+>   - 失败/超时按 `fail_closed` 决定 `fallback`（默认放行）或 `reject`，错误原因落库。
+> - 测试：`tests/test_ai_decision_phase4.py` 28/28 通过（覆盖文档 §13.2 场景 6/7/8/9：禁用、启用-非 gate、gate-pass、gate-reject、超时-fail_closed、超时-放行、非法 JSON、prompt 版本化 hash、剔除未来 K 线、模板含/不含 AI 块、配置 `to_dict` 不泄漏密钥）；含 Phase 1/2/3、portfolio_backtest、recent_fixes、paper_trading 共 **202/202 通过**。
 
 目标：策略筛选出的股票在买入前或卖出前可以生成 AI 综合评分，并将评分、建议动作、关键依据和风险提示落库，供通知、模拟交易详情、回测分析复用。
 

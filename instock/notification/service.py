@@ -242,6 +242,34 @@ def enqueue_trade_notification(
                 event_data["reason"] = sig_detail.get("reason")
                 event_data["reason_source"] = sig_detail.get("reason_source")
                 event_data["decision_rules"] = sig_detail.get("rules") or []
+                # Phase 4: 把 signal 表 ai_* 字段透传到模板上下文（缺省时模板自动隐藏 AI 块）
+                event_data["ai_score"] = sig_detail.get("ai_score")
+                event_data["ai_action"] = sig_detail.get("ai_action")
+                event_data["ai_gate_result"] = sig_detail.get("ai_gate_result")
+                # 详细证据/风险/置信度等通过 ai_score_id 关联表查询，避免模板渲染时再次访问 DB
+                ai_score_id = sig_detail.get("ai_score_id")
+                if ai_score_id:
+                    try:
+                        from instock.ai_decision.config import SCORE_TABLE
+                        import instock.lib.database as _mdb
+                        rows = _mdb.executeSqlFetch(
+                            f"SELECT confidence, reason_summary, evidence, risk_flags "
+                            f"FROM `{SCORE_TABLE}` WHERE id=%s LIMIT 1",
+                            (int(ai_score_id),),
+                        ) or []
+                        if rows:
+                            r = rows[0]
+                            event_data["ai_confidence"] = r[0]
+                            event_data["ai_reason_summary"] = r[1]
+                            try:
+                                import json as _json
+                                event_data["ai_evidence"] = _json.loads(r[2]) if isinstance(r[2], (str, bytes)) else r[2]
+                                event_data["ai_risk_flags"] = _json.loads(r[3]) if isinstance(r[3], (str, bytes)) else r[3]
+                            except Exception:
+                                event_data["ai_evidence"] = []
+                                event_data["ai_risk_flags"] = []
+                    except Exception as _ai_err:
+                        logging.debug("[通知] 加载 AI 评分详情失败: %s", _ai_err)
         except Exception as exc:
             logging.warning(f"[通知] 读取 signal_id={signal_id} 详情失败，模板使用兜底说明: {exc}")
     message = build_trade_markdown(event_data)

@@ -64,6 +64,7 @@ def test_fetch_signal_with_decision_includes_indicators_and_selection(monkeypatc
                 42, "BOLL 下轨反弹", "strategy", "600016", "民生银行", "buy",
                 "2026-04-30", None, 99484.0, None, 0.5,
                 "order_target_percent", "backtest", 7, "backtest-7-x", None,
+                None, None, None, None,
             )]
         if "FROM `CN_STOCK_TRADE_DECISION`" in sql_up:
             return [

@@ -81,6 +81,63 @@ def _build_decision_block(event: Dict[str, Any], max_rules: int = 5) -> str:
     return head + "\n".join(body_lines) + extra + "\n"
 
 
+def _build_ai_block(event: Dict[str, Any], max_evidence: int = 3, max_risks: int = 3) -> str:
+    """Phase 4: 渲染 AI 综合研判摘要块（可选）。
+
+    仅展示 score / action / gate_result / reason_summary / 关键证据 / 风险提示；
+    完整 prompt、密钥、长 K 线均不进入通知（§3.7 / §7.4）。
+    AI 字段不存在时返回空串，不影响 Phase 1/2/3 通知行为。
+    """
+    score = event.get("ai_score")
+    action = event.get("ai_action")
+    gate = event.get("ai_gate_result")
+    reason_summary = event.get("ai_reason_summary")
+    if score is None and not action and not gate and not reason_summary:
+        return ""
+    lines = ["\n## AI 综合研判（仅供参考）\n"]
+    head_parts = []
+    if score is not None:
+        try:
+            head_parts.append(f"评分 {float(score):.2f}/100")
+        except Exception:
+            head_parts.append(f"评分 {score}")
+    if action:
+        head_parts.append(f"建议 {action}")
+    confidence = event.get("ai_confidence")
+    if confidence is not None:
+        try:
+            head_parts.append(f"置信度 {float(confidence):.2f}")
+        except Exception:
+            pass
+    if gate:
+        gate_label = {
+            "not_enabled": "Gate 未启用",
+            "pass": "Gate 通过",
+            "reject": "Gate 拒绝",
+            "fallback": "Gate 回退（AI 失败放行）",
+            "error": "Gate 错误",
+        }.get(str(gate), str(gate))
+        head_parts.append(gate_label)
+    if head_parts:
+        lines.append("- " + "，".join(head_parts))
+    if reason_summary:
+        lines.append(f"- 摘要：{str(reason_summary)[:200]}")
+    evidence = event.get("ai_evidence") or []
+    if isinstance(evidence, list) and evidence:
+        lines.append("- 关键依据：")
+        for ev in evidence[:max_evidence]:
+            text = ev if isinstance(ev, str) else _format_value(ev, 100)
+            lines.append(f"  - {text}")
+    risk_flags = event.get("ai_risk_flags") or []
+    if isinstance(risk_flags, list) and risk_flags:
+        lines.append("- 风险提示：")
+        for rf in risk_flags[:max_risks]:
+            text = rf if isinstance(rf, str) else _format_value(rf, 100)
+            lines.append(f"  - {text}")
+    lines.append("> AI 评分仅作辅助研判，不代表交易建议；完整证据请到系统详情页查看。")
+    return "\n".join(lines) + "\n"
+
+
 def build_trade_markdown(event: Dict[str, Any]) -> Dict[str, str]:
     direction = event.get("direction") or ""
     direction_text = "买入" if direction == "buy" else "卖出" if direction == "sell" else direction
@@ -98,6 +155,7 @@ def build_trade_markdown(event: Dict[str, Any]) -> Dict[str, str]:
     )
     reason_block = _build_reason_block(event)
     decision_block = _build_decision_block(event)
+    ai_block = _build_ai_block(event)
     details = (
         f"\n## 详情\n\n"
         f"- 成交时间：{_fmt_dt(event.get('executed_at'))}\n"
@@ -112,4 +170,4 @@ def build_trade_markdown(event: Dict[str, Any]) -> Dict[str, str]:
         "\n> 通知摘要在前、详情在后；策略原始指标快照与 AI 评分将在 Phase 3+ 详情链接中查看。"
     )
     footer = "\n" + "\n".join(footer_lines) if footer_lines else ""
-    return {"title": title, "markdown": summary + reason_block + decision_block + details + footer}
+    return {"title": title, "markdown": summary + reason_block + decision_block + ai_block + details + footer}
