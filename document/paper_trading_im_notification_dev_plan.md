@@ -1156,8 +1156,39 @@ GET /instock/api/trade/decision?signal_id=xxx
 - 密钥明文不会出现在前端响应、浏览器控制台和通知事件日志中。
 - 旧版本配置产生的历史 AI 评分记录不受新配置影响。
 
-### Phase 6：IM 指令确认
+### Phase 6：IM 指令确认 ✅ 已完成 (2026-05-07)
 
+> 验收记录：
+> - 总开关默认关闭：`INSTOCK_IM_COMMAND_ENABLED` 未设置或非 truthy 时，回调 handler 直接返回 `status=disabled` HTTP 503，不触发任何 DB 写入。生产部署默认即「只接收策略信号、不开放手动确认」，作为后期扩展再开。测试与验证可临时设 `INSTOCK_IM_COMMAND_ENABLED=1` 走完整路径。
+> - 后端模块：
+>   - `instock/im/schema.py`：幂等创建 `cn_stock_trade_command`（§5.9 全字段）+ `cn_stock_im_operator_whitelist` 两表。
+>   - `instock/im/signature.py`：钉钉 HMAC-SHA256 签名校验，时间窗 ≤ 300 秒、常量时间比较、URL-encode 兼容。
+>   - `instock/im/service.py`：`is_enabled` / `handle_dingtalk_callback` / 操作人白名单 CRUD / 风控（单笔金额、单日金额、同 signal 重复确认）/ 指令落库 / 文本解析。
+>   - `instock/web/imCommandHandler.py`：Tornado 7 个 handler（status / callback / command list+detail / operator list+save+delete）。
+>   - `instock/web/web_service.py`：注册 `/instock/api/im/*` 7 条新路由。
+> - 安全 / 审计（§9 + §12.7）：
+>   - **签名校验**：缺失 `secret/timestamp/sign`、timestamp 解析失败、超出 300 秒时间窗、签名不匹配 → 返回 `signature_failed`，不落库（不暴露内部状态给探测者）。
+>   - **操作人白名单**：未在 `cn_stock_im_operator_whitelist` 启用的 `operator_id` → 返回 `unauthorized`，**仍落库一条 status=unauthorized 的记录用于审计**。
+>   - **防重放**：`UNIQUE(source_channel, source_message_id)` + 入口先查重，重复 message_id 第二次回调返回 `duplicate` 并复用第一次的 `command_id`，DB 中只一条记录。
+>   - **指令过期**：每条 approved 指令写 `expire_at = now + INSTOCK_IM_COMMAND_TTL_SECONDS`（默认 300s），Phase 7 真实下单前必须再次校验未过期。
+>   - **风控落库**：`risk_check_json` 含每项 check 的 `name/limit/actual/passed`；失败时 `status=rejected` 仍落库，便于复盘攻击/误操作。
+>   - **金额限制**：`INSTOCK_IM_MAX_SINGLE_VALUE`（默认 10w）单笔上限 + `INSTOCK_IM_MAX_DAILY_VALUE`（默认 50w）按 `(operator_id, channel, today)` 聚合限额。
+>   - **同信号唯一确认**：同一 `signal_id` 已有 `approved/executed` 命令 → 后续 confirm_buy/confirm_sell 拒绝，避免双倍下单。
+>   - **禁止直接调券商**：`handle_dingtalk_callback` 只写入 `cn_stock_trade_command`，永不调用 `instock/trade/trade_service.py`；Phase 7 才接入。
+>   - **完整请求 / 响应审计**：`request_payload` 保留 callback 原始 body；handler 返回 `risk_result` 让前端展示拒绝原因。
+> - 测试：`tests/test_im_command_phase6.py` 22/22 通过，覆盖：默认关闭 / truthy 取值 / disabled 不写库 / 签名缺组件 / 时间窗 / round-trip / 不匹配 / 失败不写库 / 操作人 CRUD 幂等 / 非法 ID 拒绝 / 未授权落审计 / 单笔超限 / 日累计超限 / 同信号重确认拒绝 / 防重放 duplicate / 非法 command_type / 非法 direction / 文本解析 / payload 合并 / happy-path 字段完整 / 默认 max/ttl 读取。
+> - 联跑全量回归 **308/308 通过**（Phase1 6 + Phase2 16 + Phase3 11 + Phase3 admin 10 + Phase4 28 + Phase5 25 + Phase6 22 + portfolio_backtest 16 + recent_fixes 21 + paper_trading 138 + scheduler 15）。
+> - 部署提示：
+>   - 生产环境**默认关闭**手动确认；如需在测试环境开启，导出环境变量：
+>     ```bash
+>     export INSTOCK_IM_COMMAND_ENABLED=1
+>     export INSTOCK_DINGTALK_CALLBACK_SECRET=<钉钉机器人加签 secret>
+>     export INSTOCK_IM_MAX_SINGLE_VALUE=100000   # 可选
+>     export INSTOCK_IM_MAX_DAILY_VALUE=500000    # 可选
+>     export INSTOCK_IM_COMMAND_TTL_SECONDS=300   # 可选
+>     ```
+>   - 后端 web 重启后即生效（schema 自动迁移）。前端管理页（指令列表 / 白名单管理）将在 Phase 7 一起补 UI；当前可通过 API 直接管理白名单。
+>
 目标：支持通过钉钉对交易信号进行确认或忽略；企业微信作为后续渠道扩展。
 
 开发内容：
@@ -1342,17 +1373,18 @@ GET /instock/api/trade/decision?signal_id=xxx
 > - **审计「修改人」字段缺失**：现阶段无登录体系（单管理员内网部署），`cn_stock_notification_config` / `cn_stock_ai_decision_config` 仅有 `updated_at`。Phase 6 引入 IM 指令鉴权时需顺便补 `modified_by`（建议复用 IM 操作人 ID 或前端登录人）。
 > - **JSON 字段长度未做硬限制**：`summary_config`/`detail_config`/`output_schema`/`tool_config` 受 MySQL `TEXT/JSON` 限制（64KB+），前端目前不限制；超大 payload 会被 DB 截断报错，但不会跨配置污染。建议在前端表单上加 16KB 软上限。
 
-#### 12.7 IM 指令审计 ⏸️ 全部待 Phase 6
+#### 12.7 IM 指令审计 ✅ Phase 6 已落地（默认关闭）
 
-| 检查项 | 计划承载位置 |
-|---|---|
-| 回调签名校验 | `instock/web/imCommandHandler.py::_verify_dingtalk_signature` |
-| 操作人白名单 | `cn_stock_im_operator_whitelist`（新表） |
-| 指令过期时间 | 回调 timestamp 与服务端时间差 ≤ 5 分钟 |
-| 指令防重放 token | `cn_stock_im_command_log.nonce` UNIQUE |
-| 风控结果落库 | `cn_stock_im_command_log.risk_result` |
-| 禁止 IM 直接调用券商 | 回调只能写入 `cn_stock_paper_trade` 影子盘或人工确认队列 |
-| 完整请求与响应审计 | `cn_stock_im_command_log` 全字段保留 raw_request/raw_response |
+| 检查项 | 结果 | 实现位置 / 用例 |
+|---|---|---|
+| 回调签名校验 | ✅ | `instock/im/signature.py::verify_dingtalk_signature`；`tests/test_im_command_phase6.py::test_signature_*` |
+| 操作人白名单 | ✅ | `cn_stock_im_operator_whitelist` + `service._is_operator_allowed`；`test_callback_unauthorized_when_operator_not_whitelisted` |
+| 指令过期时间 | ✅ | `INSTOCK_IM_COMMAND_TTL_SECONDS`（默认 300s）写入 `expire_at`；`test_default_risk_limits` |
+| 指令防重放 token | ✅ | `UNIQUE(source_channel, source_message_id)` + 入口查重；`test_callback_replay_returns_duplicate` |
+| 风控结果落库 | ✅ | `cn_stock_trade_command.risk_check_json` 含每项 `name/limit/actual/passed`；`test_callback_rejects_when_*` |
+| 禁止 IM 直接调用券商 | ✅ | `handle_dingtalk_callback` 只写 `cn_stock_trade_command`，源码无任何 `trade_service` 调用；Phase 7 才接入 |
+| 完整请求与响应审计 | ✅ | `request_payload` 保留 callback 原始 body；handler 响应也回显 `risk_result/command_id` |
+| 主开关默认关闭 | ✅ | `INSTOCK_IM_COMMAND_ENABLED` 未设置时回调 503；`test_is_enabled_default_off` / `test_callback_returns_disabled_when_flag_off` |
 
 #### 本轮发现并修复的边界问题
 

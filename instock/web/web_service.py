@@ -45,6 +45,7 @@ import instock.web.tradeSignalHandler as tradeSignalHandler
 import instock.web.notificationAdminHandler as notificationAdminHandler
 import instock.web.notificationConfigHandler as notificationConfigHandler
 import instock.web.aiDecisionConfigHandler as aiDecisionConfigHandler
+import instock.web.imCommandHandler as imCommandHandler
 import instock.web.base as webBase
 
 __author__ = 'InStock'
@@ -140,6 +141,14 @@ class Application(tornado.web.Application):
             (r"/instock/api/ai/config/detail", aiDecisionConfigHandler.GetAIDecisionConfigDetailHandler),
             (r"/instock/api/ai/config/save", aiDecisionConfigHandler.SaveAIDecisionConfigHandler),
             (r"/instock/api/ai/config/delete", aiDecisionConfigHandler.DeleteAIDecisionConfigHandler),
+            # Phase 6: IM 指令确认（默认关闭，由 INSTOCK_IM_COMMAND_ENABLED=1 启用；仅落库 trade_command，不直接调券商）
+            (r"/instock/api/im/status", imCommandHandler.IMStatusHandler),
+            (r"/instock/api/im/dingtalk/callback", imCommandHandler.DingtalkCallbackHandler),
+            (r"/instock/api/im/command/list", imCommandHandler.ListTradeCommandsHandler),
+            (r"/instock/api/im/command/detail", imCommandHandler.GetTradeCommandDetailHandler),
+            (r"/instock/api/im/operator/list", imCommandHandler.ListOperatorsHandler),
+            (r"/instock/api/im/operator/save", imCommandHandler.SaveOperatorHandler),
+            (r"/instock/api/im/operator/delete", imCommandHandler.DeleteOperatorHandler),
             (r"/instock/api/paper/compare", paperTradingHandler.GetPaperCompareHandler),
             (r"/instock/api/paper/delete", paperTradingHandler.DeletePaperTradingHandler),
             # ── Vue SPA 路由 ──
