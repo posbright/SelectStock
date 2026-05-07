@@ -1201,7 +1201,44 @@ GET /instock/api/trade/decision?signal_id=xxx
 6. 实现风控检查。
 7. 暂时只写入指令表，不直接实盘下单。
 
-### Phase 7：实盘交易连接
+### Phase 7：实盘交易连接 ✅ 已完成 (2026-05-07)
+
+> 验收记录：
+> - 主开关默认关闭：`INSTOCK_LIVE_TRADING_ENABLED` 未设置时，`execute_pending_commands()` 直接返回 `{"status": "disabled"}` 且**不读不写 DB**；`/instock/api/live/execute_pending` 返回 HTTP 503。生产部署默认即此状态。
+> - Broker 抽象（`instock/live/executor.py`）：
+>   - `BrokerAdapter` 协议 + `BrokerOrderResult` dataclass。
+>   - 默认 `DryRunBroker`：永不调用真实券商，只返回带 `DRY-` 前缀的模拟 order_id；测试与体检用。
+>   - `register_broker(name, adapter)` 注入真实券商实现；通过 `INSTOCK_LIVE_BROKER` env 切换。仓库内**未绑定任何 broker client**，与 `instock/trade/trade_service.py` 解耦，避免误用。
+> - 二次风控（执行前再校验，不依赖 Phase 6 当时的快照）：
+>   1. `expire_at > now`，否则 status=expired；
+>   2. `operator_id` 仍在 `cn_stock_im_operator_whitelist` 启用列表内；
+>   3. 单笔金额 ≤ `INSTOCK_IM_MAX_SINGLE_VALUE`（实时读取，可热更）；
+>   4. 当日 `(operator_id, channel, today)` 累计 ≤ `INSTOCK_IM_MAX_DAILY_VALUE`；
+>   5. 同 `signal_id` 在其它指令上未出现 `status='executed'`；
+>   6. 当前在 `INSTOCK_TRADING_HOURS`（如 `09:30-11:30,13:00-15:00`，未配置即不限）窗口内。
+>   - 任一未通过 → 状态写入 `expired/rejected`，并把完整 `risk` 列表落 `execution_result`。
+> - 状态回写 + IM 反馈：
+>   - 成功 → status=executed + executed_at + execution_result（含 broker name + order_id + filled_amount + filled_price + raw）。
+>   - 失败 → status=failed + execution_result（含 broker error + risk）。
+>   - **每条状态变更都通过 Phase 1 outbox 写一条 `event_type='trade_executed'` 通知**，dedupe 为 `sha256("trade_executed|<command_id>|<status>")`，保证同一指令一次通知；通知模块未配置时静默跳过，不影响执行流。
+> - 异常隔离：broker `place_order` 抛异常被捕获 → 该指令 status=failed + error 记录，循环继续处理后续指令；不影响其它命令。
+> - 幂等：`execute_pending_commands` 仅扫 `status='approved'`；已执行/已拒绝/已过期/已失败的指令不会被重复处理（DB WHERE 过滤 + 状态机单向迁移）。
+> - 路由（`instock/web/liveTradingHandler.py`）：
+>   - `GET  /instock/api/live/status` → `{enabled, broker, trading_hours}`。
+>   - `POST /instock/api/live/execute_pending`（body: `{limit?: 1-100}`）→ 触发一次扫描，返回执行统计；总开关关闭时 503。
+> - 测试：`tests/test_live_trading_phase7.py` 17/17 通过：默认关闭 / disabled 不写 DB / DryRun happy path（含通知 outbox）/ 过期 → expired / 操作人移除 → rejected / 单笔超限 → rejected / 时段限制 / 自定义 broker 注入 / 注册类型校验 / broker 异常隔离 / 同 signal 二次执行阻断 / 仅扫 approved / 时段解析 / DryRun 兜底返回 order_id。
+> - 联跑全量回归 **325/325 通过**（Phase1 6 + Phase2 16 + Phase3 11 + Phase3 admin 10 + Phase4 28 + Phase5 25 + Phase6 22 + Phase7 17 + portfolio_backtest 16 + recent_fixes 21 + paper_trading 138 + scheduler 15）。
+> - 部署提示：
+>   - 生产**默认即安全状态**（kill-switch 关闭 + DryRunBroker）。
+>   - 启用真实交易需：
+>     ```bash
+>     export INSTOCK_LIVE_TRADING_ENABLED=1
+>     export INSTOCK_LIVE_BROKER=<已注册的 broker name>
+>     export INSTOCK_TRADING_HOURS="09:30-11:30,13:00-15:00"  # 可选
+>     # 同时确保 Phase 6 的 INSTOCK_IM_COMMAND_ENABLED + 钉钉签名 + 白名单已就绪
+>     ```
+>     并在启动入口（如 `instock/web/web_service.py` 启动前）显式 `live.register_broker("xxx", MyAdapter())`。
+>   - 调度建议：通过 cron 或 supervisord 定期 POST `/instock/api/live/execute_pending`（如每 30 秒一次，limit=20）；或在 broker 进程内嵌循环。仓库不预置调度，避免与未配置环境的部署冲突。
 
 目标：将已确认指令安全地交给真实交易系统执行。
 

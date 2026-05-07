@@ -46,6 +46,7 @@ import instock.web.notificationAdminHandler as notificationAdminHandler
 import instock.web.notificationConfigHandler as notificationConfigHandler
 import instock.web.aiDecisionConfigHandler as aiDecisionConfigHandler
 import instock.web.imCommandHandler as imCommandHandler
+import instock.web.liveTradingHandler as liveTradingHandler
 import instock.web.base as webBase
 
 __author__ = 'InStock'
@@ -149,6 +150,9 @@ class Application(tornado.web.Application):
             (r"/instock/api/im/operator/list", imCommandHandler.ListOperatorsHandler),
             (r"/instock/api/im/operator/save", imCommandHandler.SaveOperatorHandler),
             (r"/instock/api/im/operator/delete", imCommandHandler.DeleteOperatorHandler),
+            # Phase 7: 实盘交易连接（默认关闭，由 INSTOCK_LIVE_TRADING_ENABLED=1 启用；默认 broker=dry_run）
+            (r"/instock/api/live/status", liveTradingHandler.LiveStatusHandler),
+            (r"/instock/api/live/execute_pending", liveTradingHandler.ExecutePendingCommandsHandler),
             (r"/instock/api/paper/compare", paperTradingHandler.GetPaperCompareHandler),
             (r"/instock/api/paper/delete", paperTradingHandler.DeletePaperTradingHandler),
             # ── Vue SPA 路由 ──
