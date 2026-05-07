@@ -104,17 +104,19 @@ def check_events():
 
 
 def check_recent_trades():
-    _print_section('5. cn_stock_paper_trade 最近 2 天交易（核对是否每笔都有对应事件）')
+    _print_section('5. 最近 2 天模拟交易执行日志（核对是否每笔成交都有对应通知事件）')
     try:
         rows = mdb.executeSqlFetch(
-            "SELECT id, paper_id, trade_date, code, direction, amount, price, status, created_at "
-            "FROM cn_stock_paper_trade WHERE trade_date >= CURDATE() - INTERVAL 2 DAY "
-            "ORDER BY id DESC LIMIT 50"
+            "SELECT id, paper_id, trade_date, status, message, trade_count, total_value, "
+            "started_at, finished_at FROM cn_stock_paper_execution_log "
+            "WHERE trade_date >= CURDATE() - INTERVAL 2 DAY ORDER BY id DESC LIMIT 50"
         ) or []
         if not rows:
-            print('(最近 2 天没有 paper_trade 记录 — 用户描述与数据库不一致，可能策略实际没产生交易)')
+            print('(最近 2 天 cn_stock_paper_execution_log 无记录 — 调度未触发或未执行)')
         for r in rows:
             print(r)
+            if r[5] and r[5] > 0:
+                print(f'  -> paper_id={r[1]} trade_date={r[2]} 产生 {r[5]} 笔成交，应有对应通知事件')
     except Exception as e:
         print(f'查询异常: {e}')
 
