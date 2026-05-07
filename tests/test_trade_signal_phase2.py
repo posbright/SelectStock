@@ -210,6 +210,64 @@ def test_link_signal_to_trade_writes_when_valid(monkeypatch):
     assert captured["params"] == (99, 7)
 
 
+def test_phase2_schema_migration_alters_legacy_signal_table(monkeypatch):
+    """旧版 cn_stock_trade_signal 缺 target_amount 时应自动 ALTER。"""
+    executed_sql = []
+
+    def _fetch(sql, params):
+        # 模拟 information_schema：signal 表缺 target_amount，indicator 表已是新结构（含 close）。
+        if "columns" in sql.lower():
+            table, col = params
+            if table == tss.SIGNAL_TABLE and col == "target_amount":
+                return []  # 缺列
+            if table == tss.INDICATOR_SNAPSHOT_TABLE and col == "payload":
+                return []  # 没有旧 payload 列 → 跳过 indicator DROP
+            return [(1,)]
+        return []
+
+    def _exec(sql, params=()):
+        executed_sql.append(sql)
+
+    fake_mdb = SimpleNamespace(executeSql=_exec, executeSqlFetch=_fetch)
+    monkeypatch.setattr(tss, "_get_db", lambda: fake_mdb)
+    monkeypatch.setattr(tss, "_TABLES_ENSURED", False, raising=False)
+
+    tss.ensure_trade_signal_tables()
+    joined = "\n".join(executed_sql).lower()
+    assert "alter table" in joined
+    assert "target_amount" in joined
+    assert "ai_score_id" in joined
+
+
+def test_phase2_schema_migration_drops_legacy_indicator_payload(monkeypatch):
+    """旧版 cn_stock_trade_indicator_snapshot 是单列 payload 时应 DROP+重建。"""
+    executed_sql = []
+
+    def _fetch(sql, params):
+        table, col = params
+        if table == tss.SIGNAL_TABLE and col == "target_amount":
+            return [(1,)]  # 已是新 schema
+        if table == tss.INDICATOR_SNAPSHOT_TABLE and col == "payload":
+            return [(1,)]  # 旧 schema 存在
+        if table == tss.INDICATOR_SNAPSHOT_TABLE and col == "close":
+            return []  # 没有 close 列 → 触发重建
+        return []
+
+    def _exec(sql, params=()):
+        executed_sql.append(sql)
+
+    fake_mdb = SimpleNamespace(executeSql=_exec, executeSqlFetch=_fetch)
+    monkeypatch.setattr(tss, "_get_db", lambda: fake_mdb)
+    monkeypatch.setattr(tss, "_TABLES_ENSURED", False, raising=False)
+
+    tss.ensure_trade_signal_tables()
+    joined = "\n".join(executed_sql).lower()
+    assert f"drop table `{tss.INDICATOR_SNAPSHOT_TABLE}`".lower() in joined
+    # 之后必须重建，包含结构化列。
+    assert "`close` decimal" in joined
+    assert "`open` decimal" in joined
+
+
 # ---------- notification template Phase 2 ----------
 
 def test_template_renders_strategy_reason_block():

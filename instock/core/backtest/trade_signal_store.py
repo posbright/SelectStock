@@ -143,7 +143,76 @@ def ensure_trade_signal_tables():
         except Exception as exc:
             logging.warning("[trade_signal_store] 建表失败(将在下次写入时重试): %s", exc)
             return
+
+    # 兼容性迁移：早期提交可能创建了简化版 schema（cn_stock_trade_signal 缺
+    # target_amount/target_percent/ai_*；cn_stock_trade_indicator_snapshot 是
+    # 单列 payload JSON）。CREATE TABLE IF NOT EXISTS 不会更新已存在的表，
+    # 因此这里通过 INFORMATION_SCHEMA 检查并按需 ALTER / DROP 重建。
+    try:
+        _migrate_phase2_schema_if_needed(mdb)
+    except Exception as exc:
+        logging.warning("[trade_signal_store] Phase2 schema 迁移检查失败(忽略，下次重试): %s", exc)
+        return
+
     _TABLES_ENSURED = True
+
+
+def _column_exists(mdb, table: str, column: str) -> bool:
+    rows = mdb.executeSqlFetch(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_schema=DATABASE() AND table_name=%s AND column_name=%s LIMIT 1",
+        (table, column),
+    ) or []
+    return bool(rows)
+
+
+def _migrate_phase2_schema_if_needed(mdb) -> None:
+    # 1) cn_stock_trade_signal：补齐 target_amount/target_percent/ai_* 列
+    if not _column_exists(mdb, SIGNAL_TABLE, "target_amount"):
+        logging.info("[trade_signal_store] 迁移 %s 增加 target_amount/target_percent/ai_* 列", SIGNAL_TABLE)
+        mdb.executeSql(
+            f"ALTER TABLE `{SIGNAL_TABLE}` "
+            "ADD COLUMN `target_amount` DECIMAL(20,4) DEFAULT NULL AFTER `requested_value`, "
+            "ADD COLUMN `target_percent` DECIMAL(12,6) DEFAULT NULL AFTER `target_amount`, "
+            "ADD COLUMN `ai_score_id` BIGINT DEFAULT NULL AFTER `reason_source`, "
+            "ADD COLUMN `ai_score` DECIMAL(8,4) DEFAULT NULL AFTER `ai_score_id`, "
+            "ADD COLUMN `ai_action` VARCHAR(32) DEFAULT NULL AFTER `ai_score`, "
+            "ADD COLUMN `ai_gate_result` VARCHAR(32) DEFAULT NULL AFTER `ai_action`, "
+            "ADD KEY `idx_ai_score_id` (`ai_score_id`)"
+        )
+
+    # 2) cn_stock_trade_indicator_snapshot：旧版是单列 payload JSON，需重建。
+    #    Phase2 trace 表本身可重建，无外键依赖；若已有数据则 DROP 后重建。
+    if _column_exists(mdb, INDICATOR_SNAPSHOT_TABLE, "payload") \
+            and not _column_exists(mdb, INDICATOR_SNAPSHOT_TABLE, "close"):
+        logging.warning(
+            "[trade_signal_store] 检测到 %s 旧 schema(单列 payload)，DROP+重建为结构化列",
+            INDICATOR_SNAPSHOT_TABLE,
+        )
+        mdb.executeSql(f"DROP TABLE `{INDICATOR_SNAPSHOT_TABLE}`")
+        mdb.executeSql(
+            f"CREATE TABLE `{INDICATOR_SNAPSHOT_TABLE}` ("
+            " `id` BIGINT AUTO_INCREMENT PRIMARY KEY,"
+            " `signal_id` BIGINT NOT NULL,"
+            " `period` VARCHAR(16) DEFAULT 'daily',"
+            " `kline_date` DATE DEFAULT NULL,"
+            " `open` DECIMAL(20,6) DEFAULT NULL,"
+            " `high` DECIMAL(20,6) DEFAULT NULL,"
+            " `low` DECIMAL(20,6) DEFAULT NULL,"
+            " `close` DECIMAL(20,6) DEFAULT NULL,"
+            " `volume` DECIMAL(24,4) DEFAULT NULL,"
+            " `amount` DECIMAL(24,4) DEFAULT NULL,"
+            " `ma` JSON DEFAULT NULL,"
+            " `boll` JSON DEFAULT NULL,"
+            " `rsi` JSON DEFAULT NULL,"
+            " `macd` JSON DEFAULT NULL,"
+            " `kdj` JSON DEFAULT NULL,"
+            " `extra` JSON DEFAULT NULL,"
+            " `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,"
+            " UNIQUE KEY `uk_signal_period` (`signal_id`, `period`),"
+            " KEY `idx_signal_date` (`signal_id`, `kline_date`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+        )
 
 
 def persist_signal_with_relations(
