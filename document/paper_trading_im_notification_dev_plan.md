@@ -1240,6 +1240,37 @@ GET /instock/api/trade/decision?signal_id=xxx
 >     并在启动入口（如 `instock/web/web_service.py` 启动前）显式 `live.register_broker("xxx", MyAdapter())`。
 >   - 调度建议：通过 cron 或 supervisord 定期 POST `/instock/api/live/execute_pending`（如每 30 秒一次，limit=20）；或在 broker 进程内嵌循环。仓库不预置调度，避免与未配置环境的部署冲突。
 
+> Phase 6 + 7 前端 UI 补齐 (2026-05-07)：
+> - 新增 `instock/fontWeb/src/api/imLive.ts`：覆盖 `/instock/api/im/*` 与 `/instock/api/live/*` 全部 9 个接口的 TS 类型 + axios 客户端。
+> - 新增 `instock/fontWeb/src/views/settings/im-operator.vue`：操作人白名单 CRUD，顶部展示 IM 总开关 / 单笔上限 / 单日上限 / TTL，禁用 wecom（占位）。
+> - 新增 `instock/fontWeb/src/views/settings/im-commands.vue`：指令列表（含 status/paper_id 过滤、分页），点击「详情」弹窗以 JSON 形式显示 `risk_check` / `request_payload` / `execution_result`，便于审计排查。
+> - 新增 `instock/fontWeb/src/views/settings/live-trading.vue`：实盘开关展示 + 单次手动「触发执行」按钮，结果以统计卡 + 明细表呈现 (`processed/executed/rejected/expired/failed` + 每条 command_id/order_id/error)；总开关关闭时按钮禁用并提示。
+> - `src/router/index.ts` 在 `/settings` 路由组内追加 `im-operator`、`im-commands`、`live-trading` 三页。生产部署需在 `instock/fontWeb/` 下 `npm run build` 后同步 `dist/` 到 `instock/web/static/` 才生效。
+>
+> 联跑全量回归 **325/325 仍通过**（前端纯客户端，仅静态资源变更）。
+
+#### Phase 6 + 7 完整性审计（2026-05-07）
+
+逐项核对后端 + 前端 + 安全约束：
+
+| 维度 | 状态 | 说明 |
+|---|---|---|
+| Phase 6 双开关默认关闭 | ✅ | `INSTOCK_IM_COMMAND_ENABLED` 不设置 → 503，零 DB 操作 |
+| Phase 7 双开关默认关闭 | ✅ | `INSTOCK_LIVE_TRADING_ENABLED` 不设置 → 503，零 DB 操作；即使开关打开，broker 默认 `dry_run` 永不下真单 |
+| Phase 6 → Phase 7 的金额双计算 | ✅ 已复核 | Phase 6 入库前 `_daily_used_value` 仅汇总历史 + 加上估算 = `after`；Phase 7 重审时命令已 approved，`_daily_used_value` 已含其 value，故 `after = used_today` 不再加。注释明确 |
+| `signal_unique_confirm` (Phase 6) vs `signal_not_yet_executed` (Phase 7) | ✅ 设计有意 | Phase 6 拦 `approved/executed`，Phase 7 仅拦 `executed`（防 cron 并发执行同 signal 的不同 cmd） |
+| 操作人移除后历史 approved 命令 | ✅ | Phase 7 二次风控 `operator_still_whitelisted` 拦截，标 rejected + 通知反馈（已测） |
+| broker 异常隔离 | ✅ | `place_order` 抛异常被 try/except，标该条 failed，循环继续，不阻塞其他指令 |
+| 前端 UI 完整 | ✅ | 操作人白名单 CRUD / 指令记录浏览 + 审计详情 / 实盘状态 + 手动触发 三页齐全 |
+| 敏感字段 | ✅ | 所有响应仅返回 `*_is_configured` 布尔；前端永不展示真实 webhook URL / secret / API key |
+| 路由鉴权 | ⏸️ 已记录 | 现有 web 服务无登录态，所有 `/api/im/*` / `/api/live/*` 在内网部署生效；引入登录系统时需补 RBAC（同 §12.6 modified_by） |
+| `register_broker` 全局状态 | 🟢 微小 | 测试间不会泄漏（`INSTOCK_LIVE_BROKER` 未设置时走 default），无需修复 |
+| `cn_stock_im_operator_whitelist.delete` 不级联 | 🟢 设计 | 历史指令保留以审计，新指令在 Phase 6 / Phase 7 各拦一次，不会进入执行 |
+| Phase 7 `_resolve_broker()` 私有 API 被 handler 引用 | 🟡 风格 | 不影响功能；如需暴露，后续可改名 |
+| cron / 调度 | ⏸️ 留给运维 | 不在仓库内预置，避免误启动；建议 supervisord 单独配 pull-loop |
+
+> 结论：Phase 6 + 7 后端代码无功能性 bug，所有边界（默认关闭 / 金额累计 / signal 唯一 / 时段 / 异常隔离 / 删除白名单 / 重放 / 过期）均有自动化用例；前端补齐三页后整套配置/审计/操作流程在浏览器内可闭环完成。剩余仅有「鉴权 / 调度」两项被显式留给运维，与方案预期一致。
+
 目标：将已确认指令安全地交给真实交易系统执行。
 
 开发内容：

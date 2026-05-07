@@ -379,6 +379,24 @@ const routes: RouteRecordRaw[] = [
         name: 'AIDecisionSettings',
         component: () => import('@/views/settings/ai-config.vue'),
         meta: { title: 'AI 研判配置' }
+      },
+      {
+        path: 'im-operator',
+        name: 'IMOperatorWhitelist',
+        component: () => import('@/views/settings/im-operator.vue'),
+        meta: { title: 'IM 操作人白名单' }
+      },
+      {
+        path: 'im-commands',
+        name: 'IMCommandList',
+        component: () => import('@/views/settings/im-commands.vue'),
+        meta: { title: 'IM 指令记录' }
+      },
+      {
+        path: 'live-trading',
+        name: 'LiveTrading',
+        component: () => import('@/views/settings/live-trading.vue'),
+        meta: { title: '实盘交易' }
       }
     ]
   },
