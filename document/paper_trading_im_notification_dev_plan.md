@@ -987,11 +987,11 @@ GET /instock/api/trade/decision?signal_id=xxx
 
 > 验收记录：
 > - 新模块：`instock/core/backtest/trade_decision.py`（normalize/resolve_reason/compute_signal_hash/serialize）；`instock/core/backtest/trade_signal_store.py`（DDL + persist + link + fetch）。
-> - 4 张新表（按需创建，DDL 幂等，单独事务）：`cn_stock_trade_signal`、`cn_stock_trade_decision`、`cn_stock_trade_indicator_snapshot`、`cn_stock_trade_selection_snapshot`。
-> - paper_engine 改造：`_order_proxy(..., reason, decision, indicators, selection, order_api)`；5 个 `order_*` lambda 全部接受 **kw 兼容旧策略；撮合后建立 `signal_inputs` 平行表；主事务提交后 capture trade_id 并 `link_signal_to_trade`；信号持久化失败仅 warning，不回滚成交。
+> - 4 张新表（按需创建，DDL 幂等，单独事务，列结构与 §5.1–§5.4 完全一致）：`cn_stock_trade_signal`（含 `target_amount/target_percent` 与 Phase 4 预留的 `ai_score_id/ai_score/ai_action/ai_gate_result`）、`cn_stock_trade_decision`、`cn_stock_trade_indicator_snapshot`（结构化 OHLCV + ma/boll/rsi/macd/kdj/extra JSON）、`cn_stock_trade_selection_snapshot`。
+> - paper_engine 改造：`_order_proxy(..., reason, decision, indicators, selection, order_api, target_amount, target_percent)`；5 个 `order_*` lambda 全部接受 **kw 兼容旧策略；`order_target` 自动捕获 `target_amount`，`order_target_percent` 自动捕获 `target_percent`；撮合后建立 `signal_inputs` 平行表；主事务提交后 capture trade_id 并 `link_signal_to_trade`；信号持久化失败仅 warning，不回滚成交。
 > - 通知模板扩展：`reason` + `reason_source` + `decision_rules` 渲染为「交易理由（来源标注）」与「决策规则对比」表，最多 5 行；`reason_source=generated` 时显式标注「系统兜底说明（非策略显式提供）」。
 > - 通知服务：`enqueue_trade_notification(..., signal_id=...)` 自动 `fetch_signal_with_decision()` 注入策略真实 reason。
-> - 测试：`tests/test_trade_signal_phase2.py` 16/16 通过；与 Phase 1 / 1062 修复 / sandbox / recorder 共 37/37 通过。
+> - 测试：`tests/test_trade_signal_phase2.py` 16/16 通过（含结构化 OHLCV 拆分、target_percent 持久化校验）；与 Phase 1 / 1062 修复 / sandbox / recorder / recent_fixes 共 58/58 通过。
 
 目标：通知中的交易理由来自策略运行时真实数据。
 

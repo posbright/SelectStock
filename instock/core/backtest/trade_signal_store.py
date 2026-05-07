@@ -40,32 +40,40 @@ def ensure_trade_signal_tables():
         return
 
     ddls = [
+        # 与 dev_plan §5.1 一致；AI 相关列在 Phase 4 写入，本期保持 NULL。
         f"""
         CREATE TABLE IF NOT EXISTS `{SIGNAL_TABLE}` (
             `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
-            `source_type` VARCHAR(32) NOT NULL,
-            `source_id` BIGINT NOT NULL,
-            `run_id` VARCHAR(64) DEFAULT NULL,
+            `source_type` VARCHAR(32) NOT NULL COMMENT 'backtest/paper/live',
+            `source_id` BIGINT NOT NULL COMMENT '回测ID、模拟盘ID或实盘策略ID',
+            `run_id` VARCHAR(64) DEFAULT NULL COMMENT '单次运行ID',
             `strategy_id` BIGINT DEFAULT NULL,
             `strategy_name` VARCHAR(128) DEFAULT NULL,
-            `trade_id` BIGINT DEFAULT NULL,
+            `trade_id` BIGINT DEFAULT NULL COMMENT '成交记录ID，撮合后回填',
             `signal_date` DATE NOT NULL,
             `code` VARCHAR(20) NOT NULL,
             `name` VARCHAR(64) DEFAULT NULL,
-            `direction` VARCHAR(16) NOT NULL,
+            `direction` VARCHAR(16) NOT NULL COMMENT 'buy/sell',
             `order_api` VARCHAR(64) DEFAULT NULL,
-            `requested_amount` DECIMAL(20,4) DEFAULT NULL,
-            `requested_value` DECIMAL(20,4) DEFAULT NULL,
+            `requested_amount` DECIMAL(20,4) DEFAULT NULL COMMENT '策略请求数量变化',
+            `requested_value` DECIMAL(20,4) DEFAULT NULL COMMENT '策略请求金额变化',
+            `target_amount` DECIMAL(20,4) DEFAULT NULL COMMENT '目标持仓数量',
+            `target_percent` DECIMAL(12,6) DEFAULT NULL COMMENT '目标仓位比例',
             `reason` TEXT DEFAULT NULL,
-            `reason_source` VARCHAR(32) DEFAULT 'strategy',
+            `reason_source` VARCHAR(32) DEFAULT 'strategy' COMMENT 'strategy/generated/manual/imported',
+            `ai_score_id` BIGINT DEFAULT NULL COMMENT 'Phase4关联 cn_stock_trade_ai_score.id',
+            `ai_score` DECIMAL(8,4) DEFAULT NULL,
+            `ai_action` VARCHAR(32) DEFAULT NULL,
+            `ai_gate_result` VARCHAR(32) DEFAULT NULL COMMENT 'not_enabled/pass/reject/fallback/error',
             `signal_hash` VARCHAR(64) NOT NULL,
             `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
             `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             UNIQUE KEY `uk_signal_hash` (`signal_hash`),
             KEY `idx_source_run` (`source_type`, `source_id`, `run_id`),
             KEY `idx_trade_id` (`trade_id`),
+            KEY `idx_ai_score_id` (`ai_score_id`),
             KEY `idx_code_date` (`code`, `signal_date`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='策略交易信号表'
         """,
         f"""
         CREATE TABLE IF NOT EXISTS `{DECISION_TABLE}` (
@@ -87,17 +95,29 @@ def ensure_trade_signal_tables():
             KEY `idx_rule_group` (`signal_id`, `rule_group`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """,
+        # 与 dev_plan §5.3 一致：结构化 OHLCV + 各指标 JSON。
         f"""
         CREATE TABLE IF NOT EXISTS `{INDICATOR_SNAPSHOT_TABLE}` (
             `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
             `signal_id` BIGINT NOT NULL,
-            `period` VARCHAR(16) DEFAULT 'daily',
-            `kline_date` DATE DEFAULT NULL,
-            `payload` JSON DEFAULT NULL,
+            `period` VARCHAR(16) DEFAULT 'daily' COMMENT 'daily/weekly/monthly',
+            `kline_date` DATE DEFAULT NULL COMMENT '指标对应K线日期',
+            `open` DECIMAL(20,6) DEFAULT NULL,
+            `high` DECIMAL(20,6) DEFAULT NULL,
+            `low` DECIMAL(20,6) DEFAULT NULL,
+            `close` DECIMAL(20,6) DEFAULT NULL,
+            `volume` DECIMAL(24,4) DEFAULT NULL,
+            `amount` DECIMAL(24,4) DEFAULT NULL,
+            `ma` JSON DEFAULT NULL,
+            `boll` JSON DEFAULT NULL,
+            `rsi` JSON DEFAULT NULL,
+            `macd` JSON DEFAULT NULL,
+            `kdj` JSON DEFAULT NULL,
+            `extra` JSON DEFAULT NULL COMMENT '策略自定义指标',
             `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
             UNIQUE KEY `uk_signal_period` (`signal_id`, `period`),
-            KEY `idx_signal` (`signal_id`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            KEY `idx_signal_date` (`signal_id`, `kline_date`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='交易时点指标快照表'
         """,
         f"""
         CREATE TABLE IF NOT EXISTS `{SELECTION_SNAPSHOT_TABLE}` (
@@ -143,6 +163,8 @@ def persist_signal_with_relations(
     reason: str,
     reason_source: str,
     signal_hash: str,
+    target_amount: Optional[float] = None,
+    target_percent: Optional[float] = None,
     decision_rules: Optional[List[Dict[str, Any]]] = None,
     indicators: Optional[Dict[str, Any]] = None,
     selection: Optional[List[Dict[str, Any]]] = None,
@@ -162,15 +184,18 @@ def persist_signal_with_relations(
                     f"INSERT INTO `{SIGNAL_TABLE}` "
                     "(source_type, source_id, run_id, strategy_id, strategy_name, "
                     " signal_date, code, name, direction, order_api, "
-                    " requested_amount, requested_value, reason, reason_source, signal_hash) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                    " requested_amount, requested_value, target_amount, target_percent, "
+                    " reason, reason_source, signal_hash) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                     "ON DUPLICATE KEY UPDATE reason=VALUES(reason), reason_source=VALUES(reason_source), "
                     " requested_amount=VALUES(requested_amount), requested_value=VALUES(requested_value), "
+                    " target_amount=VALUES(target_amount), target_percent=VALUES(target_percent), "
                     " strategy_name=VALUES(strategy_name)",
                     (
                         source_type, int(source_id or 0), run_id, strategy_id, strategy_name,
                         signal_date, code, name, direction, order_api,
-                        requested_amount, requested_value, reason, reason_source, signal_hash,
+                        requested_amount, requested_value, target_amount, target_percent,
+                        reason, reason_source, signal_hash,
                     ),
                 )
                 cur.execute(
@@ -201,13 +226,34 @@ def persist_signal_with_relations(
                             ),
                         )
 
-                # indicator snapshot (JSON 一行)
+                # indicator snapshot：拆分 OHLCV / ma / boll / rsi / macd / kdj / extra
                 if indicators:
+                    ind = indicators if isinstance(indicators, dict) else {}
+                    ohlcv_keys = {"open", "high", "low", "close", "volume", "amount"}
+                    json_keys = {"ma", "boll", "rsi", "macd", "kdj"}
+                    extra = {k: v for k, v in ind.items()
+                            if k not in ohlcv_keys and k not in json_keys and k != "kline_date"}
                     cur.execute(
                         f"INSERT INTO `{INDICATOR_SNAPSHOT_TABLE}` "
-                        "(signal_id, period, kline_date, payload) VALUES (%s,%s,%s,%s) "
-                        "ON DUPLICATE KEY UPDATE payload=VALUES(payload), kline_date=VALUES(kline_date)",
-                        (signal_id, "daily", signal_date, serialize_for_db(indicators)),
+                        "(signal_id, period, kline_date, `open`, high, low, `close`, volume, amount, "
+                        " ma, boll, rsi, macd, kdj, extra) "
+                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                        "ON DUPLICATE KEY UPDATE kline_date=VALUES(kline_date), "
+                        " `open`=VALUES(`open`), high=VALUES(high), low=VALUES(low), `close`=VALUES(`close`), "
+                        " volume=VALUES(volume), amount=VALUES(amount), "
+                        " ma=VALUES(ma), boll=VALUES(boll), rsi=VALUES(rsi), macd=VALUES(macd), "
+                        " kdj=VALUES(kdj), extra=VALUES(extra)",
+                        (
+                            signal_id, "daily", ind.get("kline_date") or signal_date,
+                            ind.get("open"), ind.get("high"), ind.get("low"), ind.get("close"),
+                            ind.get("volume"), ind.get("amount"),
+                            serialize_for_db(ind.get("ma")),
+                            serialize_for_db(ind.get("boll")),
+                            serialize_for_db(ind.get("rsi")),
+                            serialize_for_db(ind.get("macd")),
+                            serialize_for_db(ind.get("kdj")),
+                            serialize_for_db(extra) if extra else None,
+                        ),
                     )
 
                 # selection snapshot

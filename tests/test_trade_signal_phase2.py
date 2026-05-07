@@ -141,6 +141,7 @@ def test_persist_signal_with_relations_writes_all_tables(fake_db):
         signal_date="2026-04-30", code="600016", name="民生银行",
         direction="buy", order_api="order_target_percent",
         requested_amount=None, requested_value=99484.0,
+        target_percent=0.5,
         reason="BOLL 下轨反弹", reason_source="strategy",
         signal_hash="hash-001",
         decision_rules=[
@@ -148,14 +149,24 @@ def test_persist_signal_with_relations_writes_all_tables(fake_db):
                                 "actual": {"close": 3.74}, "passed": True}, 0),
             td.normalize_rule({"name": "MA5>MA20", "passed": True}, 1),
         ],
-        indicators={"ma5": 3.71, "ma20": 3.70, "boll_lower": 3.67},
+        indicators={"close": 3.74, "open": 3.70, "high": 3.78, "low": 3.69,
+                    "ma": {"ma5": 3.71, "ma20": 3.70},
+                    "boll": {"upper": 3.95, "mid": 3.81, "lower": 3.67},
+                    "my_factor": 0.42},
         selection=[{"stage": "final", "candidate_count_after": 1, "passed": True}],
     )
     assert sig_id == 12345
     assert store["committed"] is True
     assert len(store["signal_inserts"]) == 1
+    # signal INSERT 参数应包含 target_percent。
+    assert 0.5 in store["signal_inserts"][0]
     assert len(store["decision_inserts"]) == 2
     assert len(store["indicator_inserts"]) == 1
+    # 指标表应拆分出 OHLCV 与 ma/boll JSON。
+    ind_params = store["indicator_inserts"][0]
+    assert 3.74 in ind_params  # close
+    assert any("ma5" in str(p) for p in ind_params if p)  # ma JSON
+    assert any("my_factor" in str(p) for p in ind_params if p)  # extra JSON
     assert len(store["selection_inserts"]) == 1
 
 

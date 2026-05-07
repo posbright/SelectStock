@@ -352,7 +352,7 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
 
         def _order_proxy(code, amount=None, value=None, *,
                           reason=None, decision=None, indicators=None, selection=None,
-                          order_api=None):
+                          order_api=None, target_amount=None, target_percent=None):
             code = _normalize_security_code(code)
             # 动态加载未预加载的股票数据
             if code not in context._engine._stock_data:
@@ -393,6 +393,7 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                 'reason': reason, 'decision': decision,
                 'indicators': indicators, 'selection': selection,
                 'order_api': order_api,
+                'target_amount': target_amount, 'target_percent': target_percent,
             })
 
         def _get_current_amount(code):
@@ -408,7 +409,8 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
         api_ns['order'] = lambda code, amount, **kw: _order_proxy(
             code, amount=int(amount), order_api='order', **kw)
         api_ns['order_target'] = lambda code, target, **kw: _order_proxy(
-            code, amount=int(target) - _get_current_amount(code), order_api='order_target', **kw)
+            code, amount=int(target) - _get_current_amount(code),
+            order_api='order_target', target_amount=int(target), **kw)
         api_ns['order_value'] = lambda code, value, **kw: _order_proxy(
             code, value=float(value), order_api='order_value', **kw)
         api_ns['order_target_value'] = lambda code, target_value, **kw: _order_proxy(
@@ -416,7 +418,7 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
             order_api='order_target_value', **kw)
         api_ns['order_target_percent'] = lambda code, percent, **kw: _order_proxy(
             code, value=float(percent) * context.portfolio.total_value - _get_current_value(code),
-            order_api='order_target_percent', **kw)
+            order_api='order_target_percent', target_percent=float(percent), **kw)
 
         # 每次都执行 initialize（注册 run_daily/run_weekly 回调 + 设置 context 参数）
         try:
@@ -714,6 +716,8 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                         direction=t.direction, order_api=order_info.get('order_api'),
                         requested_amount=order_info.get('amount'),
                         requested_value=order_info.get('value'),
+                        target_amount=order_info.get('target_amount'),
+                        target_percent=order_info.get('target_percent'),
                         reason=resolved['reason'], reason_source=resolved['reason_source'],
                         signal_hash=sig_hash,
                         decision_rules=norm.get('rules') or None,
