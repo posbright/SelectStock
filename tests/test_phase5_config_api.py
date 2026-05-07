@@ -265,9 +265,25 @@ def test_save_notification_config_rejects_secret_plaintext(fake_db):
 
 
 def test_save_notification_config_rejects_url_in_env_field(fake_db):
-    with pytest.raises(ValueError, match="环境变量名"):
+    with pytest.raises(ValueError, match="环境变量名|URL"):
         nch.save_config({"channel": "dingtalk", "event_type": "paper_trade",
                          "webhook_env": "https://oapi.dingtalk.com/robot/send"})
+
+
+def test_save_notification_config_rejects_secret_in_secret_env(fake_db):
+    # secret_env 与 webhook_env 同样必须只接受环境变量名
+    with pytest.raises(ValueError, match="secret_env"):
+        nch.save_config({"channel": "dingtalk", "event_type": "paper_trade",
+                         "secret_env": "https://example.com/?token=abc"})
+    long_sec = "SEC" + "a" * 60
+    with pytest.raises(ValueError, match="secret_env"):
+        nch.save_config({"channel": "dingtalk", "event_type": "paper_trade",
+                         "secret_env": long_sec})
+    # 合法变量名应放行（包含 SEC 前缀但短）
+    ok = nch.save_config({"channel": "dingtalk", "event_type": "paper_trade",
+                          "enabled": True, "webhook_env": "FOO",
+                          "secret_env": "SEC_REF"})
+    assert ok["secret_env"] == "SEC_REF"
 
 
 def test_save_notification_config_rejects_invalid_channel(fake_db):

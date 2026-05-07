@@ -152,11 +152,23 @@ def _validate_payload(p: Dict[str, Any]) -> Optional[str]:
     for forbidden in ("webhook_url", "webhook", "secret", "secret_value", "api_key", "token"):
         if forbidden in p:
             return f"前端不允许直接写入敏感字段 {forbidden}（请使用环境变量并仅保存 *_env 引用）"
-    we = p.get("webhook_env")
-    if we is not None and not isinstance(we, str):
-        return "webhook_env 必须为字符串环境变量名"
-    if we and ("/" in we or "http" in we.lower() or " " in we):
-        return "webhook_env 看起来像 URL 或包含空格，请只填写环境变量名"
+    for field in ("webhook_env", "secret_env"):
+        v = p.get(field)
+        if v is None:
+            continue
+        if not isinstance(v, str):
+            return f"{field} 必须为字符串环境变量名"
+        if not v:
+            continue
+        # 环境变量名不会含有 URL 字符或空格
+        if "/" in v or "http" in v.lower() or " " in v:
+            return f"{field} 看起来像 URL 或包含空格，请只填写环境变量名"
+        # 常见密钥前缀
+        if v.startswith("sk-") or v.startswith("Bearer "):
+            return f"{field} 看起来像密钥本身，请只填写环境变量名"
+        # 钉钉 secret 通常以 SEC 开头且长度 ≥ 64；环境变量名 SEC* 一般较短
+        if v.startswith("SEC") and len(v) >= 40:
+            return f"{field} 看起来像钉钉 secret 本身，请只填写环境变量名"
     return None
 
 

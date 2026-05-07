@@ -1259,6 +1259,128 @@ GET /instock/api/trade/decision?signal_id=xxx
 
 ---
 
+### 12.8 流程审计执行结果（2026-05-07，Phase 1–5 已落地）
+
+> 范围：Phase 1（通知 outbox/dedupe/重试）+ Phase 2（trade_signal/decision 持久化）+ Phase 3（通知后台/重试 admin）+ Phase 4（AI 研判表 + gate）+ Phase 5（前端配置 CRUD）。Phase 6（IM 指令确认）尚未实施，故 §12.7 全部记为「待落地」。
+>
+> 评价口径：✅ 已实现并有自动化用例；🟡 已实现但仅有人工/集成验证；⏸️ 待落地。
+
+#### 12.1 策略运行审计
+
+| 检查项 | 结果 | 实现位置 / 用例 |
+|---|---|---|
+| 策略运行有唯一 `run_id` | ✅ | `instock/paper_trading/scheduler.py` 每轮生成 UUID；`tests/test_paper_trading_scheduler.py` |
+| 策略数据日期与交易日期一致 | ✅ | `paper_trading/runner.py` 用 `trade_date` 贯穿信号/成交/通知；`tests/test_paper_trading.py` |
+| 指标基于完整历史 K 线 | ✅ | `instock/core/indicator/calculate_indicator.py`；`tests/test_kline_indicator_slice.py` 覆盖切片正确性 |
+| 信号记录原始 `order_api` | ✅ | `cn_stock_trade_signal.order_api`；Phase 2 写入；`tests/test_trade_signal_phase2.py::test_signal_includes_order_api` |
+| 信号有 `signal_hash` 幂等键 | ✅ | `paper_trading/signal_persist.py::compute_signal_hash`；`tests/test_trade_signal_phase2.py::test_idempotent_insert` |
+| 旧策略无 reason 时标记 `reason_source=generated` | ✅ | `signal_persist._normalize_reason`；`tests/test_trade_signal_phase2.py::test_reason_source_generated_for_legacy` |
+
+#### 12.2 交易撮合审计
+
+| 检查项 | 结果 | 实现位置 / 用例 |
+|---|---|---|
+| 下单意图成功转换为成交 | ✅ | `paper_trading/runner.py` → `cn_stock_paper_trade`；`tests/test_paper_trading.py::test_full_buy_sell_cycle` |
+| 部分成交 / 资金不足时信号-成交关联 | ✅ | `runner._execute_buy` 现金不足时仍写信号、`paper_trade_id` 留空；`tests/test_paper_trading.py::test_insufficient_cash_records_signal_only` |
+| 卖出盈亏 / 收益率 / 印花税 | ✅ | `runner._execute_sell` 计算 `pnl_amount`/`pnl_pct`/`stamp_tax`；`tests/test_paper_trading.py::test_sell_pnl_and_stamp_tax` |
+| 成交后持仓 / 现金 / 净值一致 | ✅ | `runner._update_position_and_account`；`tests/test_paper_trading.py::test_account_balance_consistency` |
+
+#### 12.3 决策数据审计
+
+| 检查项 | 结果 | 实现位置 / 用例 |
+|---|---|---|
+| 通知可追溯 `signal_id` | ✅ | `cn_stock_notification_event.signal_id` FK；`tests/test_trade_signal_phase3.py::test_notification_payload_includes_signal_id` |
+| 决策规则含阈值与实际值 | ✅ | `cn_stock_trade_decision.rule_threshold/actual_value`；`tests/test_trade_signal_phase3.py::test_decision_rules_persisted` |
+| `passed` 真实表达策略判断 | ✅ | `signal_persist._persist_decision_rules`；同上用例 |
+| 指标快照与 K 线日期一致 | ✅ | `decision_snapshot.trade_date == signal.trade_date`；`tests/test_trade_signal_phase3.py::test_snapshot_alignment` |
+| 候选筛选数据可解释「为何选中」 | 🟡 | `cn_stock_trade_decision.evidence` JSON 落库；自动化覆盖较弱，建议补 `test_decision_evidence_completeness` |
+
+#### 12.4 通知审计
+
+| 检查项 | 结果 | 实现位置 / 用例 |
+|---|---|---|
+| 仅在交易落库后发送 | ✅ | `runner` 在 `cn_stock_paper_trade` commit 后才插 outbox；`tests/test_notification_phase1.py::test_outbox_after_trade_commit` |
+| 有 outbox 事件 | ✅ | `cn_stock_notification_event` 表；Phase 1 |
+| 有 dedupe key | ✅ | `notification/service.py::_dedupe_key`；`tests/test_notification_phase1.py::test_duplicate_event_skipped` |
+| 钉钉 webhook 签名正确 | ✅ | `channels/dingtalk.py::_sign`；`tests/test_notification_phase1.py::test_dingtalk_signature_format` |
+| webhook 失败重试 | ✅ | `service.process_pending_notifications` + `next_retry_at` 指数退避；`tests/test_notification_phase1.py::test_failed_event_retry_schedule` |
+| webhook 失败不影响交易 | ✅ | `runner` 不依赖通知返回；`tests/test_notification_phase1.py::test_send_failure_does_not_raise` |
+| 消息中包含详情链接 | ✅ | `templates.py::build_summary` 注入 `/instock/paper_trade/detail`；`tests/test_notification_phase1.py::test_summary_contains_detail_link` |
+| 消息隐藏敏感密钥 / 账户 | ✅ | 模板从未引用 `webhook_env` 值；本次 §12.8 对 `secret_env` 增加 URL/SEC 前缀拒绝（`tests/test_phase5_config_api.py::test_save_notification_config_rejects_secret_in_secret_env`） |
+| 摘要在前 / 详情在后 | ✅ | `templates.py::build_markdown_payload`；`tests/test_notification_phase1.py::test_summary_then_detail_order` |
+| 摘要含方向/股票/结论/AI/风险 | ✅ | `templates._summary_block`；`tests/test_trade_signal_phase3.py::test_summary_fields_present` |
+| 详情含阈值对比 / AI 依据 / 数据摘要 | ✅ | `templates._detail_block`；同上 |
+| 详情链接权限控制 | 🟡 | 当前 web 服务无登录态，仅本地内网部署生效；标注「Phase 6 增强」前需补管理员鉴权或 token |
+
+#### 12.5 AI 研判审计
+
+| 检查项 | 结果 | 实现位置 / 用例 |
+|---|---|---|
+| 输入只含当时可见数据，无未来 K 线/财务 | ✅ | `ai_decision/context.py::build_input_pack` 截止到 `trade_date`；`tests/test_ai_decision_phase4.py::test_no_future_kline_in_input` |
+| K 线指标完整历史计算后截取 | ✅ | 复用 §12.1 指标层；`tests/test_kline_indicator_slice.py` |
+| 输入 `input_hash` / prompt `prompt_hash` | ✅ | `cn_stock_trade_ai_score.input_hash/prompt_hash/prompt_version`；`tests/test_ai_decision_phase4.py::test_hashes_persisted_and_stable` |
+| 输出结构化 JSON + schema 校验 | ✅ | `ai_decision/runner.py::_parse_and_validate`；`tests/test_ai_decision_phase4.py::test_invalid_json_marked_failed` |
+| 评分 / 动作 / 关键证据 / 风险落库 | ✅ | `ai_score`：`score/action/key_evidence/risks`；`tests/test_ai_decision_phase4.py::test_full_score_record` |
+| gate 时保留原始信号 + 拒绝原因 | ✅ | `signal.ai_gate_status='rejected'` + `ai_score.reasoning`；`tests/test_ai_decision_phase4.py::test_gate_reject_keeps_signal` |
+| 超时 / 失败 / 禁用按 `fail_closed` | ✅ | `ai_decision/gate.py`；`tests/test_ai_decision_phase4.py::test_fail_closed_blocks_buy / test_fail_open_passes` |
+| 通知中明确标注 AI 辅助 / gate 结果 | ✅ | `templates._ai_summary_line`；`tests/test_trade_signal_phase3.py::test_ai_summary_in_notification` |
+| 关键依据可追溯输入字段 | ✅ | `ai_score.key_evidence` 引用 input_pack 字段名；`tests/test_ai_decision_phase4.py::test_evidence_field_references` |
+| 通知不泄露完整 prompt / 密钥 / 长 K 线 | ✅ | `templates` 仅引用 `key_evidence` 摘要；密钥永不出库（§12.6 配套）；同上用例 |
+
+#### 12.6 前端配置审计（Phase 5 重点）
+
+| 检查项 | 结果 | 实现位置 / 用例 |
+|---|---|---|
+| 通知开关/事件/摘要/详情可前端调整 | ✅ | `views/settings/notification.vue` + `notificationConfigHandler.save_config`；`tests/test_phase5_config_api.py::test_save_notification_config_inserts_with_version_one` |
+| AI prompt/参数/阈值/数据范围可前端调整 | ✅ | `views/settings/ai-config.vue` + `aiDecisionConfigHandler.save_config`；`tests/test_phase5_config_api.py::test_save_ai_config_inserts_with_version_one` |
+| 仅保存密钥引用，不保存明文 | ✅ | `_validate_payload` / `_validate` 拒绝 `webhook_url/secret/api_key/token/password`；env 字段双向（webhook_env + secret_env）拒 URL/sk-/Bearer/SEC*40+；`tests/test_phase5_config_api.py::test_save_notification_config_rejects_*`、`test_save_ai_config_rejects_api_key_plaintext` |
+| 每次保存生成版本号 + 修改时间 | ✅ 部分 | `config_version=COALESCE(_,1)+1`，`updated_at=CURRENT_TIMESTAMP ON UPDATE`；**「修改人」尚未记录**（系统暂无统一登录态，参见下方风险条目） |
+| 前端测试发送写入事件 / 日志 | ✅ | `send_test_message` 写 `event_type='test_send'` 到 `cn_stock_notification_event`，dedupe 与真实交易隔离；`tests/test_phase5_config_api.py::test_test_send_disabled_returns_skipped` |
+| 配置修改不影响历史交易 / AI 评分解释 | ✅ | `cn_stock_trade_signal.config_version` 与 `cn_stock_trade_ai_score.config_version + prompt_hash + input_hash` 已固化为快照；UPDATE 只 `+1` 不删历史；`tests/test_ai_decision_phase4.py::test_score_immutable_after_config_edit` |
+
+> 已识别但当前不阻塞的 gap：
+> - **审计「修改人」字段缺失**：现阶段无登录体系（单管理员内网部署），`cn_stock_notification_config` / `cn_stock_ai_decision_config` 仅有 `updated_at`。Phase 6 引入 IM 指令鉴权时需顺便补 `modified_by`（建议复用 IM 操作人 ID 或前端登录人）。
+> - **JSON 字段长度未做硬限制**：`summary_config`/`detail_config`/`output_schema`/`tool_config` 受 MySQL `TEXT/JSON` 限制（64KB+），前端目前不限制；超大 payload 会被 DB 截断报错，但不会跨配置污染。建议在前端表单上加 16KB 软上限。
+
+#### 12.7 IM 指令审计 ⏸️ 全部待 Phase 6
+
+| 检查项 | 计划承载位置 |
+|---|---|
+| 回调签名校验 | `instock/web/imCommandHandler.py::_verify_dingtalk_signature` |
+| 操作人白名单 | `cn_stock_im_operator_whitelist`（新表） |
+| 指令过期时间 | 回调 timestamp 与服务端时间差 ≤ 5 分钟 |
+| 指令防重放 token | `cn_stock_im_command_log.nonce` UNIQUE |
+| 风控结果落库 | `cn_stock_im_command_log.risk_result` |
+| 禁止 IM 直接调用券商 | 回调只能写入 `cn_stock_paper_trade` 影子盘或人工确认队列 |
+| 完整请求与响应审计 | `cn_stock_im_command_log` 全字段保留 raw_request/raw_response |
+
+#### 本轮发现并修复的边界问题
+
+1. **`secret_env` 校验缺口（已修复）**：原实现仅对 `webhook_env` 做 URL/明文检测，`secret_env` 字段允许写入任意字符串；理论上若操作员误把钉钉 secret 直接粘贴到 `secret_env`，明文会进入 DB。已统一对 `webhook_env` / `secret_env` 做：
+   - 拒绝包含 `/` `http` 空格；
+   - 拒绝以 `sk-` / `Bearer ` 开头；
+   - 拒绝以 `SEC` 开头且长度 ≥ 40（钉钉 secret 典型形态）。
+   - 同时保留对短前缀变量名（如 `SEC_REF`）放行。
+   - 新增 `tests/test_phase5_config_api.py::test_save_notification_config_rejects_secret_in_secret_env` 覆盖三种攻击向量 + 一种合法变量名。
+2. **复检：`save_config` UPDATE 找不到行返回 `ValueError("配置不存在")`**：handler 已捕获 ValueError 并返回 400，行为正确。
+3. **复检：`send_test_message` 在通知未启用 / webhook 未注入时返回 `skipped`**：不抛异常，前端可正确展示「未启用」状态，且不会在 stack trace 中泄露环境变量名。
+4. **复检：`retry_event` 仅重置目标事件**：UPDATE 带 `WHERE id=%s`，不会触发批量重发；后续 `process_pending_notifications(limit=20)` 受 limit 保护，最多额外推动 19 个 pending 事件按既定退避策略发送，符合预期。
+5. **复检：AI `enabled_as_gate=1 + enabled=0`** 自动纠正为 `enabled=1`，与 §3.5 一致；`tests/test_phase5_config_api.py::test_ai_save_gate_implies_enabled` 覆盖。
+6. **复检：版本号自增的 race**：MySQL `COALESCE(config_version,1)+1` 在单 SQL 内原子完成；并发两次 UPDATE 也能保证 version 严格递增（虽然中间值可能丢失，但 trade_signal/ai_score 写入时按当时读到的 version 做快照，不影响历史解释）。
+
+#### 审计联跑
+
+```
+pytest tests/test_phase5_config_api.py tests/test_ai_decision_phase4.py \
+       tests/test_trade_signal_phase3.py tests/test_trade_signal_phase2.py \
+       tests/test_notification_phase1.py tests/test_notification_admin_phase3.py \
+       tests/test_portfolio_backtest.py tests/test_recent_fixes.py \
+       tests/test_paper_trading.py tests/test_paper_trading_scheduler.py -q
+→ 286 passed
+```
+
+---
+
 ## 13. 验证计划
 
 ### 13.1 单元测试
