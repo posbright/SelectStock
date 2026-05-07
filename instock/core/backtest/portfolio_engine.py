@@ -73,6 +73,10 @@ class PortfolioBacktestEngine:
         self._benchmark_data = None    # DataFrame
         self._nav_records = []         # [NavRecord]
         self._trade_records = []       # [TradeRecord]
+        # Phase 3: 与 _trade_records 严格 1:1 对应。记录每笔成交背后
+        # 的策略订单输入（reason/decision/indicators/selection/order_api/target_*）。
+        # 回测结束后由外部 handler 读取并调用 persist_signal_with_relations。
+        self._signal_inputs = []
         self._position_snapshots = []  # [{date, positions: [...]}]
         self._custom_records = {}      # record() 记录的自定义指标
         self._log_messages = []        # 策略日志
@@ -333,35 +337,53 @@ class PortfolioBacktestEngine:
         # ── 基本面数据提供器 ──
         engine._fundamental_provider = FundamentalDataProvider(engine)
 
-        def order(code, amount):
+        def order(code, amount, **kw):
             """按股数下单（正=买入，负=卖出）"""
-            engine._submit_order(_nc(code), amount=int(amount))
+            engine._submit_order(_nc(code), amount=int(amount),
+                                 order_api='order', **kw)
 
-        def order_target(code, target_amount):
+        def order_target(code, target_amount, **kw):
             """调整到目标持仓股数"""
             clean = _nc(code)
             pos = engine.context.portfolio.positions.get(clean)
             current = pos.amount if pos else 0
             diff = int(target_amount) - current
             if diff != 0:
-                engine._submit_order(clean, amount=diff)
+                engine._submit_order(clean, amount=diff,
+                                     order_api='order_target',
+                                     target_amount=int(target_amount), **kw)
 
-        def order_value(code, value):
+        def order_value(code, value, **kw):
             """按金额下单"""
-            engine._submit_order(_nc(code), value=float(value))
+            engine._submit_order(_nc(code), value=float(value),
+                                 order_api='order_value', **kw)
 
-        def order_target_value(code, target_value):
+        def order_target_value(code, target_value, **kw):
             """调整到目标持仓金额"""
             clean = _nc(code)
             target_value = float(target_value)
             pos = engine.context.portfolio.positions.get(clean)
             if target_value <= 0 and pos and pos.closeable_amount > 0:
-                engine._submit_order(clean, amount=-pos.closeable_amount)
+                engine._submit_order(clean, amount=-pos.closeable_amount,
+                                     order_api='order_target_value', **kw)
                 return
             current_value = pos.value if pos and pos.amount > 0 else 0
             diff = target_value - current_value
             if abs(diff) > 100:
-                engine._submit_order(clean, value=diff)
+                engine._submit_order(clean, value=diff,
+                                     order_api='order_target_value', **kw)
+
+        def order_target_percent(code, percent, **kw):
+            """调整到目标仓位比例（总资产百分比）"""
+            clean = _nc(code)
+            target_value = float(percent) * engine.context.portfolio.total_value
+            pos = engine.context.portfolio.positions.get(clean)
+            current_value = pos.value if pos and pos.amount > 0 else 0
+            diff = target_value - current_value
+            if abs(diff) > 100:
+                engine._submit_order(clean, value=diff,
+                                     order_api='order_target_percent',
+                                     target_percent=float(percent), **kw)
 
         def history(code, count, field='close'):
             """获取最近 N 个交易日的数据"""
@@ -716,8 +738,13 @@ class PortfolioBacktestEngine:
 
     # ── 订单管理 ──
 
-    def _submit_order(self, code, amount=None, value=None):
-        """提交并立即执行订单（即时执行模式，兼容聚宽行为）"""
+    def _submit_order(self, code, amount=None, value=None, *,
+                       reason=None, decision=None, indicators=None, selection=None,
+                       order_api=None, target_amount=None, target_percent=None):
+        """提交并立即执行订单（即时执行模式，兼容聚宽行为）。
+
+        Phase 3: 接受策略传入的 reason/decision/indicators/selection。
+        """
         # 动态加载该股票数据
         if code not in self._stock_data:
             self._load_single_stock(code)
@@ -734,7 +761,13 @@ class PortfolioBacktestEngine:
                 f"[{date}] [WARN] {code} 无行情数据，订单取消")
             return
 
-        order_info = {'code': code, 'amount': amount, 'value': value}
+        order_info = {
+            'code': code, 'amount': amount, 'value': value,
+            'reason': reason, 'decision': decision,
+            'indicators': indicators, 'selection': selection,
+            'order_api': order_api,
+            'target_amount': target_amount, 'target_percent': target_percent,
+        }
         self._execute_single_order(order_info, date)
 
     def _update_stock_day_price(self, code, date):
@@ -850,6 +883,8 @@ class PortfolioBacktestEngine:
             trade.commission = round(commission, 2)
             trade.slippage_cost = round(exec_price * self.context.slippage_rate * amount, 2)
             self._trade_records.append(trade)
+            # Phase 3: 1:1 平行记录策略订单输入。
+            self._signal_inputs.append(order_info)
 
         # 卖出
         elif amount < 0:
@@ -901,6 +936,8 @@ class PortfolioBacktestEngine:
             if avg_cost_before_sell > 0:
                 trade.return_rate = round((exec_price - avg_cost_before_sell) / avg_cost_before_sell * 100, 2)
             self._trade_records.append(trade)
+            # Phase 3: 1:1 平行记录策略订单输入。
+            self._signal_inputs.append(order_info)
 
     def _execute_pending_orders(self, date, prices):
         """执行当轮所有挂单（使用收盘价模拟成交）"""

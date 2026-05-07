@@ -2020,6 +2020,20 @@ class RunPortfolioBacktestHandler(webBase.BaseHandler, ABC):
                          m.get('alpha'), m.get('beta'),
                          m.get('daily_win_rate'), m.get('trade_count'),
                          json.dumps(result, ensure_ascii=False, default=str)))
+                    # Phase 3: 回测主表入库后，将策略交易信号（reason/decision/
+                    # indicators/selection）落入 cn_stock_trade_signal/decision/
+                    # indicator_snapshot/selection_snapshot，供回测详情页与模拟交易详
+                    # 情页复用同一套决策依据展示。失败只警告，不回滻主表。
+                    try:
+                        from instock.core.backtest import trade_signal_store as _tss
+                        run_id_bt = f"backtest-{bt_id}-{task_id}"
+                        _tss.persist_backtest_signals(
+                            backtest_id=int(bt_id), run_id=run_id_bt,
+                            trade_records=getattr(engine, '_trade_records', []) or [],
+                            signal_inputs=getattr(engine, '_signal_inputs', []) or [],
+                        )
+                    except Exception as _sig_err:
+                        logging.warning(f"回测交易信号持久化异常(不影响主结果): {_sig_err}")
                     # 更新策略的 backtest_count 和 compile_count
                     if strategy_id:
                         try:
@@ -2147,6 +2161,17 @@ class StartPortfolioBacktestHandler(webBase.BaseHandler, ABC):
                                      m.get('daily_win_rate'), m.get('trade_count'),
                                      json.dumps(result, ensure_ascii=False, default=str)))
                                 result['backtest_id'] = bt_id
+                                # Phase 3: 交易信号详细落库（失败仅警告）。
+                                try:
+                                    from instock.core.backtest import trade_signal_store as _tss
+                                    run_id_bt = f"backtest-{bt_id}-{task_id}"
+                                    _tss.persist_backtest_signals(
+                                        backtest_id=int(bt_id), run_id=run_id_bt,
+                                        trade_records=getattr(engine, '_trade_records', []) or [],
+                                        signal_inputs=getattr(engine, '_signal_inputs', []) or [],
+                                    )
+                                except Exception as _sig_err:
+                                    logging.warning(f"回测交易信号持久化异常(不影响主结果): {_sig_err}")
                                 # 更新策略的 backtest_count 和 compile_count（与同步入口保持一致）
                                 # 此前仅 RunPortfolioBacktestHandler 更新，导致前端编辑页（用 Start*）跑多次仍显示 0。
                                 if strategy_id:

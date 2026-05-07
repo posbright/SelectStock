@@ -41,6 +41,7 @@ import instock.web.backtestDashboardHandler as backtestDashboardHandler
 import instock.web.klineHandler as klineHandler
 import instock.web.portfolioBacktestHandler as portfolioBacktestHandler
 import instock.web.paperTradingHandler as paperTradingHandler
+import instock.web.tradeSignalHandler as tradeSignalHandler
 import instock.web.base as webBase
 
 __author__ = 'InStock'
@@ -118,6 +119,9 @@ class Application(tornado.web.Application):
             (r"/instock/api/paper/detail", paperTradingHandler.GetPaperTradingDetailHandler),
             (r"/instock/api/paper/run", paperTradingHandler.RunPaperTradingHandler),
             (r"/instock/api/paper/execution_log", paperTradingHandler.GetPaperExecutionLogHandler),
+            # Phase 3: 交易信号/决策/指标快照/候选筛选快照统一详情（回测与模拟交易复用）
+            (r"/instock/api/trade/signal/list", tradeSignalHandler.GetTradeSignalListHandler),
+            (r"/instock/api/trade/signal/detail", tradeSignalHandler.GetTradeSignalDetailHandler),
             (r"/instock/api/paper/compare", paperTradingHandler.GetPaperCompareHandler),
             (r"/instock/api/paper/delete", paperTradingHandler.DeletePaperTradingHandler),
             # ── Vue SPA 路由 ──

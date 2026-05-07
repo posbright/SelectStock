@@ -1013,7 +1013,15 @@ GET /instock/api/trade/decision?signal_id=xxx
 - 旧策略不传理由也能正常运行。
 - 旧策略通知明确标记理由来源为系统兜底。
 
-### Phase 3：回测与前端复用
+### Phase 3：回测与前端复用 ✅ 已完成 (2026-05-07)
+
+> 验收记录：
+> - 回测引擎接入：`instock/core/backtest/portfolio_engine.py` 5 个 `order_*` 全部接受 `**kw`（旧策略调用 100% 兼容），`_submit_order` 透传 `reason/decision/indicators/selection/order_api/target_amount/target_percent`；`_execute_single_order` 在 buy/sell 两条分支同时 `_signal_inputs.append(order_info)`，与 `_trade_records` 严格 1:1 对应。新增 `order_target_percent` API 与 paper 引擎齐平。
+> - 持久化复用：`instock/core/backtest/trade_signal_store.py` 新增 `persist_backtest_signals(backtest_id, run_id, trade_records, signal_inputs)`，复用 Phase 2 的 `persist_signal_with_relations`；`source_type='backtest'` 写入同一套 `cn_stock_trade_signal/decision/indicator_snapshot/selection_snapshot` 表。回测主结果落库后由 `RunPortfolioBacktestHandler` 与 `StartPortfolioBacktestHandler` 各自调用，失败仅 warning，不回滚回测主结果。回测无独立 `cn_stock_backtest_trade` 行，故 `trade_id` 字段保持 NULL，复用通过 `(source_type, source_id, signal_date, code, direction)` 关联。
+> - 详情数据扩展：`fetch_signal_with_decision()` 在 Phase 2 基础上追加 `indicators` 与 `selection` 两块（结构化 OHLCV + ma/boll/rsi/macd/kdj/extra；候选筛选阶段、阈值、实际值、排名）。新增 `list_signals_for_source(source_type, source_id)` 用于回测/模拟盘列表。
+> - 统一 API：新增 `instock/web/tradeSignalHandler.py`，注册路由 `GET /instock/api/trade/signal/list?source_type=&source_id=` 与 `GET /instock/api/trade/signal/detail?signal_id=`；前端在 backtest-detail 与 paper-detail 页面可消费同一接口拿到一致的决策依据展示数据。
+> - 测试：`tests/test_trade_signal_phase3.py` 11/11 通过；与 Phase 1/2、1062 修复、sandbox、recorder、recent_fixes、portfolio_backtest 共 **89/89 通过**。
+> - 不变性保证：未触碰前端 backtest-detail.vue / paper detail Vue 组件（已自然兼容 `trade.reason`）；未改动 `cn_stock_backtest_portfolio` 与 `cn_stock_backtest_trade` schema；未改动 paper_engine 主撮合事务。
 
 目标：回测详情和模拟交易详情复用同一套交易决策展示。
 

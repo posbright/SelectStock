@@ -369,14 +369,20 @@ def link_signal_to_trade(signal_id: int, trade_id: int) -> bool:
 
 
 def fetch_signal_with_decision(signal_id: int) -> Dict[str, Any]:
-    """供通知模板/详情接口读取。失败返回空 dict。"""
+    """供通知模板/详情接口读取。失败返回空 dict。
+
+    Phase 3: 同时返回 indicator_snapshot 与 selection_snapshot，使
+    回测详情、模拟交易详情与通知共享一致的"决策依据"展示数据。
+    """
     if not signal_id:
         return {}
     try:
         mdb = _get_db()
         signal_rows = mdb.executeSqlFetch(
             f"SELECT id, reason, reason_source, code, name, direction, signal_date, "
-            f" requested_amount, requested_value, order_api FROM `{SIGNAL_TABLE}` WHERE id=%s",
+            f" requested_amount, requested_value, target_amount, target_percent, "
+            f" order_api, source_type, source_id, run_id, trade_id "
+            f"FROM `{SIGNAL_TABLE}` WHERE id=%s",
             (int(signal_id),),
         ) or []
         if not signal_rows:
@@ -387,6 +393,28 @@ def fetch_signal_with_decision(signal_id: int) -> Dict[str, Any]:
             f"FROM `{DECISION_TABLE}` WHERE signal_id=%s ORDER BY sort_order ASC, id ASC",
             (int(signal_id),),
         ) or []
+        ind_rows = mdb.executeSqlFetch(
+            f"SELECT period, kline_date, `open`, high, low, `close`, volume, amount, "
+            f" ma, boll, rsi, macd, kdj, extra "
+            f"FROM `{INDICATOR_SNAPSHOT_TABLE}` WHERE signal_id=%s",
+            (int(signal_id),),
+        ) or []
+        sel_rows = mdb.executeSqlFetch(
+            f"SELECT stage, candidate_count_before, candidate_count_after, "
+            f" rank_value, rank_position, filter_expr, actual_value, passed, note "
+            f"FROM `{SELECTION_SNAPSHOT_TABLE}` WHERE signal_id=%s ORDER BY id ASC",
+            (int(signal_id),),
+        ) or []
+        indicators = None
+        if ind_rows:
+            i = ind_rows[0]
+            indicators = {
+                "period": i[0], "kline_date": i[1],
+                "open": i[2], "high": i[3], "low": i[4], "close": i[5],
+                "volume": i[6], "amount": i[7],
+                "ma": i[8], "boll": i[9], "rsi": i[10], "macd": i[11],
+                "kdj": i[12], "extra": i[13],
+            }
         return {
             "signal_id": int(s[0]),
             "reason": s[1] or "",
@@ -394,7 +422,9 @@ def fetch_signal_with_decision(signal_id: int) -> Dict[str, Any]:
             "code": s[3], "name": s[4], "direction": s[5],
             "signal_date": s[6],
             "requested_amount": s[7], "requested_value": s[8],
-            "order_api": s[9],
+            "target_amount": s[9], "target_percent": s[10],
+            "order_api": s[11],
+            "source_type": s[12], "source_id": s[13], "run_id": s[14], "trade_id": s[15],
             "rules": [
                 {
                     "rule_group": r[0], "rule_name": r[1], "threshold_expr": r[2],
@@ -403,7 +433,113 @@ def fetch_signal_with_decision(signal_id: int) -> Dict[str, Any]:
                 }
                 for r in rules
             ],
+            "indicators": indicators,
+            "selection": [
+                {
+                    "stage": s2[0],
+                    "candidate_count_before": s2[1],
+                    "candidate_count_after": s2[2],
+                    "rank_value": s2[3], "rank_position": s2[4],
+                    "filter_expr": s2[5], "actual_value": s2[6],
+                    "passed": s2[7], "note": s2[8],
+                }
+                for s2 in sel_rows
+            ],
         }
     except Exception as exc:
         logging.warning("[trade_signal_store] 读取 signal 失败 id=%s: %s", signal_id, exc)
         return {}
+
+
+def list_signals_for_source(source_type: str, source_id: int,
+                             limit: int = 500) -> List[Dict[str, Any]]:
+    """Phase 3: 列出某次回测/模拟盘的所有 signal 摘要（不含完整规则）。
+
+    供回测详情、模拟交易详情前端展示信号列表使用。
+    """
+    if not source_type or not source_id:
+        return []
+    try:
+        mdb = _get_db()
+        rows = mdb.executeSqlFetch(
+            f"SELECT id, signal_date, code, name, direction, order_api, "
+            f" requested_amount, requested_value, target_amount, target_percent, "
+            f" reason, reason_source, trade_id, run_id "
+            f"FROM `{SIGNAL_TABLE}` "
+            f"WHERE source_type=%s AND source_id=%s "
+            f"ORDER BY signal_date ASC, id ASC LIMIT %s",
+            (source_type, int(source_id), int(limit)),
+        ) or []
+        return [
+            {
+                "signal_id": int(r[0]), "signal_date": r[1],
+                "code": r[2], "name": r[3], "direction": r[4], "order_api": r[5],
+                "requested_amount": r[6], "requested_value": r[7],
+                "target_amount": r[8], "target_percent": r[9],
+                "reason": r[10] or "", "reason_source": r[11] or "strategy",
+                "trade_id": r[12], "run_id": r[13],
+            }
+            for r in rows
+        ]
+    except Exception as exc:
+        logging.warning("[trade_signal_store] list_signals_for_source 失败: %s", exc)
+        return []
+
+
+def persist_backtest_signals(*, backtest_id: int, run_id: str,
+                             trade_records, signal_inputs) -> int:
+    """Phase 3: 在回测主结果落库 (cn_stock_backtest_portfolio) 后，
+    把 ``engine._trade_records`` 与 ``engine._signal_inputs`` 翻译为
+    cn_stock_trade_signal/decision/indicator/selection 行。
+
+    回测的成交存放在 cn_stock_backtest_portfolio.result_json 中（无独立
+    cn_stock_backtest_trade 行），故 ``trade_id`` 字段保持 NULL；
+    前端通过 (source_type='backtest', source_id=backtest_id, signal_date,
+    code, direction) 关联。
+
+    返回成功持久化的 signal 数。失败仅 warning，不抛出。
+    """
+    from .trade_decision import (
+        compute_signal_hash, normalize_decision_payload, resolve_reason,
+    )
+    if not backtest_id or not trade_records:
+        return 0
+    n_inputs = len(signal_inputs) if signal_inputs is not None else 0
+    success = 0
+    for idx, t in enumerate(trade_records):
+        try:
+            order_info = signal_inputs[idx] if idx < n_inputs else {}
+            order_info = order_info or {}
+            resolved = resolve_reason(t.direction, order_info.get("reason"))
+            norm = normalize_decision_payload(
+                order_info.get("decision"),
+                indicators=order_info.get("indicators"),
+                selection=order_info.get("selection"),
+            )
+            signal_date = getattr(t, "date", None)
+            sig_hash = compute_signal_hash(
+                source_type="backtest", source_id=backtest_id, run_id=run_id,
+                code=t.code, direction=t.direction, signal_date=signal_date,
+                requested_amount=order_info.get("amount"),
+                requested_value=order_info.get("value"),
+            )
+            sig_id = persist_signal_with_relations(
+                source_type="backtest", source_id=backtest_id, run_id=run_id,
+                strategy_id=None, strategy_name=None,
+                signal_date=signal_date, code=t.code, name=getattr(t, "name", None),
+                direction=t.direction, order_api=order_info.get("order_api"),
+                requested_amount=order_info.get("amount"),
+                requested_value=order_info.get("value"),
+                target_amount=order_info.get("target_amount"),
+                target_percent=order_info.get("target_percent"),
+                reason=resolved["reason"], reason_source=resolved["reason_source"],
+                signal_hash=sig_hash,
+                decision_rules=norm.get("rules") or None,
+                indicators=norm.get("indicators") or None,
+                selection=norm.get("selection") or None,
+            )
+            if sig_id:
+                success += 1
+        except Exception as exc:
+            logging.warning("[trade_signal_store] 回测 signal 持久化失败 idx=%s: %s", idx, exc)
+    return success
