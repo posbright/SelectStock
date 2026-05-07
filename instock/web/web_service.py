@@ -42,6 +42,7 @@ import instock.web.klineHandler as klineHandler
 import instock.web.portfolioBacktestHandler as portfolioBacktestHandler
 import instock.web.paperTradingHandler as paperTradingHandler
 import instock.web.tradeSignalHandler as tradeSignalHandler
+import instock.web.notificationAdminHandler as notificationAdminHandler
 import instock.web.base as webBase
 
 __author__ = 'InStock'
@@ -122,6 +123,9 @@ class Application(tornado.web.Application):
             # Phase 3: 交易信号/决策/指标快照/候选筛选快照统一详情（回测与模拟交易复用）
             (r"/instock/api/trade/signal/list", tradeSignalHandler.GetTradeSignalListHandler),
             (r"/instock/api/trade/signal/detail", tradeSignalHandler.GetTradeSignalDetailHandler),
+            # Phase 3 扩展：通知事件后台查看（钉钉发送记录、payload、错误信息）
+            (r"/instock/api/notification/event/list", notificationAdminHandler.GetNotificationEventListHandler),
+            (r"/instock/api/notification/event/detail", notificationAdminHandler.GetNotificationEventDetailHandler),
             (r"/instock/api/paper/compare", paperTradingHandler.GetPaperCompareHandler),
             (r"/instock/api/paper/delete", paperTradingHandler.DeletePaperTradingHandler),
             # ── Vue SPA 路由 ──

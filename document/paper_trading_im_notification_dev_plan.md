@@ -1022,6 +1022,11 @@ GET /instock/api/trade/decision?signal_id=xxx
 > - 统一 API：新增 `instock/web/tradeSignalHandler.py`，注册路由 `GET /instock/api/trade/signal/list?source_type=&source_id=` 与 `GET /instock/api/trade/signal/detail?signal_id=`；前端在 backtest-detail 与 paper-detail 页面可消费同一接口拿到一致的决策依据展示数据。
 > - 测试：`tests/test_trade_signal_phase3.py` 11/11 通过；与 Phase 1/2、1062 修复、sandbox、recorder、recent_fixes、portfolio_backtest 共 **89/89 通过**。
 > - 不变性保证：未触碰前端 backtest-detail.vue / paper detail Vue 组件（已自然兼容 `trade.reason`）；未改动 `cn_stock_backtest_portfolio` 与 `cn_stock_backtest_trade` schema；未改动 paper_engine 主撮合事务。
+>
+> Phase 3 扩展（同日提交）：
+> - 前端零改动可见性闭环：`TradeRecord` 新增 `reason` / `reason_source` slot；`portfolio_engine` 与 `paper_engine` 在 buy/sell append 后调用 `trade_decision.resolve_reason` 写入 `trade.reason`，写入 `result_json['trades']`；现有 `instock/fontWeb/src/views/algo/backtest-detail.vue` 已读取 `trade.reason` 与 `decisionRows`，无需修改即可看到策略真实理由（旧策略显示「系统兜底说明」标记）。
+> - 钉钉发送内容后台可查：新增 `instock/web/notificationAdminHandler.py`，注册 `GET /instock/api/notification/event/{list,detail}`；`list` 支持 `paper_id/status/channel/event_type/code/since/limit` 过滤（status/channel 白名单校验，limit ≤ 500），返回 payload/response 预览；`detail` 返回完整 payload/response/error 用于排查发送失败。`cn_stock_notification_event` 表本身不存储 webhook URL/secret，因此该接口不会泄露密钥。
+> - 测试：`tests/test_notification_admin_phase3.py` 10/10 通过；与 Phase1/2/3、portfolio_backtest、recent_fixes、paper_trading 共 **174/174 通过**。
 
 目标：回测详情和模拟交易详情复用同一套交易决策展示。
 

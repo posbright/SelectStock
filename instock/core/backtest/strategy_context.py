@@ -279,7 +279,7 @@ class TradeRecord:
     """交易记录"""
     __slots__ = ('date', 'code', 'name', 'direction', 'price',
                  'amount', 'value', 'commission', 'tax', 'slippage_cost',
-                 'close_profit', 'return_rate')
+                 'close_profit', 'return_rate', 'reason', 'reason_source')
 
     def __init__(self, date, code, name, direction, price, amount):
         self.date = date
@@ -294,6 +294,10 @@ class TradeRecord:
         self.slippage_cost = 0.0
         self.close_profit = 0.0    # 平仓盈亏（卖出时有效）
         self.return_rate = 0.0     # 收益率 %（卖出时有效）
+        # Phase 3 扩展：策略真实理由（or 系统兜底说明），随 to_dict 写入 result_json，
+        # 让回测详情前端 (backtest-detail.vue tradeReason()) 不改动即可读取。
+        self.reason = ''
+        self.reason_source = ''  # 'strategy' / 'generated' / ''
 
     @property
     def total_cost(self):
@@ -313,6 +317,8 @@ class TradeRecord:
             'slippage_cost': self.slippage_cost,
             'close_profit': round(self.close_profit, 2),
             'return_rate': round(self.return_rate, 2),
+            'reason': getattr(self, 'reason', '') or '',
+            'reason_source': getattr(self, 'reason_source', '') or '',
         }
 
 

@@ -882,6 +882,13 @@ class PortfolioBacktestEngine:
             trade = TradeRecord(date, code, stock_name, 'buy', exec_price, amount)
             trade.commission = round(commission, 2)
             trade.slippage_cost = round(exec_price * self.context.slippage_rate * amount, 2)
+            try:
+                from instock.core.backtest import trade_decision as _td
+                _r = _td.resolve_reason('buy', order_info.get('reason'))
+                trade.reason = _r.get('reason', '')
+                trade.reason_source = _r.get('reason_source', '')
+            except Exception:
+                trade.reason = order_info.get('reason') or ''
             self._trade_records.append(trade)
             # Phase 3: 1:1 平行记录策略订单输入。
             self._signal_inputs.append(order_info)
@@ -935,6 +942,13 @@ class PortfolioBacktestEngine:
             # 收益率 = (卖出价 - 持仓均价) / 持仓均价 × 100
             if avg_cost_before_sell > 0:
                 trade.return_rate = round((exec_price - avg_cost_before_sell) / avg_cost_before_sell * 100, 2)
+            try:
+                from instock.core.backtest import trade_decision as _td
+                _r = _td.resolve_reason('sell', order_info.get('reason'))
+                trade.reason = _r.get('reason', '')
+                trade.reason_source = _r.get('reason_source', '')
+            except Exception:
+                trade.reason = order_info.get('reason') or ''
             self._trade_records.append(trade)
             # Phase 3: 1:1 平行记录策略订单输入。
             self._signal_inputs.append(order_info)
@@ -1034,6 +1048,13 @@ class PortfolioBacktestEngine:
                 trade = TradeRecord(date, code, stock_name, 'buy', exec_price, amount)
                 trade.commission = round(commission, 2)
                 trade.slippage_cost = round(exec_price * self.context.slippage_rate * amount, 2)
+                try:
+                    from instock.core.backtest import trade_decision as _td
+                    _r = _td.resolve_reason('buy', order_info.get('reason'))
+                    trade.reason = _r.get('reason', '')
+                    trade.reason_source = _r.get('reason_source', '')
+                except Exception:
+                    trade.reason = order_info.get('reason') or ''
                 self._trade_records.append(trade)
 
             # 卖出
@@ -1071,6 +1092,13 @@ class PortfolioBacktestEngine:
                 # 收益率 = (卖出价 - 持仓均价) / 持仓均价 × 100
                 if avg_cost_before_sell > 0:
                     trade.return_rate = round((exec_price - avg_cost_before_sell) / avg_cost_before_sell * 100, 2)
+                try:
+                    from instock.core.backtest import trade_decision as _td
+                    _r = _td.resolve_reason('sell', order_info.get('reason'))
+                    trade.reason = _r.get('reason', '')
+                    trade.reason_source = _r.get('reason_source', '')
+                except Exception:
+                    trade.reason = order_info.get('reason') or ''
                 self._trade_records.append(trade)
 
         self._pending_orders.clear()

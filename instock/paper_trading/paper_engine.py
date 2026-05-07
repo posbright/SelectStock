@@ -523,6 +523,13 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
 
                 trade = TradeRecord(run_date_nph, code, pos.name, 'buy', exec_price, amount)
                 trade.commission = round(commission, 2)
+                try:
+                    from instock.core.backtest import trade_decision as _td
+                    _r = _td.resolve_reason('buy', order_info.get('reason'))
+                    trade.reason = _r.get('reason', '')
+                    trade.reason_source = _r.get('reason_source', '')
+                except Exception:
+                    trade.reason = order_info.get('reason') or ''
                 trade_records.append(trade)
                 signal_inputs.append(order_info)
 
@@ -547,6 +554,13 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                 trade = TradeRecord(run_date_nph, code, pos.name, 'sell', exec_price, sell_amount)
                 trade.commission = round(commission, 2)
                 trade.tax = round(tax, 2)
+                try:
+                    from instock.core.backtest import trade_decision as _td
+                    _r = _td.resolve_reason('sell', order_info.get('reason'))
+                    trade.reason = _r.get('reason', '')
+                    trade.reason_source = _r.get('reason_source', '')
+                except Exception:
+                    trade.reason = order_info.get('reason') or ''
                 trade_records.append(trade)
                 signal_inputs.append(order_info)
 
