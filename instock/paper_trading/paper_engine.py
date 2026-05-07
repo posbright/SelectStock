@@ -350,7 +350,9 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
         api_ns = _create_api(context, data_proxy, g)
         pending_orders = []
 
-        def _order_proxy(code, amount=None, value=None):
+        def _order_proxy(code, amount=None, value=None, *,
+                          reason=None, decision=None, indicators=None, selection=None,
+                          order_api=None):
             code = _normalize_security_code(code)
             # 动态加载未预加载的股票数据
             if code not in context._engine._stock_data:
@@ -385,7 +387,13 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                         'volume': int(spot['volume']),
                         'pre_close': float(spot['pre_close']) if pd.notna(spot.get('pre_close')) else float(spot['close']),
                     })
-            pending_orders.append({'code': code, 'amount': amount, 'value': value})
+            pending_orders.append({
+                'code': code, 'amount': amount, 'value': value,
+                # Phase 2: 策略可显式传入交易解释；旧策略不传则为 None。
+                'reason': reason, 'decision': decision,
+                'indicators': indicators, 'selection': selection,
+                'order_api': order_api,
+            })
 
         def _get_current_amount(code):
             pos = context.portfolio.positions.get(code)
@@ -395,14 +403,20 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
             pos = context.portfolio.positions.get(code)
             return pos.value if pos and pos.amount > 0 else 0
 
-        api_ns['order'] = lambda code, amount: _order_proxy(code, amount=int(amount))
-        api_ns['order_target'] = lambda code, target: _order_proxy(
-            code, amount=int(target) - _get_current_amount(code))
-        api_ns['order_value'] = lambda code, value: _order_proxy(code, value=float(value))
-        api_ns['order_target_value'] = lambda code, target_value: _order_proxy(
-            code, value=float(target_value) - _get_current_value(code))
-        api_ns['order_target_percent'] = lambda code, percent: _order_proxy(
-            code, value=float(percent) * context.portfolio.total_value - _get_current_value(code))
+        # Phase 2: 所有 order_* 包装均接受 **kw（reason/decision/indicators/selection），
+        # 旧策略不传 kwargs 时行为完全等价；新策略可显式传入。
+        api_ns['order'] = lambda code, amount, **kw: _order_proxy(
+            code, amount=int(amount), order_api='order', **kw)
+        api_ns['order_target'] = lambda code, target, **kw: _order_proxy(
+            code, amount=int(target) - _get_current_amount(code), order_api='order_target', **kw)
+        api_ns['order_value'] = lambda code, value, **kw: _order_proxy(
+            code, value=float(value), order_api='order_value', **kw)
+        api_ns['order_target_value'] = lambda code, target_value, **kw: _order_proxy(
+            code, value=float(target_value) - _get_current_value(code),
+            order_api='order_target_value', **kw)
+        api_ns['order_target_percent'] = lambda code, percent, **kw: _order_proxy(
+            code, value=float(percent) * context.portfolio.total_value - _get_current_value(code),
+            order_api='order_target_percent', **kw)
 
         # 每次都执行 initialize（注册 run_daily/run_weekly 回调 + 设置 context 参数）
         try:
@@ -460,6 +474,8 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
 
         # 7. 撮合订单
         trade_records = []
+        # Phase 2: 与 trade_records 严格 1:1 对应，记录每笔成交对应的策略原始订单输入。
+        signal_inputs = []
         for order_info in pending_orders:
             code = order_info['code']
             if code not in today_prices:
@@ -506,6 +522,7 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                 trade = TradeRecord(run_date_nph, code, pos.name, 'buy', exec_price, amount)
                 trade.commission = round(commission, 2)
                 trade_records.append(trade)
+                signal_inputs.append(order_info)
 
             elif amount < 0:
                 # 卖出
@@ -529,6 +546,7 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                 trade.commission = round(commission, 2)
                 trade.tax = round(tax, 2)
                 trade_records.append(trade)
+                signal_inputs.append(order_info)
 
         context.portfolio._update_value()
 
@@ -574,6 +592,8 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                          float(context.portfolio.total_value), paper_id))
 
                 # 9. 记录交易（executed_at 列不存在时降级为旧结构）
+                # Phase 2: 记录每条 trade 的自增 ID，便于事务提交后回填到 cn_stock_trade_signal.trade_id
+                trade_ids = []
                 for t in trade_records:
                     try:
                         cur.execute(
@@ -592,6 +612,10 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                             'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
                             (paper_id, date_str, t.code, t.name, t.direction,
                              t.price, t.amount, t.value, t.commission, t.tax))
+                    try:
+                        trade_ids.append(int(cur.lastrowid) if cur.lastrowid else None)
+                    except Exception:
+                        trade_ids.append(None)
 
                 # 10. 持仓快照（DELETE + UPSERT；UPSERT 兜底防止并发调度撞 unique key）
                 cur.execute(
@@ -661,10 +685,61 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                      f"交易 {len(trade_records)} 笔, "
                      f"总资产 {context.portfolio.total_value:.2f}")
 
+        # Phase 2: 主事务提交成功后再持久化交易信号 / 决策明细 / 指标快照 / 候选筛选快照。
+        # 单独事务，任何失败仅 warning，不回滚已提交的成交。
+        signal_id_by_index = {}
+        if trade_records:
+            try:
+                from instock.core.backtest import trade_decision as _td
+                from instock.core.backtest import trade_signal_store as _tss
+                run_id = f"paper-{paper_id}-{now_dt.strftime('%Y%m%d%H%M%S')}"
+                for idx, t in enumerate(trade_records):
+                    order_info = signal_inputs[idx] if idx < len(signal_inputs) else {}
+                    resolved = _td.resolve_reason(t.direction, order_info.get('reason'))
+                    norm = _td.normalize_decision_payload(
+                        order_info.get('decision'),
+                        indicators=order_info.get('indicators'),
+                        selection=order_info.get('selection'),
+                    )
+                    sig_hash = _td.compute_signal_hash(
+                        source_type='paper', source_id=paper_id, run_id=run_id,
+                        code=t.code, direction=t.direction, signal_date=date_str,
+                        requested_amount=order_info.get('amount'),
+                        requested_value=order_info.get('value'),
+                    )
+                    sig_id = _tss.persist_signal_with_relations(
+                        source_type='paper', source_id=paper_id, run_id=run_id,
+                        strategy_id=None, strategy_name=None,
+                        signal_date=date_str, code=t.code, name=t.name,
+                        direction=t.direction, order_api=order_info.get('order_api'),
+                        requested_amount=order_info.get('amount'),
+                        requested_value=order_info.get('value'),
+                        reason=resolved['reason'], reason_source=resolved['reason_source'],
+                        signal_hash=sig_hash,
+                        decision_rules=norm.get('rules') or None,
+                        indicators=norm.get('indicators') or None,
+                        selection=norm.get('selection') or None,
+                    )
+                    if sig_id:
+                        signal_id_by_index[idx] = sig_id
+                        tid = trade_ids[idx] if idx < len(trade_ids) else None
+                        if tid:
+                            _tss.link_signal_to_trade(sig_id, tid)
+            except Exception as sig_err:
+                logging.warning(f"[模拟交易] 模拟盘 #{paper_id} 交易信号持久化失败(不影响交易): {sig_err}",
+                                exc_info=True)
+
         if trade_records:
             try:
                 from instock.notification import notify_trade_records
-                notify_stats = notify_trade_records(paper_id, trade_records, date_str, executed_at=now_dt)
+                # Phase 2: 把策略原始 signal_id 透传给通知层，模板可读取真实 reason/decision 渲染。
+                signal_meta = [
+                    {'signal_id': signal_id_by_index.get(idx)}
+                    for idx in range(len(trade_records))
+                ]
+                notify_stats = notify_trade_records(
+                    paper_id, trade_records, date_str,
+                    executed_at=now_dt, signal_meta=signal_meta)
                 logging.info(f"[模拟交易] 模拟盘 #{paper_id} 通知事件: {notify_stats}")
             except Exception as notify_error:
                 logging.warning(f"[模拟交易] 模拟盘 #{paper_id} 通知处理失败(不影响交易): {notify_error}", exc_info=True)

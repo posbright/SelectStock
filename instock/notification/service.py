@@ -210,6 +210,7 @@ def enqueue_trade_notification(
     trade_date: Any,
     executed_at: Optional[datetime.datetime] = None,
     send_now: bool = True,
+    signal_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     ensure_notification_tables()
     channel = "dingtalk"
@@ -230,7 +231,19 @@ def enqueue_trade_notification(
         "value": getattr(trade, "value", None),
         "commission": getattr(trade, "commission", None),
         "tax": getattr(trade, "tax", None),
+        "signal_id": signal_id,
     }
+    # Phase 2: 若提供 signal_id，加载真实策略 reason/decision 注入模板上下文。
+    if signal_id:
+        try:
+            from instock.core.backtest.trade_signal_store import fetch_signal_with_decision
+            sig_detail = fetch_signal_with_decision(int(signal_id))
+            if sig_detail:
+                event_data["reason"] = sig_detail.get("reason")
+                event_data["reason_source"] = sig_detail.get("reason_source")
+                event_data["decision_rules"] = sig_detail.get("rules") or []
+        except Exception as exc:
+            logging.warning(f"[通知] 读取 signal_id={signal_id} 详情失败，模板使用兜底说明: {exc}")
     message = build_trade_markdown(event_data)
     config = _load_config(paper_id, event_type, channel)
     payload = DingTalkChannel.build_markdown_payload(message["title"], message["markdown"])
@@ -263,11 +276,21 @@ def notify_trade_records(
     trade_records: Iterable[Any],
     trade_date: Any,
     executed_at: Optional[datetime.datetime] = None,
+    signal_meta: Optional[Iterable[Dict[str, Any]]] = None,
 ) -> Dict[str, int]:
     stats = {"created": 0, "sent": 0, "failed": 0, "skipped": 0, "duplicates": 0}
-    for trade in trade_records or []:
+    meta_list = list(signal_meta or [])
+    for idx, trade in enumerate(trade_records or []):
+        signal_id = None
+        if idx < len(meta_list):
+            try:
+                signal_id = meta_list[idx].get("signal_id") if isinstance(meta_list[idx], dict) else None
+            except Exception:
+                signal_id = None
         try:
-            result = enqueue_trade_notification(paper_id, trade, trade_date, executed_at=executed_at, send_now=True)
+            result = enqueue_trade_notification(
+                paper_id, trade, trade_date,
+                executed_at=executed_at, send_now=True, signal_id=signal_id)
             if not result.get("created"):
                 stats["duplicates"] += 1
             elif result.get("sent"):

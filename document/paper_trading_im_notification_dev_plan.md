@@ -952,7 +952,15 @@ GET /instock/api/trade/decision?signal_id=xxx
 
 ## 11. 开发计划
 
-### Phase 1：钉钉通知基础设施
+### Phase 1：钉钉通知基础设施 ✅ 已完成 (2026-05-07)
+
+> 验收记录：
+> - 模块文件：`instock/notification/{__init__,service,templates}.py`、`channels/{base,dingtalk}.py`。
+> - 数据库表：`cn_stock_notification_config` + `cn_stock_notification_event`（uq_dedupe_key）。
+> - 接入点：`instock/paper_trading/paper_engine.py` 成交落库后调用 `notify_trade_records()`。
+> - 测试：`tests/test_notification_phase1.py` 6/6 通过（钉钉签名、payload、去重、出 box、process_pending、失败不阻塞）。
+> - 生产事件：`cn_stock_notification_event` 已观测到 sent + skipped 行（依赖 .env webhook）。
+> - 修复记录：`tools/diagnose_dingtalk.py` 排查脚本；`paper_engine.py` 修复 1062 race condition（commit `a118c82`）。
 
 目标：模拟交易成交后能通过钉钉发送基础通知，具备配置、签名、去重、失败重试能力。
 
@@ -975,7 +983,15 @@ GET /instock/api/trade/decision?signal_id=xxx
 - 重复运行不会重复发送同一事件。
 - webhook 失败时交易主流程不失败。
 
-### Phase 2：策略真实理由与决策留痕
+### Phase 2：策略真实理由与决策留痕 ✅ 已完成 (2026-05-07)
+
+> 验收记录：
+> - 新模块：`instock/core/backtest/trade_decision.py`（normalize/resolve_reason/compute_signal_hash/serialize）；`instock/core/backtest/trade_signal_store.py`（DDL + persist + link + fetch）。
+> - 4 张新表（按需创建，DDL 幂等，单独事务）：`cn_stock_trade_signal`、`cn_stock_trade_decision`、`cn_stock_trade_indicator_snapshot`、`cn_stock_trade_selection_snapshot`。
+> - paper_engine 改造：`_order_proxy(..., reason, decision, indicators, selection, order_api)`；5 个 `order_*` lambda 全部接受 **kw 兼容旧策略；撮合后建立 `signal_inputs` 平行表；主事务提交后 capture trade_id 并 `link_signal_to_trade`；信号持久化失败仅 warning，不回滚成交。
+> - 通知模板扩展：`reason` + `reason_source` + `decision_rules` 渲染为「交易理由（来源标注）」与「决策规则对比」表，最多 5 行；`reason_source=generated` 时显式标注「系统兜底说明（非策略显式提供）」。
+> - 通知服务：`enqueue_trade_notification(..., signal_id=...)` 自动 `fetch_signal_with_decision()` 注入策略真实 reason。
+> - 测试：`tests/test_trade_signal_phase2.py` 16/16 通过；与 Phase 1 / 1062 修复 / sandbox / recorder 共 37/37 通过。
 
 目标：通知中的交易理由来自策略运行时真实数据。
 
