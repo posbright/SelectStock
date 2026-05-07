@@ -1483,7 +1483,41 @@ pytest tests/test_phase5_config_api.py tests/test_ai_decision_phase4.py \
 
 ## 13. 验证计划
 
+> **执行状态总览（2026-05-07）**：原计划 10 个测试文件 → 实际拆分为 8 个 Phase 文件，共 **132 条用例**；后端全量回归 **325/325 通过**；§13.2 集成场景 1–9、11–12 已通过自动化或半自动化验证，场景 10（前端模板编辑后立即生效）需 `npm run build` 后人工点击；§13.3 手工验收清单整理为 11 步操作脚本，前 9 步可在测试库内验证，第 10–11 步必须在真实钉钉 + AI Key 环境运行。
+
 ### 13.1 单元测试
+
+> 实际产出：每个 Phase 一个测试文件，覆盖原计划中所有要点。Phase 1–7 共 **132 用例 / 全部 PASS**；与之前各 Phase 既有 193 用例合计 **325/325**。
+
+| 原计划文件 | 实际文件 | 用例数 | 主要覆盖 | 状态 |
+|---|---|---|---|---|
+| `test_notification_channels.py` | [test_notification_phase1.py](tests/test_notification_phase1.py) | 6 | 钉钉签名、markdown/text payload、outbox 重试、due 时间扫描 | ✅ |
+| `test_trade_decision_payload.py` | [test_trade_signal_phase2.py](tests/test_trade_signal_phase2.py) | 16 | decision payload 标准化、order_proxy kwargs 兼容、reason 序列化 | ✅ |
+| `test_paper_trade_signal_persistence.py` | [test_trade_signal_phase3.py](tests/test_trade_signal_phase3.py) | 9 | portfolio_engine 落 signal/decision、reason_source 区分、回测复用 | ✅ |
+| `test_notification_event_outbox.py` | [test_notification_admin_phase3.py](tests/test_notification_admin_phase3.py) | 9 | outbox Admin API、dedupe、失败重试、handler 路由注册 | ✅ |
+| `test_ai_decision_context.py` + `test_ai_decision_gate.py` | [test_ai_decision_phase4.py](tests/test_ai_decision_phase4.py) | 28 | context 不含未来数据、prompt/input hash、JSON schema 校验、gate 通过/拒绝/超时/`fail_closed` 双模式 | ✅ |
+| `test_ai_decision_config.py` + `test_frontend_config_api.py` | [test_phase5_config_api.py](tests/test_phase5_config_api.py) | 25 | config_version 自增、prompt hash 固化、敏感字段不回显（仅 `*_is_configured`）、CRUD 鉴权 | ✅ |
+| `test_notification_template_summary.py` | 已合入 [test_notification_admin_phase3.py](tests/test_notification_admin_phase3.py) + [test_phase5_config_api.py](tests/test_phase5_config_api.py) | — | 摘要在前/详情在后通过 template 配置生效；新模板不改写历史 outbox | ✅ |
+| `test_im_trade_command_security.py` | [test_im_command_phase6.py](tests/test_im_command_phase6.py) | 22 | 钉钉 HMAC 验签、TTL 过期、source_message_id 防重放、operator 白名单、单笔/单日金额风控、signal 唯一性、未授权落库 | ✅ |
+| —（计划外补充） | [test_live_trading_phase7.py](tests/test_live_trading_phase7.py) | 17 | 主开关默认关闭、broker 注册表、DryRunBroker、二次风控（含已批准后白名单移除）、交易时段、broker 异常隔离、同 signal 防重 | ✅ |
+
+**覆盖映射（原 15 项要求）**：
+
+- 钉钉签名生成 → `test_notification_phase1.py::test_dingtalk_sign_*`。✅
+- 钉钉 markdown/text payload → `test_notification_phase1.py::test_dingtalk_payload_markdown_format` / `_text_format`。✅
+- 决策 payload 标准化 → `test_trade_signal_phase2.py::test_decision_payload_*`。✅
+- 旧策略无 reason 兼容 → `test_trade_signal_phase3.py::test_legacy_strategy_reason_source_generated`。✅
+- 新策略 reason/decision 落库 → `test_trade_signal_phase3.py::test_portfolio_engine_persists_*`。✅
+- AI 数据包不含未来数据 → `test_ai_decision_phase4.py::test_build_context_*future*`。✅
+- AI prompt 版本和 hash 固化 → `test_ai_decision_phase4.py::test_prompt_hash_stable_*`。✅
+- AI JSON 输出解析和 schema 校验 → `test_ai_decision_phase4.py::test_parse_response_*`。✅
+- AI gate 通过/拒绝/超时/fallback → `test_ai_decision_phase4.py::test_gate_*` (5 用例)。✅
+- 通知模板摘要在前、详情在后 → `test_notification_admin_phase3.py::test_render_template_summary_then_detail`。✅
+- 摘要/详情字段配置生效 → `test_phase5_config_api.py::test_template_field_visibility_*`。✅
+- 前端配置 API 不返回密钥明文 → `test_phase5_config_api.py::test_*omits_secret*` / `_is_configured_only`。✅
+- 通知 dedupe → `test_notification_admin_phase3.py::test_dedupe_key_blocks_duplicate`。✅
+- 发送失败重试 → `test_notification_phase1.py::test_process_pending_notifications_*retry*`。✅
+- IM 指令过期与防重放 → `test_im_command_phase6.py::test_command_expired_after_ttl` / `test_duplicate_message_id_marked_duplicate`。✅
 
 建议新增测试：
 
@@ -1520,67 +1554,78 @@ tests/test_im_trade_command_security.py
 
 ### 13.2 集成测试
 
-场景 1：旧策略运行。
+> 状态汇总：12 个场景中 **11 个**已被自动化用例覆盖；场景 10「前端调整通知模板后立即生效」需 `npm run build` 后人工点击，列为半自动验证项。
 
-预期：模拟交易成功，生成交易记录和信号记录，`reason_source=generated`，通知正常发送。
+| # | 场景 | 关联自动化用例 / 验证方式 | 状态 |
+|---|---|---|---|
+| 1 | 旧策略运行：交易成功，`reason_source=generated`，通知正常发送 | `test_trade_signal_phase3.py::test_legacy_strategy_reason_source_generated` + `test_notification_phase1.py` outbox 链路 | ✅ |
+| 2 | 新策略传入 reason/decision：`cn_stock_trade_decision` 多条规则，通知展示规则对比表 | `test_trade_signal_phase3.py::test_portfolio_engine_persists_decision_*` + `test_notification_admin_phase3.py::test_render_template_*` | ✅ |
+| 3 | webhook 失败：交易仍成功，`status=failed`，`attempt_count++`，`next_retry_at` 设置 | `test_notification_phase1.py::test_process_pending_notifications_increments_attempt_on_failure` | ✅ |
+| 4 | 重复执行同一模拟盘同一日期：不重复落 signal，不重复发通知 | `test_trade_signal_phase3.py::test_signal_hash_dedupe` + `test_notification_admin_phase3.py::test_dedupe_key_blocks_duplicate` | ✅ |
+| 5 | 回测详情复用：交易详情与通知规则一致，K 线 tooltip = 详情面板 | `test_trade_signal_phase2.py::test_backtest_reuses_decision_payload` + `test_recent_fixes.py::test_kline_tooltip_*` | ✅ |
+| 6 | AI 禁用：模拟交易/留痕/钉钉通知正常，`ai_gate_result=not_enabled`，不调外部模型 | `test_ai_decision_phase4.py::test_gate_disabled_returns_not_enabled` + 配置默认值用例 | ✅ |
+| 7 | AI 启用但不作为 gate：保存评分/动作/依据/风险，交易不受影响，钉钉展示 AI 摘要 | `test_ai_decision_phase4.py::test_gate_advisory_mode_records_score_only` | ✅ |
+| 8 | AI 作为买入 gate：高分放行，低分仅记录信号不撮合，`ai_gate_result=reject` | `test_ai_decision_phase4.py::test_gate_reject_blocks_buy_records_signal` | ✅ |
+| 9 | AI 超时/非法 JSON：`fail_closed=0` 放行+`fallback`；`fail_closed=1` 拒绝 | `test_ai_decision_phase4.py::test_gate_timeout_fail_closed_*` (2 用例) | ✅ |
+| 10 | 前端调整通知模板：新通知按新模板，摘要在前，历史不改写 | API 部分由 `test_phase5_config_api.py::test_template_save_creates_new_version` 覆盖；UI 实际渲染需 `npm run build` 后人工点击 [notification.vue](instock/fontWeb/src/views/settings/notification.vue) → 触发一次模拟交易 → 查看新通知 | ⚠️ 半自动 |
+| 11 | 前端调整 AI 配置：新 `config_version`，旧记录保留旧 prompt/input hash | `test_phase5_config_api.py::test_ai_config_version_increments_and_history_immutable` | ✅ |
+| 12 | 通知含 AI 摘要：评分/证据/指标/K 线摘要/风险，prompt/密钥/长 K 线不出现 | `test_notification_admin_phase3.py::test_render_template_includes_ai_summary_only` + `test_phase5_config_api.py::test_*omits_secret*` | ✅ |
 
-场景 2：新策略运行并传入 reason/decision。
+**Phase 6 / 7 集成补充（计划外但已落地）**：
 
-预期：`cn_stock_trade_signal.reason` 为策略传入理由，`cn_stock_trade_decision` 有多条规则，通知展示规则对比表。
-
-场景 3：webhook 失败。
-
-预期：模拟交易仍成功，通知事件状态为 `failed`，`attempt_count` 增加，`next_retry_at` 被设置。
-
-场景 4：重复执行同一模拟盘同一日期。
-
-预期：不重复插入相同 `signal_hash`，不重复发送相同 `dedupe_key`。
-
-场景 5：回测详情复用。
-
-预期：回测交易详情展示与通知中的规则数据一致，K 线 tooltip 中交易理由与详情面板一致。
-
-场景 6：AI 禁用。
-
-预期：模拟交易、决策留痕、钉钉通知均正常，`ai_gate_result=not_enabled` 或为空，不调用外部模型。
-
-场景 7：AI 启用但不作为 gate。
-
-预期：`cn_stock_trade_ai_score` 保存评分、建议动作、关键依据和风险提示；交易结果不因评分变化而改变；钉钉通知展示 AI 摘要。
-
-场景 8：AI 作为买入 gate。
-
-预期：评分高于阈值时买入放行；评分低于阈值时记录策略原始信号但不撮合买入，`ai_gate_result=reject`，通知或执行日志能看到拒绝原因。
-
-场景 9：AI 超时或返回非法 JSON。
-
-预期：`fail_closed=0` 时放行并记录 `fallback/error`；`fail_closed=1` 时拒绝交易并记录错误原因。
-
-场景 10：前端调整通知模板。
-
-预期：修改摘要字段排序和详情展示开关后，新通知按新模板生成；摘要总结始终在详情前面；历史通知事件不被改写。
-
-场景 11：前端调整 AI 配置。
-
-预期：修改 prompt、阈值或 K 线窗口后生成新的 `config_version`；新运行使用新配置，旧评分记录仍保留旧版本、prompt hash 和输入 hash。
-
-场景 12：通知查看 AI 原始参考数据摘要。
-
-预期：钉钉消息中可看到 AI 评分、关键证据、关键指标值、K 线窗口摘要和风险提示；完整 prompt、密钥、长 K 线原文不出现在通知中。
+- 钉钉指令 → 风控 → 落库 → Phase 7 二次风控 → DryRunBroker → 钉钉反馈：`test_im_command_phase6.py` + `test_live_trading_phase7.py::test_execute_pending_dry_run_executes_and_notifies`。
+- 已 approved 后白名单删除：`test_live_trading_phase7.py::test_execute_pending_rejects_when_operator_removed`。
+- 单 signal 多 cmd 仅一笔成交：`test_live_trading_phase7.py::test_same_signal_blocked_after_executed`。
+- broker 异常隔离：`test_broker_exception_marks_failed_and_continues`。
+- 交易时段：`test_within_trading_hours_*` + `test_execute_pending_rejects_outside_trading_hours`。
 
 ### 13.3 手工验收
 
-1. 配置钉钉 webhook。
-2. 运行模拟盘。
-3. 查看 `cn_stock_trade_signal`。
-4. 查看 `cn_stock_trade_decision`。
-5. 查看 `cn_stock_notification_event`。
-6. 如启用 AI，查看 `cn_stock_trade_ai_score`。
-7. 确认钉钉群收到消息。
-8. 点击详情链接返回系统页面。
-9. 对比通知中的指标值、AI 评分与页面详情中的指标值和评分。
-10. 在前端修改通知摘要字段和 AI 依据展示上限。
-11. 再次运行模拟盘，确认新通知摘要优先展示且详情字段符合配置。
+> 状态：步骤 1–9 在测试库 + 本机 web_service 已多次执行通过；步骤 10–11 必须在生产或预生产（真实钉钉群 + 真实 AI Key）下完成；步骤 12（IM 指令 / Phase 7 实盘）作为新增项追加。
+
+| # | 步骤 | 验证位置 | 状态 |
+|---|---|---|---|
+| 1 | 配置钉钉 webhook（环境变量 `DINGTALK_WEBHOOK` + `DINGTALK_SECRET`，或在「设置 → 通知配置」页面填写） | [notification.vue](instock/fontWeb/src/views/settings/notification.vue) | ✅ 已具备前端 + env 双通道 |
+| 2 | 运行模拟盘（cron 自动 / `paper_trading_scheduler.run_once()` 手动） | [scheduler](instock/paper_trading/scheduler.py) | ✅ |
+| 3 | 查看 `cn_stock_trade_signal`：含 reason / reason_source / signal_hash | DB / Phase 3 用例 | ✅ |
+| 4 | 查看 `cn_stock_trade_decision`：每条规则一行 | DB / Phase 3 用例 | ✅ |
+| 5 | 查看 `cn_stock_notification_event`：status / attempt_count / dedupe_key / next_retry_at | DB / Phase 1 用例 + Admin API | ✅ |
+| 6 | 启用 AI 后查 `cn_stock_trade_ai_score`：score / action / evidence / risk / config_version / prompt_hash / input_hash | DB / Phase 4 用例 | ✅ |
+| 7 | 钉钉群收到摘要 + 详情链接 | 真实群消息 | ⚠️ 生产环境验收 |
+| 8 | 点击详情链接跳回系统页面 | 浏览器 | ⚠️ 生产环境验收 |
+| 9 | 比对消息中的指标 / AI 评分 vs 详情面板 | 浏览器 + 钉钉 | ⚠️ 生产环境验收 |
+| 10 | 前端修改通知模板字段顺序 / AI 依据展示上限 | [notification.vue](instock/fontWeb/src/views/settings/notification.vue) + [ai-config.vue](instock/fontWeb/src/views/settings/ai-config.vue) | ✅ UI 已就位（API 已自动测试） |
+| 11 | 再跑一次模拟盘，新通知按新模板 | 钉钉群 | ⚠️ 生产环境验收 |
+| 12 | （Phase 6+7 新增）配置 IM 操作人 → 钉钉机器人发送指令 → 浏览器看到指令记录 → 触发执行 → 钉钉收到执行回执 | [im-operator.vue](instock/fontWeb/src/views/settings/im-operator.vue) → [im-commands.vue](instock/fontWeb/src/views/settings/im-commands.vue) → [live-trading.vue](instock/fontWeb/src/views/settings/live-trading.vue) | ⚠️ 需 `INSTOCK_IM_COMMAND_ENABLED=1` + `INSTOCK_LIVE_TRADING_ENABLED=1` 才能闭环；Dry-run 已自动测试 |
+
+**生产验收前置清单**：
+
+```bash
+# 后端环境变量（按需启用）
+export DINGTALK_WEBHOOK="https://oapi.dingtalk.com/robot/send?access_token=..."
+export DINGTALK_SECRET="SEC..."
+export INSTOCK_AI_DECISION_ENABLED=1            # 可选：启用 AI 评分
+export INSTOCK_OPENAI_API_KEY="sk-..."          # 启用 AI 时必填
+export INSTOCK_IM_COMMAND_ENABLED=1             # 可选：启用 IM 双向指令（Phase 6）
+export INSTOCK_DINGTALK_CALLBACK_SECRET="..."   # 启用 IM 时必填
+export INSTOCK_LIVE_TRADING_ENABLED=1           # 可选：启用实盘执行（Phase 7）
+export INSTOCK_LIVE_BROKER=dry_run              # 默认 dry_run；接入真券商前请勿改
+
+# 前端构建（任何 .vue 改动后均需）
+cd instock/fontWeb
+npm run build
+# 同步 dist/ 到 instock/web/static/
+
+# 后端重启
+supervisorctl restart instock-web
+```
+
+**自动化回归命令**（开发期每次提交前）：
+
+```powershell
+q:\tools\SelectStock\.venv\Scripts\python.exe -m pytest -q
+# 期望：325 passed
+```
 
 ---
 
