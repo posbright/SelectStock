@@ -10,13 +10,14 @@
 
 | # | 决策点 | 用户选择 | 落实位置 |
 |---|---|---|---|
-| 1 | 命名 | 见名之意 | §2.3 内置预设改用业务化命名 |
-| 2 | 股票池 | 实时获取 + 基本面买卖参考 | §3.6 新增 `dynamic_universe` 模块 |
-| 3 | 资金量 | 10 万 | §1.3 仓位参数改为 4 仓 × 25% |
-| 4 | 硬规则 | 允许自由编辑 | §3.5 表达式 sandbox 加 + 友好编辑器 |
-| 5 | 评分类禁交易 | 暂定禁止 | §3.4 三层守门保留 |
-| 6 | PR 合并节奏 | 每 PR 验证审查后再合 | §6 每 PR 独立检查点 + 用户确认门 |
-| 7 | **K 线指标叠加（新）** | **所有涉及 K 线的页面都支持开关** | §4.4 + 新增 PR-5 |
+| 1 | 命名 | **中文名** | §2.3 改为 `稳健抄底版` / `进攻增长版` / `今日关注榜` |
+| 2 | 股票池 | 实时 + **效率优先，缓存文件** | §3.6 每日 09:00 cron 刷新 `_universe_today.pkl`，回测/UI 直接读缓存 |
+| 3 | 仓位 | **最优解 = 4 仓 × 25%** | §1.3（详见仓位评估表）|
+| 4 | 基本面阈值 | **暂定当前配置，保留后期调整空间** | §3.6 `risk_profile.fundamentals_sell` 字段化，UI 可改 |
+| 5 | K 线叠加 UI | **独立副图区域 + 主图叠加二选一可双开** | §4.4 改为「副图模式」`/`「主图叠加」`/`「双开」3 模式 |
+| 6 | PR 节奏 | **可并行**（PR-4 / PR-5 都依赖 PR-3）| §6 标注并行关系图 |
+
+### 最终核对项已全部清空 ✅ 进入实施阶段
 
 ---
 
@@ -75,17 +76,26 @@
 - 期权 / 商品 / 美股扩展
 - 实盘连接交易接口
 
-### 1.3 资金 / 仓位参数（按用户 10 万实盘）
+### 1.3 资金 / 仓位参数（按用户 10 万实盘 — 最优解）
+
+**仓位评估（基于 V6 实证 + 10 万资金的精度损失分析）**：
+
+| 仓位数 | 单仓金额 | 50 元/股 可买 | 仓位精度 | 流动性 | 综合评分 |
+|---|---|---|---|---|---|
+| 3 仓 × 33% | 3.3 万 | 6 手 (3000 股) | 99% | 单股集中度高，回撤风险大 | ⭐⭐⭐ |
+| **4 仓 × 25%** | **2.5 万** | **5 手 (2500 股)** | **99%** | **平衡（推荐）** | ⭐⭐⭐⭐⭐ |
+| 5 仓 × 20% | 2 万 | 4 手 (2000 股) | 95% | 单仓最低 1.5 万对 30 元/股仅 5 手，部分票精度损失 | ⭐⭐⭐⭐ |
+| 8 仓 × 12.5% | 1.25 万 | 2 手 (1000 股) | 80% | 精度损失 20%，且 V6 同时持有 8 仓需要资金量 ≥ 50 万才合理 | ⭐⭐ |
+
+**结论：4 仓 × 25% 为最优解**
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | 初始资金 | ¥100,000 | 用户实盘量级 |
-| **最大并发仓位** | **4** | 10 万 / 4 = 2.5 万/仓，单股 100 股最低 ≈ 30~50 元 / 股，避免最小手数无法买入 |
-| 单仓权重 | 25% (=1/4) | 等权 |
+| **最大并发仓位** | **4** | 综合评分最优 |
+| 单仓权重 | 25% | 等权 |
 | 单笔最低 | 100 股 (1 手) | 自动向下取整 |
 | 现金保留 | 5% | 防极端跌停补仓 |
-
-> V6 跑的是 8 仓 × 12.5% / 100 万。10 万规模下若仍 8 仓，单仓 1.25 万，对 50 元/股的票只能买 2 手 (=1 万)，仓位精度 80%——精度损失大。**改为 4 仓更适合 10 万**。
 
 ---
 
@@ -121,15 +131,17 @@ CREATE TABLE IF NOT EXISTS `cn_stock_custom_indicator` (
 - 沿用现有约定：在 `instock/web/portfolioBacktestHandler.py` 新增 `_ensure_custom_indicator_table()`，在模块加载时调用
 - 不使用 Alembic（项目历史风格），保持一致
 
-### 2.3 内置数据（见名之意命名）
+### 2.3 内置数据（中文命名）
 
 启动时 `_seed_builtin_indicators()` 写入三条记录（如果不存在）：
 
-| indicator_id | name | kind | 来源 |
+| indicator_id | name (中文显示) | kind | 来源 |
 |---|---|---|---|
-| `steady_oversold_rebound` | 稳健·超跌反弹（S12 五条硬规则） | primary_entry | V4-V6 实证 PF 1.81~3.63、最佳 Sharpe |
-| `dual_momentum_growth` | 进攻·趋势动量双确认（S12 ∪ T3） | primary_entry | V6 CAGR 26.83% / 总收益 +316% |
-| `score_alert_watchlist` | 预警·综合评分关注清单（M1 七因子） | watchlist_alert | V5 范式守门示例（笔数多、覆盖广，不参与交易）|
+| `steady_oversold_rebound` | **稳健抄底版** | primary_entry | V4-V6 实证 PF 1.81~3.63 / 最佳 Sharpe（S12 五条硬规则）|
+| `dual_momentum_growth` | **进攻增长版** | primary_entry | V6 CAGR 26.83% / 总收益 +316%（S12 ∪ T3）|
+| `score_alert_watchlist` | **今日关注榜** | watchlist_alert | V5 范式守门示例（M1 七因子加权评分，仅供参考）|
+
+> `indicator_id` 仍用英文蛇形（DB 主键约束/URL 友好），UI 与日志全部显示中文 `name`。
 
 ---
 
@@ -192,35 +204,48 @@ UI 编辑器（PR-3）配套：
 
 ### 3.6 动态股票池模块 `instock/core/composite/dynamic_universe.py`
 
-按用户决策 #2，股票池**实时**从 `cn_stock_selection` 取，并把基本面数据作为买卖参考：
+按用户决策 #2，效率优先 + 缓存文件：
 
 ```python
-def fetch_universe(top_n=100, min_market_cap_yi=30, max_pe=80,
-                   min_roe=7, max_debt=80, min_profit_yoy=-20):
+CACHE_FILE = "instock/cache/composite/_universe_today.pkl"
+CACHE_TTL_HOURS = 24
+
+def fetch_universe(top_n=100, force_refresh=False, **filters):
     """
-    实时查询 cn_stock_selection (今日快照)，返回基本面综合评分前 N 只代码。
+    1) 若 CACHE_FILE 存在且 mtime < 24h，直接返回（毫秒级）
+    2) 否则查 cn_stock_selection 实时计算综合评分 → 写缓存 → 返回
     评分公式（与 V3 一致）：
       0.20·rank(ROE) + 0.20·rank(net_profit_3y_cagr)
     + 0.15·rank(profit_yoy) + 0.15·rank(1-debt_ratio)
     + 0.15·rank(net_margin) + 0.10·rank(1-PE) + 0.05·rank(1-PB)
-    缓存 1 天（避免每次回测都查 DB）。
+    SQL 过滤：market_cap > 30亿 AND PE 0~80 AND ROE > 7 AND debt < 80%
     """
 
-def fundamentals_signal(code, df, snapshot_date):
+def fundamentals_signal(code, snapshot_date=None):
     """
-    返回当日的基本面买卖参考分：
-      buy_bias  = 综合评分 > 90分位 (强烈推荐买)
-      sell_bias = 综合评分 < 30分位 OR ROE 同比下滑 > 50%
-                  (基本面恶化，建议止盈/减仓)
-    用法：
-      composite.signal() AND fundamentals_signal(code).buy_bias  -> 进场
-      持仓中 fundamentals_signal(code).sell_bias                 -> 提前平仓
+    返回当日基本面买卖参考（结构化数据，UI 后期可改阈值）：
+      {"score": 87.3, "buy_bias": True, "sell_bias": False,
+       "details": {"ROE_yoy_drop_pct": -8.2, "score_quantile": 0.92}}
     """
 ```
 
-**集成点**：
-- `risk_simulator.simulate()` 增加可选参数 `fundamentals_check=True`，开启后每个交易日检查 sell_bias 触发提前平仓
-- Web UI 上每个指标编辑页有开关："启用基本面动态过滤"（默认开）
+**Cron 集成**：在 `cron/cron.workdayly/` 新增 `refresh_composite_universe.sh`，每个交易日 08:30 调用 `python -m instock.core.composite.dynamic_universe --refresh`，开盘前刷新缓存。
+
+**用户决策 #4 — 阈值字段化（保留后期调整空间）**：
+所有阈值不写死在代码里，而是放进每个指标的 `risk_profile` JSON：
+
+```json
+{
+  "stop": -0.08, "target": 0.20, "max_hold": 60,
+  "fundamentals_check": true,
+  "fundamentals_sell": {
+    "score_quantile_lt": 0.30,
+    "roe_yoy_drop_pct_lt": -50.0
+  }
+}
+```
+
+UI 编辑页（PR-3）会暴露这两个阈值的 input 框，用户随时调整。
 
 ---
 
@@ -253,18 +278,25 @@ instock/web/static/index.html                        # 加导航菜单项
 
 `portfolioBacktest.html`：策略下拉框旁加按钮「从自定义指标导入」→ 弹窗只列出 `kind=primary_entry` 的项 → 选中后自动生成对应 strategy code。
 
-### 4.4 K 线图通用指标叠加层（用户决策 #7 — 新需求）
+### 4.4 K 线图通用指标叠加层（用户决策 #5/#7）
 
-**目标**：在所有涉及 K 线图的页面，让用户可以选择把任意自定义指标的"评分曲线 + 买卖信号点"叠加到 K 线图上显示，且可随时关闭。
+**目标**：在所有涉及 K 线图的页面，让用户可以选择把任意自定义指标的"评分曲线 + 买卖信号点"展示到图表中，**支持三种显示模式**（用户决策 #5）：
+
+| 模式 | 显示位置 | 用途 |
+|---|---|---|
+| **🎯 主图叠加** | 买卖信号点叠加到 K 线主图（红三角/绿菱形）| 看信号触发位置 |
+| **📊 副图独立** | 评分曲线放在与 MACD/KDJ 同级的独立副图 | 看评分变化趋势 |
+| **🔀 双开** | 主图叠加 + 副图独立 同时显示 | 信号点 + 评分配合分析 |
+| ⛔ 关闭 | 不显示任何自定义指标内容 | 默认 |
 
 **涉及的 3 处页面 + 1 个公共组件**：
 
 | 页面 | 文件 | 集成方式 |
 |---|---|---|
-| 单股 K 线指标 | [instock/fontWeb/src/views/indicator/index.vue](../instock/fontWeb/src/views/indicator/index.vue) | 在主图工具栏加"自定义指标"下拉 + "显示信号点"开关 |
-| 模拟盘个股详情 | [instock/fontWeb/src/views/paper-trading/index.vue](../instock/fontWeb/src/views/paper-trading/index.vue) | 同上，挂在 daily/weekly/monthly 三个 tab 上 |
+| 单股 K 线指标 | [instock/fontWeb/src/views/indicator/index.vue](../instock/fontWeb/src/views/indicator/index.vue) | 在主图工具栏加"自定义指标"select + "显示模式"3-选 1 单选 |
+| 模拟盘个股详情 | [instock/fontWeb/src/views/paper-trading/index.vue](../instock/fontWeb/src/views/paper-trading/index.vue) | 同上，挂在 daily/weekly/monthly 三个 tab |
 | 回测详情个股轨迹 | [instock/fontWeb/src/views/algo/backtest-detail.vue](../instock/fontWeb/src/views/algo/backtest-detail.vue) | 同上 |
-| **公共组件 (新)** | `instock/fontWeb/src/components/CustomIndicatorOverlay.vue` | 抽出复用：从 API 拉指标数据 → 转换成 echarts series 配置 → 提供给 3 处页面挂载 |
+| **公共组件 (新)** | `instock/fontWeb/src/components/CustomIndicatorOverlay.vue` | 输入：echarts option + 指标 ID + 显示模式；输出：合并后的 option |
 
 **新后端 API**：
 
@@ -274,20 +306,15 @@ GET /instock/api/custom_indicator/series?id=<indicator_id>&code=<6位代码>&sta
 返回：
 {
   "indicator_id": "steady_oversold_rebound",
-  "name": "稳健·超跌反弹",
+  "name": "稳健抄底版",
   "kind": "primary_entry",
-  "score_series": [{"date":"2024-01-02","score":42.3}, ...]   // 评分曲线（仅 watchlist_alert 类型有）
+  "score_series": [{"date":"2024-01-02","score":42.3}, ...]   // 副图模式用
   "signal_points": [{"date":"2024-01-15","price":12.34,"action":"buy"},
                     {"date":"2024-02-10","price":13.78,"action":"sell-stop"}, ...]
 }
 ```
 
-**UI 行为约定**：
-- 主图工具栏新增第 3 行控件：「叠加自定义指标」select (多选) + 「显示评分曲线」toggle + 「显示信号点」toggle
-- 评分曲线放在副图（与 MACD/KDJ 同级），用 dataZoom 同步
-- 信号点用 scatter 标记直接叠加到主图 (buy=红三角向上 / sell=绿菱形)
-- 当用户选 `watchlist_alert` 类指标时，控件旁出现红色提示「⚠️ 仅供参考」
-- 用户偏好（最近选过哪几个指标 / 是否显示评分）保存在 `localStorage`
+**默认行为（用户决策 #5）**：默认 ⛔ 关闭，需用户主动选择指标 + 选择模式。用户偏好（最近选过哪几个指标 / 上次的显示模式）保存在 `localStorage`。
 
 ---
 
@@ -323,6 +350,13 @@ def test_hard_rules_blocks_import():
 ## 6. PR 拆分（每个 PR 独立可合，每个合并前须用户确认）
 
 > 用户决策 #6：每个 PR 必须 (a) 全部新单测通过 (b) 全量 325 回归通过 (c) 用户在浏览器/curl 实际验证 (d) 我整理 PR 总结提交审查 → 用户确认无 bug 后才进入下一 PR。
+>
+> **PR 依赖图（用户决策 #6 — 可并行）**：
+> ```
+> PR-1 (后端核心) → PR-2 (REST API) → PR-3 (前端编辑器)
+>                                      ├─→ PR-4 (投资组合集成)  ┐
+>                                      └─→ PR-5 (K线叠加)       ├ 可并行
+> ```
 
 ### PR-1 — 后端核心抽取（无 UI、无 HTTP）
 
