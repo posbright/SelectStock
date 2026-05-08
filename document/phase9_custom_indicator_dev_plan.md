@@ -1,8 +1,22 @@
-# Phase 9 — 自定义复合指标 + 中长期 Alpha 落地开发计划
+# Phase 9 — 自定义复合指标 + 中长期 Alpha 落地开发计划 (v2 已纳入用户决策)
 
-> **Status**: 🟡 待评审 (created 2026-05-08, branch `backTest_dev`)
+> **Status**: 🟢 用户决策已落实，待最终审核 (updated 2026-05-08, branch `backTest_dev`)
 > **基础**: V2/V3/V4/V5/V6 全部实证完成；本文档将所有结论落地为可执行的 PR。
-> **请审核**：本文档定稿后才开始 PR-1 实施。所有"待实施"代码均未写入任何文件。
+> **本版变更**：依据用户对 7 个核对项的回复进行重写：见名之意命名 / 实时基本面池 / 10 万实盘资金 / 自由编辑硬规则 / 评分类禁止落库 / PR 充分验证 / **新增 K 线图通用指标叠加 (PR-5)**。
+
+---
+
+## 用户决策落地一览
+
+| # | 决策点 | 用户选择 | 落实位置 |
+|---|---|---|---|
+| 1 | 命名 | 见名之意 | §2.3 内置预设改用业务化命名 |
+| 2 | 股票池 | 实时获取 + 基本面买卖参考 | §3.6 新增 `dynamic_universe` 模块 |
+| 3 | 资金量 | 10 万 | §1.3 仓位参数改为 4 仓 × 25% |
+| 4 | 硬规则 | 允许自由编辑 | §3.5 表达式 sandbox 加 + 友好编辑器 |
+| 5 | 评分类禁交易 | 暂定禁止 | §3.4 三层守门保留 |
+| 6 | PR 合并节奏 | 每 PR 验证审查后再合 | §6 每 PR 独立检查点 + 用户确认门 |
+| 7 | **K 线指标叠加（新）** | **所有涉及 K 线的页面都支持开关** | §4.4 + 新增 PR-5 |
 
 ---
 
@@ -61,6 +75,18 @@
 - 期权 / 商品 / 美股扩展
 - 实盘连接交易接口
 
+### 1.3 资金 / 仓位参数（按用户 10 万实盘）
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| 初始资金 | ¥100,000 | 用户实盘量级 |
+| **最大并发仓位** | **4** | 10 万 / 4 = 2.5 万/仓，单股 100 股最低 ≈ 30~50 元 / 股，避免最小手数无法买入 |
+| 单仓权重 | 25% (=1/4) | 等权 |
+| 单笔最低 | 100 股 (1 手) | 自动向下取整 |
+| 现金保留 | 5% | 防极端跌停补仓 |
+
+> V6 跑的是 8 仓 × 12.5% / 100 万。10 万规模下若仍 8 仓，单仓 1.25 万，对 50 元/股的票只能买 2 手 (=1 万)，仓位精度 80%——精度损失大。**改为 4 仓更适合 10 万**。
+
 ---
 
 ## 2. 数据库 Schema 改动
@@ -95,15 +121,15 @@ CREATE TABLE IF NOT EXISTS `cn_stock_custom_indicator` (
 - 沿用现有约定：在 `instock/web/portfolioBacktestHandler.py` 新增 `_ensure_custom_indicator_table()`，在模块加载时调用
 - 不使用 Alembic（项目历史风格），保持一致
 
-### 2.3 内置数据
+### 2.3 内置数据（见名之意命名）
 
 启动时 `_seed_builtin_indicators()` 写入三条记录（如果不存在）：
 
 | indicator_id | name | kind | 来源 |
 |---|---|---|---|
-| `builtin_s12_steady` | 稳健·S12 超跌反弹 | primary_entry | V4-V6 实证 PF 1.81~3.63 |
-| `builtin_s12_t3_aggressive` | 进攻·S12+T3 双信号 | primary_entry | V6 CAGR 26.8% |
-| `builtin_m1_watchlist` | 预警·M1 综合评分 | watchlist_alert | V5 范式守门示例 |
+| `steady_oversold_rebound` | 稳健·超跌反弹（S12 五条硬规则） | primary_entry | V4-V6 实证 PF 1.81~3.63、最佳 Sharpe |
+| `dual_momentum_growth` | 进攻·趋势动量双确认（S12 ∪ T3） | primary_entry | V6 CAGR 26.83% / 总收益 +316% |
+| `score_alert_watchlist` | 预警·综合评分关注清单（M1 七因子） | watchlist_alert | V5 范式守门示例（笔数多、覆盖广，不参与交易）|
 
 ---
 
@@ -151,11 +177,50 @@ class WatchlistTodayHandler(...)             # GET  /instock/api/custom_indicato
 - `kind=watchlist_alert` ⇒ 允许只有 weights，但 UI 上始终标红色 "仅供参考，禁止实盘"
 - 评分类指标的 `direction` 强制 `high`（V5 实证唯一有效改动）
 
-### 3.5 表达式 Sandbox
+### 3.5 表达式 Sandbox（用户可自由编辑）
 
-`hard_rules_engine.py` 使用 `compile(..., mode='eval') + eval(..., {'__builtins__': {}}, safe_locals)`，
-`safe_locals` 只暴露 `d`（DataFrame）+ pandas/numpy 子集。
-**禁止** `import / open / __` 关键字（白名单 AST 节点检查）。
+`hard_rules_engine.py`：
+- AST 白名单：`Compare`/`BoolOp`/`BinOp`/`UnaryOp`/`Subscript`/`Name`/`Constant`/`Attribute`(限于 pandas Series 已知方法 head/tail/rolling/shift/mean/...)
+- 禁止：`Import` / `Call(Name=='__import__'/'exec'/'eval'/'open')` / 任何 dunder 名 (`__xxx__`) / `Lambda`
+- 求值环境：`{'__builtins__': {}}` + `{'d': df, 'np': numpy_safe_subset, 'pd': pandas_safe_subset}`
+- **错误输出友好化**：把 SyntaxError/NameError 翻译成"第 X 行：未知字段 `xxx`，请从右侧字段面板选择"
+
+UI 编辑器（PR-3）配套：
+- 多行 textarea + 行号
+- 右侧"字段面板"列出所有可用列：`d['close']`, `d['ma5']`, `d['rsi14']`, `d['boll_lower']` 等，点击插入
+- "试运行"按钮：选一只股票实时返回触发次数 + 错误信息
+
+### 3.6 动态股票池模块 `instock/core/composite/dynamic_universe.py`
+
+按用户决策 #2，股票池**实时**从 `cn_stock_selection` 取，并把基本面数据作为买卖参考：
+
+```python
+def fetch_universe(top_n=100, min_market_cap_yi=30, max_pe=80,
+                   min_roe=7, max_debt=80, min_profit_yoy=-20):
+    """
+    实时查询 cn_stock_selection (今日快照)，返回基本面综合评分前 N 只代码。
+    评分公式（与 V3 一致）：
+      0.20·rank(ROE) + 0.20·rank(net_profit_3y_cagr)
+    + 0.15·rank(profit_yoy) + 0.15·rank(1-debt_ratio)
+    + 0.15·rank(net_margin) + 0.10·rank(1-PE) + 0.05·rank(1-PB)
+    缓存 1 天（避免每次回测都查 DB）。
+    """
+
+def fundamentals_signal(code, df, snapshot_date):
+    """
+    返回当日的基本面买卖参考分：
+      buy_bias  = 综合评分 > 90分位 (强烈推荐买)
+      sell_bias = 综合评分 < 30分位 OR ROE 同比下滑 > 50%
+                  (基本面恶化，建议止盈/减仓)
+    用法：
+      composite.signal() AND fundamentals_signal(code).buy_bias  -> 进场
+      持仓中 fundamentals_signal(code).sell_bias                 -> 提前平仓
+    """
+```
+
+**集成点**：
+- `risk_simulator.simulate()` 增加可选参数 `fundamentals_check=True`，开启后每个交易日检查 sell_bias 触发提前平仓
+- Web UI 上每个指标编辑页有开关："启用基本面动态过滤"（默认开）
 
 ---
 
@@ -188,6 +253,42 @@ instock/web/static/index.html                        # 加导航菜单项
 
 `portfolioBacktest.html`：策略下拉框旁加按钮「从自定义指标导入」→ 弹窗只列出 `kind=primary_entry` 的项 → 选中后自动生成对应 strategy code。
 
+### 4.4 K 线图通用指标叠加层（用户决策 #7 — 新需求）
+
+**目标**：在所有涉及 K 线图的页面，让用户可以选择把任意自定义指标的"评分曲线 + 买卖信号点"叠加到 K 线图上显示，且可随时关闭。
+
+**涉及的 3 处页面 + 1 个公共组件**：
+
+| 页面 | 文件 | 集成方式 |
+|---|---|---|
+| 单股 K 线指标 | [instock/fontWeb/src/views/indicator/index.vue](../instock/fontWeb/src/views/indicator/index.vue) | 在主图工具栏加"自定义指标"下拉 + "显示信号点"开关 |
+| 模拟盘个股详情 | [instock/fontWeb/src/views/paper-trading/index.vue](../instock/fontWeb/src/views/paper-trading/index.vue) | 同上，挂在 daily/weekly/monthly 三个 tab 上 |
+| 回测详情个股轨迹 | [instock/fontWeb/src/views/algo/backtest-detail.vue](../instock/fontWeb/src/views/algo/backtest-detail.vue) | 同上 |
+| **公共组件 (新)** | `instock/fontWeb/src/components/CustomIndicatorOverlay.vue` | 抽出复用：从 API 拉指标数据 → 转换成 echarts series 配置 → 提供给 3 处页面挂载 |
+
+**新后端 API**：
+
+```
+GET /instock/api/custom_indicator/series?id=<indicator_id>&code=<6位代码>&start=YYYY-MM-DD&end=YYYY-MM-DD&period=daily|weekly|monthly
+
+返回：
+{
+  "indicator_id": "steady_oversold_rebound",
+  "name": "稳健·超跌反弹",
+  "kind": "primary_entry",
+  "score_series": [{"date":"2024-01-02","score":42.3}, ...]   // 评分曲线（仅 watchlist_alert 类型有）
+  "signal_points": [{"date":"2024-01-15","price":12.34,"action":"buy"},
+                    {"date":"2024-02-10","price":13.78,"action":"sell-stop"}, ...]
+}
+```
+
+**UI 行为约定**：
+- 主图工具栏新增第 3 行控件：「叠加自定义指标」select (多选) + 「显示评分曲线」toggle + 「显示信号点」toggle
+- 评分曲线放在副图（与 MACD/KDJ 同级），用 dataZoom 同步
+- 信号点用 scatter 标记直接叠加到主图 (buy=红三角向上 / sell=绿菱形)
+- 当用户选 `watchlist_alert` 类指标时，控件旁出现红色提示「⚠️ 仅供参考」
+- 用户偏好（最近选过哪几个指标 / 是否显示评分）保存在 `localStorage`
+
 ---
 
 ## 5. 测试计划
@@ -219,49 +320,80 @@ def test_hard_rules_blocks_import():
 
 ---
 
-## 6. PR 拆分（每个 PR 独立可合）
+## 6. PR 拆分（每个 PR 独立可合，每个合并前须用户确认）
 
-### PR-1 — 后端核心抽取（无 UI）
+> 用户决策 #6：每个 PR 必须 (a) 全部新单测通过 (b) 全量 325 回归通过 (c) 用户在浏览器/curl 实际验证 (d) 我整理 PR 总结提交审查 → 用户确认无 bug 后才进入下一 PR。
 
-**Scope**：建表迁移 + `instock/core/composite/` 全套模块 + 单元测试 + 三条内置指标 seed
+### PR-1 — 后端核心抽取（无 UI、无 HTTP）
+
+**Scope**：建表迁移 + `instock/core/composite/` 全套模块 + `dynamic_universe.py` + 单元测试 + 三条内置指标 seed
 **预计变更**：~1500 行新代码 + ~50 个测试
-**完成后可独立运行**：`pytest tests/test_composite_*.py` 全绿；REST API 用 curl 验证
+**完成后可独立运行**：`pytest tests/test_composite_*.py` 全绿；MySQL 中可见 `cn_stock_custom_indicator` 表 + 3 条 seed 记录；脚本 `python -c "from instock.core.composite.dynamic_universe import fetch_universe; print(len(fetch_universe()))"` 返回 ≥ 80
+**用户验证清单**：
+- [ ] DB 中查 `SELECT indicator_id, name, kind FROM cn_stock_custom_indicator;` 看到 3 行
+- [ ] 跑 `python _verify_pr1_smoke.py` (我会随 PR 提供) 输出 OK
+- [ ] `pytest -q` 全绿（含历史 325 + 新 50 ≈ 375 个）
 
-### PR-2 — Web Handler + REST API
+### PR-2 — Web Handler + REST API（共 7 个端点）
 
-**Scope**：`customIndicatorHandler.py` + 路由 + handler 单元测试
+**Scope**：`customIndicatorHandler.py` + 7 路由 + handler 单元测试
+**新增 API**：5 个 CRUD/回测 (§3.2) + `watchlist_today` + **`/series` (用于 PR-5 K 线叠加)**
 **依赖**：PR-1 已合并
-**预计变更**：~600 行
-**完成后可独立运行**：所有 6 个 API 用 curl 通过；UI 暂未对接
+**预计变更**：~700 行
+**用户验证清单**：
+- [ ] `_verify_pr2_curl.sh` 提供，逐个 API 用 curl 跑通
+- [ ] 范式守门：尝试用 kind=watchlist_alert 提交带 hard_rules 的请求 → 返回 400 + 友好错误
+- [ ] sandbox 安全测试：尝试 hard_rules=`__import__('os').system('echo pwn')` → 返回 400
 
 ### PR-3 — 前端编辑器 + 内置预设浏览
 
-**Scope**：`customIndicator.html` 三页面 + 导航菜单
+**Scope**：`customIndicator.vue` 主页面 + 字段面板 + 试运行 + 单股回测预览 + 红色横幅
 **依赖**：PR-2 已合并
-**预计变更**：~800 行 Vue + CSS
-**完成后可独立运行**：UI 上完成 CRUD + 单股回测预览
+**预计变更**：~800 行 Vue 3 + Element Plus
+**用户验证清单**：
+- [ ] 浏览器打开 /customIndicator，能看见 3 条内置预设
+- [ ] 复制内置 `steady_oversold_rebound` → 改名 → 改两条规则 → 保存 → 跑单股回测看到 PF
+- [ ] 切到 watchlist_alert 类型，红色横幅显示
 
 ### PR-4 — 投资组合集成 + 范式守门 UI
 
-**Scope**：`portfolioBacktest.html` 加"导入自定义指标"+ watchlist 红色警告横幅 + watchlist 今日列表页面
+**Scope**：`portfolioBacktest.vue` 加"导入自定义指标"按钮 + watchlist 今日列表页面
 **依赖**：PR-3 已合并
 **预计变更**：~400 行
-**完成后可独立运行**：在投资组合回测页能选中 `builtin_s12_t3_aggressive` 跑出 V6 量级的 CAGR
+**用户验证清单**：
+- [ ] 在投资组合回测页选中 `dual_momentum_growth` 跑 89 股 6 年，CAGR 偏差 < 5%（与 V6 数据 26.83%）
+- [ ] watchlist 页面显示今日触发的股票
+
+### PR-5 — K 线图通用指标叠加层（用户决策 #7）
+
+**Scope**：
+- 新建公共组件 `CustomIndicatorOverlay.vue` (~250 行)
+- 改 [instock/fontWeb/src/views/indicator/index.vue](../instock/fontWeb/src/views/indicator/index.vue) (主图工具栏 + 副图集成 ~80 行)
+- 改 [instock/fontWeb/src/views/paper-trading/index.vue](../instock/fontWeb/src/views/paper-trading/index.vue) (~80 行)
+- 改 [instock/fontWeb/src/views/algo/backtest-detail.vue](../instock/fontWeb/src/views/algo/backtest-detail.vue) (~80 行)
+- 后端 `/series` API 已在 PR-2 提供，本 PR 只接消费
+
+**依赖**：PR-2 (后端 API) + PR-3 (CRUD) 已合并；PR-4 可与本 PR 并行
+**预计变更**：~500 行 Vue
+**用户验证清单**：
+- [ ] 三个页面分别打开 K 线图，能在工具栏看到「叠加自定义指标」下拉
+- [ ] 选中 `steady_oversold_rebound` 显示买卖三角形
+- [ ] 选中 `score_alert_watchlist` 显示评分曲线（副图）+ 红色提示
+- [ ] 关闭叠加时图表恢复原样，无残留 series
 
 ---
 
 ## 7. 时间盒 / 里程碑
 
-> 不给具体时间估算（按 instructions 要求）。但定义检查点：
+> 不给具体时间估算。每个检查点完成后用户确认 → 进入下一 PR。
 
 | 检查点 | 进入条件 |
 |---|---|
-| **CP1** | PR-1 通过本地 pytest 全绿；3 条内置指标在 MySQL 落库 |
-| **CP2** | PR-2 通过 curl 测试 6 个 API；范式守门拒绝错误 kind |
-| **CP3** | PR-3 在浏览器手动操作完成 CRUD + 回测预览；watchlist 红色横幅显示 |
-| **CP4** | PR-4 在投资组合回测页跑通 `builtin_s12_t3_aggressive`，CAGR 偏差 < 5% |
-
-每个检查点完成后用户确认 → 进入下一 PR。
+| **CP1** | PR-1 通过本地 pytest 全绿（375 个）；3 条内置指标在 MySQL 落库；`fetch_universe()` 实时返回 ≥80 只 |
+| **CP2** | PR-2 通过 curl 测试 7 个 API；范式守门拒绝错误 kind；sandbox 拒绝 `__import__` |
+| **CP3** | PR-3 在浏览器手动操作完成 CRUD + 试运行 + 单股回测预览；watchlist 红色横幅显示 |
+| **CP4** | PR-4 在投资组合回测页跑通 `dual_momentum_growth`，CAGR 偏差 < 5% |
+| **CP5** | PR-5 在 3 个 K 线页面成功叠加自定义指标，开关切换无残留 |
 
 ---
 
@@ -291,14 +423,14 @@ def test_hard_rules_blocks_import():
 
 ## 10. 实施前的最后核对项（请用户确认）
 
-请用户确认以下决策点后开始 PR-1：
+请用户在本版基础上做最终签字：
 
-- [ ] **核对 1**：内置预设是否就用 `builtin_s12_steady` / `builtin_s12_t3_aggressive` / `builtin_m1_watchlist` 三个？还是用其他名字？
-- [ ] **核对 2**：股票池是否依然用基本面预筛 89 只 (`_phase9_top100.pkl`)？还是改成动态从 `cn_stock_selection` 实时取 Top 100？
-- [ ] **核对 3**：`max_concurrent` 仓位数是否就 8（V6 实测值）？用户实盘资金量是多少？
-- [ ] **核对 4**：UI 是否需要支持用户编辑硬规则（kind=primary_entry）？还是仅允许查看 + 复制内置？
-- [ ] **核对 5**：是否同意"评分类禁止直接驱动交易"的强约束？这会限制部分用户期望的灵活性
-- [ ] **核对 6**：PR-1~PR-4 是否一次性合并到 `backTest_dev`？还是每个 PR 等用户体验确认？
+- [ ] **核对 1**：内置预设命名 `steady_oversold_rebound` / `dual_momentum_growth` / `score_alert_watchlist` 是否符合"见名之意"？还是要更口语化（如 `稳健抄底版` / `进攻增长版` / `今日关注榜`）？
+- [ ] **核对 2**：动态股票池触发频率 — 是 (a) 每次回测/今日清单刷新都重查 DB，还是 (b) 每天 09:00 定时任务预算并缓存到 `_universe_today.pkl`？方案 b 更快但 09:00 前为空。
+- [ ] **核对 3**：4 仓 × 25% 设定 OK 吗？（10 万规模）若实盘想"试水更轻"我可以默认 3 仓 × 33%。
+- [ ] **核对 4**：基本面恶化提前止盈的阈值 — `综合评分 < 30 分位 OR ROE 同比 < -50%`，是否过严或过松？
+- [ ] **核对 5**：K 线叠加（PR-5）默认显示哪个指标？建议默认不开任何叠加（用户主动选择），避免干扰原视觉。
+- [ ] **核对 6**：5 个 PR 是否按顺序合（PR-1→2→3→4→5）？还是允许 PR-4/PR-5 并行（都依赖 PR-3 已合）？
 
 ---
 
