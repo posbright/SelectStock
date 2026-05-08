@@ -5,6 +5,8 @@ import * as echarts from 'echarts'
 import dayjs from 'dayjs'
 import { getKlineData, type KlineParams } from '@/api/stock'
 import { ElMessage } from 'element-plus'
+import { useCustomIndicatorOverlay } from '@/composables/useCustomIndicatorOverlay'
+import CustomIndicatorOverlayBar from '@/components/CustomIndicatorOverlayBar.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -42,6 +44,11 @@ const subIndicatorOptions = ['MACD', 'KDJ', 'RSI', 'WR', '多空趋势']
 
 // K-line data
 const klineData = ref<any>(null)
+
+// === 自定义指标叠加 (PR-5) ===
+const klineDates = computed<string[]>(() => klineData.value?.dates || [])
+const codeStr = computed(() => code.value || '')
+const ciOverlay = useCustomIndicatorOverlay(codeStr, currentPeriod, klineDates)
 
 // Load K-line data
 const loadKlineData = async () => {
@@ -355,7 +362,34 @@ const renderChart = () => {
 
   // === dataZoom ===
   const zoomStart = getZoomStart(dates.length)
-  const zoomXIndices = hasSub ? [0, 1, 2] : [0, 1]
+  const zoomXIndices: number[] = hasSub ? [0, 1, 2] : [0, 1]
+
+  // === 自定义指标叠加 (PR-5) ===
+  const ext = ciOverlay.extension.value
+  if (ext.mainSignalSeries) {
+    series.push(ext.mainSignalSeries)
+    legendData.push(ext.mainSignalSeries.name)
+  }
+  if (ext.subPanel) {
+    // 当 CI 副图与内置副图同存时，重新分配竖向空间（主图压缩、内置副图上推）
+    if (hasSub) {
+      grids[0] = { ...grids[0], bottom: '54%' }
+      grids[1] = { ...grids[1], bottom: '44%' }
+      grids[2] = { ...grids[2], bottom: '24%' }
+    } else {
+      grids[0] = { ...grids[0], bottom: '38%' }
+      grids[1] = { ...grids[1], bottom: '28%' }
+    }
+    const ciIdx = grids.length
+    grids.push({ ...ext.subPanel.grid, bottom: '6%', height: '14%' })
+    xAxes.push({ ...ext.subPanel.xAxis, gridIndex: ciIdx })
+    yAxes.push({ ...ext.subPanel.yAxis, gridIndex: ciIdx })
+    for (const s of ext.subPanel.series) {
+      series.push({ ...s, xAxisIndex: ciIdx, yAxisIndex: ciIdx })
+    }
+    legendData.push(...ext.subPanel.legend)
+    zoomXIndices.push(ciIdx)
+  }
 
   const option: echarts.EChartsOption = {
     animation: false,
@@ -398,6 +432,9 @@ const switchPeriod = (p: string) => {
 
 // Re-render chart (no data reload) when overlay or sub-indicator changes
 watch([currentSubIndicator, mainOverlays], () => { renderChart() }, { deep: true })
+
+// PR-5: 自定义指标叠加变化时重渲
+watch(() => ciOverlay.extension.value, () => { renderChart() }, { deep: true })
 
 // Navigate to backtest
 const goBacktest = () => {
@@ -473,6 +510,7 @@ onUnmounted(() => {
             </el-checkbox>
           </el-checkbox-group>
         </div>
+        <CustomIndicatorOverlayBar :state="ciOverlay" />
       </div>
     </div>
 

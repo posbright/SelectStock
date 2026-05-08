@@ -8,11 +8,50 @@
           <el-select v-model="selectedTemplate" placeholder="加载模板策略" @change="loadTemplate" style="width: 200px; margin-right: 12px;">
             <el-option v-for="t in templates" :key="t.id" :label="t.name" :value="t.id" />
           </el-select>
+          <el-button @click="openImportCiDialog" :icon="MagicStick" style="margin-right: 12px;">从自定义指标导入</el-button>
           <el-button type="primary" @click="runBacktest" :loading="running" :icon="CaretRight">运行回测</el-button>
           <el-button @click="saveStrategy" :icon="DocumentAdd">保存策略</el-button>
         </div>
       </div>
     </el-card>
+
+    <!-- 从自定义指标导入对话框 -->
+    <el-dialog v-model="ciDialogVisible" title="从自定义指标导入策略" width="720px" :destroy-on-close="false">
+      <div class="ci-import-hint">
+        <el-icon><InfoFilled /></el-icon>
+        仅展示 <strong>kind=primary_entry</strong> 的指标（评分预警类不可驱动交易）。
+        选中后将生成包含硬规则与风控参数的策略代码骨架。
+      </div>
+      <el-table :data="ciList" v-loading="ciLoading" size="small" highlight-current-row
+                @row-click="onCiRowClick" :row-class-name="ciRowClass" max-height="420">
+        <el-table-column label="名称" min-width="200">
+          <template #default="{ row }">
+            <div>
+              <div style="font-weight: 500;">{{ row.name }}</div>
+              <div style="color:#909399; font-size: 12px; font-family: Consolas, monospace;">
+                {{ row.indicator_id }}
+              </div>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="说明" min-width="240">
+          <template #default="{ row }">
+            <span style="color:#606266; font-size: 12px;">{{ row.description || '-' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="" width="60" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.is_builtin === 1" size="small" type="info" effect="dark">内置</el-tag>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="ciDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="confirmImportCi" :disabled="!ciSelected" :loading="ciImporting">
+          导入选中指标
+        </el-button>
+      </template>
+    </el-dialog>
 
     <el-row :gutter="16" class="main-content">
       <!-- 左侧：策略编辑器 -->
@@ -159,8 +198,10 @@
 <script setup lang="ts">
 import { ref, onMounted, nextTick, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
-import { CaretRight, DocumentAdd, Loading } from '@element-plus/icons-vue'
+import { CaretRight, DocumentAdd, Loading, MagicStick, InfoFilled } from '@element-plus/icons-vue'
 import { getStrategyTemplates, getStrategyCodeList, startPortfolioBacktest, getBacktestTaskResult, saveStrategyCode } from '@/api/stock'
+import { listIndicators, getIndicator,
+  type IndicatorListItem, type IndicatorRecord } from '@/api/customIndicator'
 import * as echarts from 'echarts'
 
 interface LogLine { type: 'log' | 'error' | 'warn'; msg: string }
@@ -243,6 +284,126 @@ function loadTemplate(templateId: string) {
     strategyName.value = t.name
     savedStrategyId.value = null
     ElMessage.success(`已加载模板: ${t.name}`)
+  }
+}
+
+// ===================== 从自定义指标导入 =====================
+const ciDialogVisible = ref(false)
+const ciList = ref<IndicatorListItem[]>([])
+const ciLoading = ref(false)
+const ciSelected = ref<string>('')
+const ciImporting = ref(false)
+
+const ciRowClass = ({ row }: { row: IndicatorListItem }) =>
+  row.indicator_id === ciSelected.value ? 'ci-row-active' : ''
+
+const onCiRowClick = (row: IndicatorListItem) => {
+  ciSelected.value = row.indicator_id
+}
+
+async function openImportCiDialog() {
+  ciDialogVisible.value = true
+  ciSelected.value = ''
+  ciLoading.value = true
+  try {
+    ciList.value = await listIndicators('primary_entry')
+  } catch (e) {
+    ciList.value = []
+  } finally {
+    ciLoading.value = false
+  }
+}
+
+function buildStrategyFromIndicator(rec: IndicatorRecord): string {
+  const rp = rec.risk_profile || {}
+  const stop = Number(rp.stop ?? -0.08)
+  const target = Number(rp.target ?? 0.20)
+  const maxHold = Number(rp.max_hold ?? 30)
+  const hardRules = (rec.hard_rules || '').trim() || '# (未配置硬规则)'
+  const extraFilter = (rec.extra_filter || '').trim()
+  const desc = (rec.description || '').replace(/\r?\n/g, ' ')
+
+  const headerLines = [
+    '# ============================================================',
+    `# 自定义指标: ${rec.name}  (${rec.indicator_id})`,
+    '# 类型: 主信号 (primary_entry)',
+    `# 说明: ${desc || '-'}`,
+    '#',
+    '# 硬规则 (hard_rules):',
+    ...hardRules.split(/\r?\n/).map(l => '#   ' + l),
+  ]
+  if (extraFilter) {
+    headerLines.push('# 附加过滤 (extra_filter):')
+    extraFilter.split(/\r?\n/).forEach(l => headerLines.push('#   ' + l))
+  }
+  headerLines.push(
+    '#',
+    `# 风控: 止损=${stop}  止盈=${target}  最长持有=${maxHold} 个交易日`,
+    '#',
+    '# ⚠️ 以下骨架仅作起点；具体指标列(rsi/ma/boll 等)需要根据 hard_rules',
+    '#    在 handle_data 中用 attribute_history 取数后自行计算。',
+    '# ============================================================',
+    '',
+  )
+
+  const body = `def initialize(context):
+    # TODO: 配置股票池（默认平安银行）
+    context.security = '000001'
+    # 风控参数（来自指标 risk_profile）
+    context.stop_loss = ${stop}
+    context.take_profit = ${target}
+    context.max_hold_days = ${maxHold}
+    # 持仓状态：记录买入日 + 买入价
+    context.entry = {}
+
+
+def handle_data(context, data):
+    code = context.security
+    bar = data[code]
+    if bar is None or bar.close <= 0:
+        return
+    price = bar.close
+
+    # ===== 止损/止盈/最长持有 出场判断 =====
+    if code in context.portfolio.positions and code in context.entry:
+        entry_px = context.entry[code]['px']
+        held_days = context.entry[code]['days']
+        ret = (price - entry_px) / entry_px
+        context.entry[code]['days'] = held_days + 1
+        if ret <= context.stop_loss or ret >= context.take_profit or held_days >= context.max_hold_days:
+            order_target(code, 0)
+            context.entry.pop(code, None)
+            return
+
+    # ===== 入场信号 (基于硬规则)，需自行实现 =====
+    # 示例：取最近 60 日 K 线，计算所需指标，套用 hard_rules：
+    #   hist = attribute_history(code, 60, '1d', ['close','high','low','volume'])
+    #   close = hist['close']
+    #   ma5 = close.rolling(5).mean()
+    #   ma20 = close.rolling(20).mean()
+    #   rsi14 = ...
+    #   sig = (${hardRules.split(/\r?\n/)[0].slice(0, 80)})
+    #   if bool(sig.iloc[-1]) and code not in context.portfolio.positions:
+    #       order_value(code, context.portfolio.available_cash * 0.95)
+    #       context.entry[code] = {'px': price, 'days': 0}
+    pass
+`
+  return headerLines.join('\n') + body
+}
+
+async function confirmImportCi() {
+  if (!ciSelected.value) return
+  ciImporting.value = true
+  try {
+    const rec = await getIndicator(ciSelected.value)
+    strategyCode.value = buildStrategyFromIndicator(rec)
+    strategyName.value = `${rec.name} (导入)`
+    selectedTemplate.value = ''
+    savedStrategyId.value = null
+    ciDialogVisible.value = false
+    ElMessage.success(`已导入指标 ${rec.name}，请补全 handle_data 中的指标计算`)
+  } finally {
+    ciImporting.value = false
   }
 }
 
@@ -461,6 +622,19 @@ window.addEventListener('resize', () => navChart?.resize())
 .portfolio-backtest {
   padding: 16px;
 }
+.ci-import-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: #ecf5ff;
+  border: 1px solid #d9ecff;
+  border-radius: 4px;
+  margin-bottom: 12px;
+  color: #409eff;
+  font-size: 13px;
+}
+:deep(.ci-row-active) { background-color: #ecf5ff !important; }
 .top-bar {
   margin-bottom: 16px;
 }
