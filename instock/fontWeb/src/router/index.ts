@@ -351,6 +351,20 @@ const routes: RouteRecordRaw[] = [
       }
     ]
   },
+  {
+    path: '/custom-indicator',
+    component: Layout,
+    redirect: '/custom-indicator/editor',
+    meta: { title: '自定义指标', icon: 'MagicStick' },
+    children: [
+      {
+        path: 'editor',
+        name: 'CustomIndicatorEditor',
+        component: () => import('@/views/customIndicator/index.vue'),
+        meta: { title: '指标编辑器', icon: 'EditPen' }
+      }
+    ]
+  },
   // 兼容旧版 /stock/ 前缀路径：自动去掉前缀并重定向到正确路由
   // 例如 /stock/selection → /selection, /stock/basic/spot → /basic/spot
   {
