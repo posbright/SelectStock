@@ -47,6 +47,7 @@ import instock.web.notificationConfigHandler as notificationConfigHandler
 import instock.web.aiDecisionConfigHandler as aiDecisionConfigHandler
 import instock.web.imCommandHandler as imCommandHandler
 import instock.web.liveTradingHandler as liveTradingHandler
+import instock.web.customIndicatorHandler as customIndicatorHandler
 import instock.web.base as webBase
 
 __author__ = 'InStock'
@@ -155,6 +156,14 @@ class Application(tornado.web.Application):
             (r"/instock/api/live/execute_pending", liveTradingHandler.ExecutePendingCommandsHandler),
             (r"/instock/api/paper/compare", paperTradingHandler.GetPaperCompareHandler),
             (r"/instock/api/paper/delete", paperTradingHandler.DeletePaperTradingHandler),
+            # Phase 9: 自定义综合指标 CRUD + 回测 + 关注榜 + K 线叠加序列
+            (r"/instock/api/custom_indicator/list", customIndicatorHandler.ListCustomIndicatorHandler),
+            (r"/instock/api/custom_indicator/detail", customIndicatorHandler.GetCustomIndicatorHandler),
+            (r"/instock/api/custom_indicator/save", customIndicatorHandler.SaveCustomIndicatorHandler),
+            (r"/instock/api/custom_indicator/delete", customIndicatorHandler.DeleteCustomIndicatorHandler),
+            (r"/instock/api/custom_indicator/backtest", customIndicatorHandler.BacktestCustomIndicatorHandler),
+            (r"/instock/api/custom_indicator/watchlist", customIndicatorHandler.WatchlistTodayHandler),
+            (r"/instock/api/custom_indicator/series", customIndicatorHandler.IndicatorSeriesHandler),
             # ── Vue SPA 路由 ──
             # 静态资源（assets/）
             (r"/assets/(.*)", tornado.web.StaticFileHandler, {"path": os.path.join(static_path, "assets")}),
@@ -230,6 +239,12 @@ def main():
     print(f"服务已启动，web地址 : http://localhost:{port}/")  # 控制台通知运维人员
 
     threading.Thread(target=_sync_strategy_templates_in_background, name="strategy-template-sync", daemon=True).start()
+
+    # Phase 9: 自定义综合指标 — 启动时确保表存在 + seed 内置预设
+    try:
+        customIndicatorHandler.bootstrap()
+    except Exception as e:
+        logging.warning(f"自定义指标 bootstrap 失败（不影响其他功能）: {e}")
 
     # 启动模拟交易自动调度器（每个交易日收盘后自动执行）
     try:
