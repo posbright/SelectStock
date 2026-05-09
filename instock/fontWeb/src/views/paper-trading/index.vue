@@ -545,13 +545,13 @@
 
         <el-tabs v-model="stockActivePeriod" @tab-change="renderActiveStockChart">
           <el-tab-pane label="日K" name="daily">
-            <div ref="stockDailyEl" class="stock-chart-box"></div>
+            <div ref="stockDailyEl" class="stock-chart-box" :class="{ 'has-sub': hasCiSubPanel }"></div>
           </el-tab-pane>
           <el-tab-pane label="周K" name="weekly">
-            <div ref="stockWeeklyEl" class="stock-chart-box"></div>
+            <div ref="stockWeeklyEl" class="stock-chart-box" :class="{ 'has-sub': hasCiSubPanel }"></div>
           </el-tab-pane>
           <el-tab-pane label="月K" name="monthly">
-            <div ref="stockMonthlyEl" class="stock-chart-box"></div>
+            <div ref="stockMonthlyEl" class="stock-chart-box" :class="{ 'has-sub': hasCiSubPanel }"></div>
           </el-tab-pane>
         </el-tabs>
 
@@ -758,7 +758,16 @@ const ciOverlay = useCustomIndicatorOverlay(
   stockActivePeriod as any,
   ciDatesRef as any,
 )
-watch(() => ciOverlay.extension.value, () => { renderActiveStockChart() }, { deep: true })
+const hasCiSubPanel = computed(() => !!ciOverlay.extension.value.subPanel)
+watch(
+  () => ciOverlay.extension.value,
+  async () => {
+    // 等待 :class 切换后容器高度更新（has-sub 增高），再 dispose+init
+    await nextTick()
+    renderActiveStockChart()
+  },
+  { deep: true },
+)
 
 // ── 列可见性（聚宽风格列筛选） ──
 const posColumnDefs = [
@@ -1183,10 +1192,10 @@ function renderStockChart(period: 'daily' | 'weekly' | 'monthly') {
     },
     legend: { data: legendData, top: 2, textStyle: { fontSize: 11 } },
     grid: [
-      { left: 58, right: 38, top: 38, height: ext.subPanel ? 240 : 270 },
-      { left: 58, right: 38, top: ext.subPanel ? 300 : 330, height: 60 },
-      { left: 58, right: 38, top: ext.subPanel ? 380 : 420, height: 60 },
-      ...(ext.subPanel ? [{ left: 58, right: 38, top: 460, height: 60 }] : []),
+      { left: 58, right: 38, top: 38, height: 270 },
+      { left: 58, right: 38, top: 330, height: 60 },
+      { left: 58, right: 38, top: 420, height: 60 },
+      ...(ext.subPanel ? [{ left: 58, right: 38, top: 510, height: 80 }] : []),
     ],
     dataZoom: [
       { type: 'inside', xAxisIndex: ext.subPanel ? [0, 1, 2, 3] : [0, 1, 2], start: range.start, end: range.end },
@@ -1773,6 +1782,7 @@ onUnmounted(() => {
 .toolbar-label { font-size: 12px; color: #606266; font-weight: 600; }
 .toolbar-hint { color: #909399; font-size: 12px; }
 .stock-chart-box { height: 520px; width: 100%; }
+.stock-chart-box.has-sub { height: 640px; }
 .indicator-panel { margin: 12px 0; }
 .panel-title { font-size: 13px; font-weight: 600; color: #303133; margin-bottom: 8px; }
 .stock-trade-table { margin-top: 12px; }

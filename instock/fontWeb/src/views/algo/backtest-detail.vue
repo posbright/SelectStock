@@ -282,13 +282,13 @@
 
         <el-tabs v-model="stockActivePeriod" @tab-change="renderActiveStockChart">
           <el-tab-pane label="日K" name="daily">
-            <div ref="stockDailyEl" class="stock-chart-box"></div>
+            <div ref="stockDailyEl" class="stock-chart-box" :class="{ 'has-sub': hasCiSubPanel }"></div>
           </el-tab-pane>
           <el-tab-pane label="周K" name="weekly">
-            <div ref="stockWeeklyEl" class="stock-chart-box"></div>
+            <div ref="stockWeeklyEl" class="stock-chart-box" :class="{ 'has-sub': hasCiSubPanel }"></div>
           </el-tab-pane>
           <el-tab-pane label="月K" name="monthly">
-            <div ref="stockMonthlyEl" class="stock-chart-box"></div>
+            <div ref="stockMonthlyEl" class="stock-chart-box" :class="{ 'has-sub': hasCiSubPanel }"></div>
           </el-tab-pane>
         </el-tabs>
 
@@ -395,7 +395,15 @@ const ciOverlay = useCustomIndicatorOverlay(
   stockActivePeriod as any,
   ciDatesRef as any,
 )
-watch(() => ciOverlay.extension.value, () => { renderActiveStockChart() }, { deep: true })
+watch(
+  () => ciOverlay.extension.value,
+  async () => {
+    await nextTick()
+    renderActiveStockChart()
+  },
+  { deep: true },
+)
+const hasCiSubPanel = computed(() => !!ciOverlay.extension.value.subPanel)
 
 // ── shortcuts ──
 const N = Number
@@ -1131,10 +1139,10 @@ function renderStockChart(period: 'daily' | 'weekly' | 'monthly') {
     },
     legend: { data: legendData, top: 2, textStyle: { fontSize: 11 } },
     grid: [
-      { left: 58, right: 62, top: 38, height: ext.subPanel ? 240 : 270 },
-      { left: 58, right: 62, top: ext.subPanel ? 300 : 330, height: 60 },
-      { left: 58, right: 62, top: ext.subPanel ? 380 : 420, height: 60 },
-      ...(ext.subPanel ? [{ left: 58, right: 62, top: 460, height: 60 }] : []),
+      { left: 58, right: 62, top: 38, height: 270 },
+      { left: 58, right: 62, top: 330, height: 60 },
+      { left: 58, right: 62, top: 420, height: 60 },
+      ...(ext.subPanel ? [{ left: 58, right: 62, top: 510, height: 80 }] : []),
     ],
     dataZoom: [
       { type: 'inside', xAxisIndex: ext.subPanel ? [0, 1, 2, 3] : [0, 1, 2], start: range.start, end: range.end },
@@ -1369,6 +1377,7 @@ function indicatorSnapshot(period: string, trade: any) {
 .chart-box { width: 100%; height: 380px; }
 .stock-dialog { min-height: 680px; }
 .stock-chart-box { width: 100%; height: 530px; }
+.stock-chart-box.has-sub { height: 650px; }
 .stock-toolbar {
   display: flex;
   align-items: center;
