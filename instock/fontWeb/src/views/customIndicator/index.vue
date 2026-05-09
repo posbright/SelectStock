@@ -269,27 +269,28 @@
                 <div class="bt-metric"><span>交易次数</span><b>{{ btSummary.trades ?? '-' }}</b></div>
                 <div class="bt-metric"><span>胜率</span><b>{{ btSummary['win%'] ?? '-' }}%</b></div>
                 <div class="bt-metric"><span>盈亏比 PF</span><b>{{ btSummary.PF ?? '-' }}</b></div>
-                <div class="bt-metric" v-if="btSummary.CAGR != null"><span>CAGR</span><b>{{ btSummary.CAGR }}%</b></div>
-                <div class="bt-metric" v-if="btSummary.MDD != null"><span>最大回撤</span><b>{{ btSummary.MDD }}%</b></div>
+                <div class="bt-metric"><span>平均收益</span><b>{{ btSummary['avg%'] ?? '-' }}%</b></div>
+                <div class="bt-metric"><span>期望收益</span><b>{{ btSummary['expectancy%'] ?? '-' }}%</b></div>
+                <div class="bt-metric"><span>平均持仓</span><b>{{ btSummary.avg_hold ?? '-' }} 日</b></div>
               </div>
               <el-table :data="btTrades" size="small" max-height="300" stripe>
-                <el-table-column prop="buy_date" label="买入日" width="110" />
-                <el-table-column prop="buy_px" label="买入价" width="80" align="right">
-                  <template #default="{ row }">{{ Number(row.buy_px).toFixed(2) }}</template>
+                <el-table-column prop="entry_date" label="买入日" width="110" />
+                <el-table-column prop="entry_price" label="买入价" width="80" align="right">
+                  <template #default="{ row }">{{ Number(row.entry_price).toFixed(2) }}</template>
                 </el-table-column>
-                <el-table-column prop="sell_date" label="卖出日" width="110" />
-                <el-table-column prop="sell_px" label="卖出价" width="80" align="right">
-                  <template #default="{ row }">{{ Number(row.sell_px).toFixed(2) }}</template>
+                <el-table-column prop="exit_date" label="卖出日" width="110" />
+                <el-table-column prop="exit_price" label="卖出价" width="80" align="right">
+                  <template #default="{ row }">{{ Number(row.exit_price).toFixed(2) }}</template>
                 </el-table-column>
                 <el-table-column prop="hold_days" label="持有(日)" width="80" align="right" />
-                <el-table-column prop="ret" label="收益" width="90" align="right">
+                <el-table-column prop="net_ret_pct" label="收益" width="90" align="right">
                   <template #default="{ row }">
-                    <span :style="{ color: row.ret >= 0 ? '#f56c6c' : '#67c23a', fontWeight: 600 }">
-                      {{ (row.ret * 100).toFixed(2) }}%
+                    <span :style="{ color: row.net_ret_pct >= 0 ? '#f56c6c' : '#67c23a', fontWeight: 600 }">
+                      {{ Number(row.net_ret_pct).toFixed(2) }}%
                     </span>
                   </template>
                 </el-table-column>
-                <el-table-column prop="exit" label="离场原因" />
+                <el-table-column prop="reason" label="离场原因" />
               </el-table>
             </div>
 

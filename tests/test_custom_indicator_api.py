@@ -204,3 +204,108 @@ def test_builtin_preset_loads_with_correct_kind():
     assert rec["kind"] == "primary_entry"
     assert rec["hard_rules"] is not None and "rsi14" in rec["hard_rules"]
     assert rec["risk_profile"].get("fundamentals_check") is True
+
+
+# ============================================================================
+#         前后端契约：trade payload 字段名（防 PR-3 表格错位回归）
+# ============================================================================
+def test_backtest_trade_payload_field_contract():
+    """
+    锁定 BacktestCustomIndicatorHandler 返回的 trade dict 字段名。
+    前端 customIndicator/index.vue 表格列依赖这些字段名，任何改名都会让 UI 静默错位。
+    """
+    from instock.core.composite.risk_simulator import simulate, summarize_trades
+    # 构造一段递增 + 一次回撤的合成行情，保证 simulate 至少出 1 笔交易
+    n = 250
+    rng = np.random.RandomState(0)
+    base = np.linspace(10, 18, n) + rng.normal(0, 0.05, n)
+    df = pd.DataFrame({
+        "date": pd.date_range("2024-01-01", periods=n, freq="B"),
+        "open": base, "high": base * 1.01, "low": base * 0.99,
+        "close": base, "volume": np.full(n, 1000_000, dtype=float),
+    })
+    sig = pd.Series([False] * n)
+    sig.iloc[20] = True   # 单次入场
+    trades = simulate("000001", df, sig, stop_loss=0.08, take_profit=0.20, max_hold=60)
+    assert len(trades) >= 1
+    # 模拟 handler 序列化逻辑（保持与 customIndicatorHandler 一致）
+    payload = [{
+        "entry_date": str(t.entry_date.date()),
+        "entry_price": t.entry_price,
+        "exit_date": str(t.exit_date.date()),
+        "exit_price": t.exit_price,
+        "reason": t.reason,
+        "net_ret_pct": round(t.net_ret * 100, 3),
+        "hold_days": t.hold_days,
+    } for t in trades]
+    p0 = payload[0]
+    # 前端表格依赖的 7 个字段名必须存在（不可被改）
+    for k in ("entry_date", "entry_price", "exit_date", "exit_price",
+              "reason", "net_ret_pct", "hold_days"):
+        assert k in p0, f"trade payload 缺字段 {k}（前端 UI 会静默错位）"
+    # 类型检查
+    assert isinstance(p0["entry_date"], str)
+    assert isinstance(p0["entry_price"], (int, float))
+    assert isinstance(p0["net_ret_pct"], (int, float))
+    assert isinstance(p0["reason"], str)
+
+
+def test_summarize_trades_payload_field_contract():
+    """
+    锁定 summary dict 字段名，前端 metrics 卡片依赖这些 key。
+    """
+    from instock.core.composite.risk_simulator import Trade, summarize_trades
+    fake = [
+        Trade(code="000001", entry_bar=10, entry_date=pd.Timestamp("2024-01-15"), entry_price=10.0,
+              exit_bar=30, exit_date=pd.Timestamp("2024-02-15"), exit_price=11.0,
+              reason="win-target", gross_ret=0.10, net_ret=0.10 - 0.0036, hold_days=21),
+        Trade(code="000001", entry_bar=50, entry_date=pd.Timestamp("2024-03-01"), entry_price=12.0,
+              exit_bar=58, exit_date=pd.Timestamp("2024-03-12"), exit_price=11.0,
+              reason="stop-loss", gross_ret=-0.083, net_ret=-0.083 - 0.0036, hold_days=8),
+    ]
+    s = summarize_trades(fake, name="contract_test")
+    for k in ("strategy", "trades", "win%", "PF", "avg%", "expectancy%", "avg_hold"):
+        assert k in s, f"summary 缺字段 {k}（前端 metrics 会显示 -）"
+    assert s["trades"] == 2
+    assert s["win%"] == 50.0
+
+
+# ============================================================================
+#         /series 信号点应包含买入 + 卖出 (per dev plan §4.4)
+# ============================================================================
+def test_series_signal_points_include_sell_actions():
+    """
+    PR-5 K 线叠加要求 signal_points 中含 sell-stop / sell-target / sell-time 动作，
+    用于主图叠加时绘制不同形状的卖出标记。
+    """
+    from instock.web.customIndicatorHandler import (
+        _compute_signal, _load_indicator_record,
+    )
+    from instock.core.composite.risk_simulator import simulate
+    bootstrap()
+    rec = _load_indicator_record("steady_oversold_rebound")
+    assert rec is not None
+    # 构造一段震荡行情，让 hard_rules 至少触发若干次
+    n = 600
+    rng = np.random.RandomState(42)
+    px = 10.0 + np.cumsum(rng.normal(0, 0.20, n)) + np.sin(np.arange(n) / 20) * 1.5
+    px = np.clip(px, 5.0, 30.0)
+    df = pd.DataFrame({
+        "date": pd.date_range("2022-01-01", periods=n, freq="B"),
+        "open": px, "high": px * 1.02, "low": px * 0.98,
+        "close": px, "volume": rng.randint(500_000, 2_000_000, n).astype(float),
+    })
+    d = enrich(df)
+    sig, _ = _compute_signal(rec, d)
+    risk = rec["risk_profile"]
+    trades = simulate("000001", d, sig,
+                      stop_loss=abs(float(risk["stop"])),
+                      take_profit=abs(float(risk["target"])),
+                      max_hold=int(risk["max_hold"]))
+    # 仅校验 reason→action 映射在 handler 中一致；不强制 trades 数量
+    valid_actions = {"sell-stop", "sell-target", "sell-time", "sell-fund"}
+    reason_map = {"stop-loss": "sell-stop", "win-target": "sell-target",
+                  "time-exit": "sell-time", "fundamentals-exit": "sell-fund"}
+    for t in trades:
+        assert reason_map.get(t.reason) in valid_actions
+

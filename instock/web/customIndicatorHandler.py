@@ -674,15 +674,15 @@ class IndicatorSeriesHandler(webBase.BaseHandler, ABC):
                     ensure_ascii=False))
                 return
             # 切片
-            mask = pd.Series([True] * len(d))
+            mask = pd.Series([True] * len(d), index=d.index)
             if start:
                 mask &= d["date"] >= pd.Timestamp(start)
             if end:
                 mask &= d["date"] <= pd.Timestamp(end)
             d = d[mask].reset_index(drop=True)
-            sig = sig[mask].reset_index(drop=True)
+            sig = sig[mask.values].reset_index(drop=True)
             if score is not None:
-                score = score[mask].reset_index(drop=True)
+                score = score[mask.values].reset_index(drop=True)
 
             score_series = []
             if score is not None:
@@ -693,6 +693,7 @@ class IndicatorSeriesHandler(webBase.BaseHandler, ABC):
                             "score": round(float(v), 3),
                         })
 
+            # 买入信号点 + 风控模拟出场点（per dev plan §4.4 sell-stop / sell-target / sell-time）
             signal_points = []
             for i in range(len(d)):
                 if bool(sig.iloc[i]):
@@ -701,6 +702,29 @@ class IndicatorSeriesHandler(webBase.BaseHandler, ABC):
                         "price": round(float(d["close"].iloc[i]), 4),
                         "action": "buy",
                     })
+
+            risk = rec.get("risk_profile") or {}
+            try:
+                trades = simulate(
+                    code, d, sig,
+                    stop_loss=abs(float(risk.get("stop") or -0.08)),
+                    take_profit=abs(float(risk.get("target") or 0.20)),
+                    max_hold=int(risk.get("max_hold") or 60),
+                )
+                _reason_to_action = {
+                    "stop-loss": "sell-stop",
+                    "win-target": "sell-target",
+                    "time-exit": "sell-time",
+                    "fundamentals-exit": "sell-fund",
+                }
+                for t in trades:
+                    signal_points.append({
+                        "date": str(t.exit_date.date()),
+                        "price": round(float(t.exit_price), 4),
+                        "action": _reason_to_action.get(t.reason, "sell"),
+                    })
+            except Exception as _e:
+                logging.debug(f"IndicatorSeries simulate skipped: {_e}")
 
             self.write(json.dumps({
                 "code": 0,

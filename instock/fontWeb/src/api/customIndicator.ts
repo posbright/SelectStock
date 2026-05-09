@@ -47,20 +47,26 @@ export interface BacktestSummary {
   strategy?: string
   trades?: number
   'win%'?: number
-  PF?: number
-  CAGR?: number
-  MDD?: number
+  'avg%'?: number
+  'med%'?: number
+  'expectancy%'?: number
+  PF?: number | null
+  avg_hold?: number
+  'stop%'?: number
+  'tp%'?: number
+  'time%'?: number
+  'fund%'?: number
   [k: string]: any
 }
 
 export interface BacktestTrade {
-  buy_date: string
-  buy_px: number
-  sell_date: string
-  sell_px: number
-  ret: number
+  entry_date: string
+  entry_price: number
+  exit_date: string
+  exit_price: number
+  reason: string
+  net_ret_pct: number
   hold_days: number
-  exit?: string
 }
 
 export interface BacktestResult {
@@ -97,7 +103,9 @@ export interface WatchlistItem {
 
 export interface WatchlistResult {
   indicator_id: string
-  warning?: string
+  name?: string
+  kind?: IndicatorKind
+  warning?: string | null
   items: WatchlistItem[]
 }
 

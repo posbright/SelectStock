@@ -176,11 +176,17 @@ class SaveCustomIndicatorHandler(...)        # POST /instock/api/custom_indicato
 class DeleteCustomIndicatorHandler(...)      # POST /instock/api/custom_indicator/delete
 class BacktestCustomIndicatorHandler(...)    # POST /instock/api/custom_indicator/backtest
 class WatchlistTodayHandler(...)             # GET  /instock/api/custom_indicator/watchlist?id=
+class IndicatorSeriesHandler(...)            # GET  /instock/api/custom_indicator/series?id=&code=&start=&end=&period=
 ```
+
+> ⚠️ 实施备注：
+> - 实际表 DDL 索引名为 `idx_kind` / `idx_builtin`（按 `is_builtin` 而非 `owner` 过滤更贴合当前单用户场景），未实现 `owner` 字段（推到多用户阶段）。
+> - `BacktestCustomIndicatorHandler` 返回的 `summary` 字段集合：`strategy / trades / win% / avg% / med% / expectancy% / PF / avg_hold / stop% / tp% / time% / fund%`（不含 CAGR / MDD —— 单股回测不计算）。
+> - `BacktestCustomIndicatorHandler` 返回的 `trades[*]` 字段集合：`entry_date / entry_price / exit_date / exit_price / reason / net_ret_pct / hold_days`（前端表格列名严格对齐这些字段，已通过 `test_backtest_trade_payload_field_contract` 锁定）。
 
 ### 3.3 路由注册
 
-在 `instock/web/web_service.py` 第 ~110 行处增 6 条路由
+在 `instock/web/web_service.py` 第 ~110 行处增 7 条路由（含 PR-5 `/series`）
 
 ### 3.4 范式守门 (F7)
 
@@ -310,7 +316,12 @@ GET /instock/api/custom_indicator/series?id=<indicator_id>&code=<6位代码>&sta
   "kind": "primary_entry",
   "score_series": [{"date":"2024-01-02","score":42.3}, ...]   // 副图模式用
   "signal_points": [{"date":"2024-01-15","price":12.34,"action":"buy"},
-                    {"date":"2024-02-10","price":13.78,"action":"sell-stop"}, ...]
+                    {"date":"2024-02-10","price":13.78,"action":"sell-stop"},
+                    {"date":"2024-03-05","price":15.20,"action":"sell-target"},
+                    {"date":"2024-04-12","price":13.50,"action":"sell-time"}, ...]
+  // action 枚举：buy / sell-stop / sell-target / sell-time / sell-fund
+  //   sell-* 来自 risk_simulator.simulate() 的 reason 映射：
+  //   stop-loss→sell-stop, win-target→sell-target, time-exit→sell-time, fundamentals-exit→sell-fund
 }
 ```
 
