@@ -179,8 +179,34 @@ export function useCustomIndicatorOverlay(
         const idx = dateIndex[s.date]
         if (idx != null) arr[idx] = s.score
       }
+      // 检测是否为 0/100 二值序列（纯 hard_rules 指标无连续评分时后端的退化模式）
+      const nonNull = arr.filter((v): v is number => v != null)
+      const isBinary = nonNull.length > 0 &&
+        nonNull.every(v => v === 0 || v === 100)
       const ciName = seriesData.value.name || '自定义指标'
-      const seriesName = `${ciName}-评分`
+      const seriesName = isBinary
+        ? `${ciName}-触发窗口`
+        : `${ciName}-评分`
+      const mainSeries: any = isBinary
+        ? {
+            // 二值模式：用柱状图，仅在命中日绘制 100 高度的红柱（更显眼）
+            name: seriesName,
+            type: 'bar',
+            data: arr.map(v => v === 100 ? 100 : null),
+            barMaxWidth: 6,
+            itemStyle: { color: '#722ed1' },
+            tooltip: { formatter: (p: any) => p.value != null ? `${p.name}: 触发` : '' },
+          }
+        : {
+            name: seriesName,
+            type: 'line',
+            data: arr,
+            connectNulls: true,
+            smooth: true,
+            symbol: 'none',
+            lineStyle: { width: 1.5, color: '#722ed1' },
+            areaStyle: { color: 'rgba(114, 46, 209, 0.08)' },
+          }
       subPanel = {
         grid: { left: '8%', right: '3%', height: subHeight, bottom: subBottom },
         xAxis: {
@@ -194,16 +220,7 @@ export function useCustomIndicatorOverlay(
           splitLine: { lineStyle: { color: '#f5f5f5' } },
           min: 0, max: 100,
         },
-        series: [{
-          name: seriesName,
-          type: 'line',
-          data: arr,
-          connectNulls: true,
-          smooth: true,
-          symbol: 'none',
-          lineStyle: { width: 1.5, color: '#722ed1' },
-          areaStyle: { color: 'rgba(114, 46, 209, 0.08)' },
-        }],
+        series: [mainSeries],
         legend: [seriesName],
       }
     }

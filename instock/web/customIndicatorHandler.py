@@ -684,6 +684,8 @@ class IndicatorSeriesHandler(webBase.BaseHandler, ABC):
             if score is not None:
                 score = score[mask.values].reset_index(drop=True)
 
+            # score 优先用 weights composite；纯 hard_rules 指标无连续评分，
+            # 退化为 0/100 二值序列以便副图展示"信号触发窗口"
             score_series = []
             if score is not None:
                 for dt, v in zip(d["date"], score):
@@ -692,6 +694,12 @@ class IndicatorSeriesHandler(webBase.BaseHandler, ABC):
                             "date": str(pd.Timestamp(dt).date()),
                             "score": round(float(v), 3),
                         })
+            else:
+                for dt, hit in zip(d["date"], sig):
+                    score_series.append({
+                        "date": str(pd.Timestamp(dt).date()),
+                        "score": 100.0 if bool(hit) else 0.0,
+                    })
 
             # 买入信号点 + 风控模拟出场点（per dev plan §4.4 sell-stop / sell-target / sell-time）
             signal_points = []
