@@ -179,76 +179,118 @@ export function useCustomIndicatorOverlay(
         const idx = dateIndex[s.date]
         if (idx != null) arr[idx] = s.score
       }
-      // 检测是否为 0/100 二值序列（纯 hard_rules 指标无连续评分时后端的退化模式）
-      const nonNull = arr.filter((v): v is number => v != null)
-      const isBinary = nonNull.length > 0 &&
-        nonNull.every(v => v === 0 || v === 100)
       const ciName = seriesData.value.name || '自定义指标'
-      const seriesName = isBinary
-        ? `${ciName}-触发窗口`
-        : `${ciName}-评分`
 
-      // 主曲线：连续评分用平滑曲线 + 半透明面积；二值序列用 step 折线（清晰呈现触发窗口、与 K 线起止一致）
-      const lineSeries: any = {
-        name: seriesName,
-        type: 'line',
-        data: arr,
-        connectNulls: true,
-        symbol: 'none',
-        z: 5,
-        ...(isBinary
-          ? {
-              step: 'middle',
-              smooth: false,
-              lineStyle: { width: 1.6, color: '#722ed1' },
-              areaStyle: { color: 'rgba(114, 46, 209, 0.18)', origin: 'start' },
-            }
-          : {
-              smooth: true,
-              lineStyle: { width: 1.5, color: '#722ed1' },
-              areaStyle: { color: 'rgba(114, 46, 209, 0.08)' },
-            }),
+      // 双线趋势：基于评分序列计算快/慢 EMA，金叉/死叉作为衍生买卖信号
+      const fastN = 5
+      const slowN = 20
+      const ema = (period: number): (number | null)[] => {
+        const k = 2 / (period + 1)
+        const out: (number | null)[] = new Array(arr.length).fill(null)
+        let prev: number | null = null
+        for (let i = 0; i < arr.length; i++) {
+          const v = arr[i]
+          if (v == null) { out[i] = prev; continue }
+          prev = prev == null ? v : (v * k + prev * (1 - k))
+          out[i] = prev
+        }
+        return out
+      }
+      const fast = ema(fastN)
+      const slow = ema(slowN)
+
+      // 计算金叉 / 死叉点（fast 由下穿上 = 金叉买；fast 由上穿下 = 死叉卖）
+      const goldenCross: any[] = []
+      const deadCross: any[] = []
+      for (let i = 1; i < dates.length; i++) {
+        const f0 = fast[i - 1], f1 = fast[i], s0 = slow[i - 1], s1 = slow[i]
+        if (f0 == null || f1 == null || s0 == null || s1 == null) continue
+        if (f0 <= s0 && f1 > s1) {
+          goldenCross.push({ value: [dates[i], f1], name: '金叉' })
+        } else if (f0 >= s0 && f1 < s1) {
+          deadCross.push({ value: [dates[i], f1], name: '死叉' })
+        }
       }
 
-      // 在副图上叠加买卖点散点（与主图同步），位置使用对应日期的评分值，
-      // 没有评分时退化到固定 y（80 买 / 20 卖），symbol 偏移避免遮盖曲线
-      const buyMarks: any[] = []
-      const sellMarks: any[] = []
+      // 后端 signal_points（策略真实买卖点）作为可选叠加，颜色更深以区分
+      const stratBuy: any[] = []
+      const stratSell: any[] = []
       for (const p of (seriesData.value.signal_points || []) as SignalPoint[]) {
         const idx = dateIndex[p.date]
         if (idx == null) continue
         const act = (p.action || '').toLowerCase()
-        const isSell = act.startsWith('sell')
-        const yVal = arr[idx] ?? (isSell ? 20 : 80)
+        const yVal = arr[idx] ?? (act.startsWith('sell') ? 25 : 75)
         const point = { value: [p.date, yVal], name: p.action }
-        if (isSell) sellMarks.push(point)
-        else buyMarks.push(point)
+        if (act.startsWith('sell')) stratSell.push(point)
+        else stratBuy.push(point)
       }
-      const subSeries: any[] = [lineSeries]
-      if (buyMarks.length) {
+
+      const fastName = `${ciName}-快线(EMA${fastN})`
+      const slowName = `${ciName}-慢线(EMA${slowN})`
+      const subSeries: any[] = [
+        {
+          name: fastName,
+          type: 'line',
+          data: fast,
+          connectNulls: true,
+          smooth: true,
+          symbol: 'none',
+          z: 6,
+          lineStyle: { width: 1.6, color: '#ec0000' },
+        },
+        {
+          name: slowName,
+          type: 'line',
+          data: slow,
+          connectNulls: true,
+          smooth: true,
+          symbol: 'none',
+          z: 5,
+          lineStyle: { width: 1.6, color: '#409eff' },
+        },
+      ]
+      if (goldenCross.length) {
         subSeries.push({
-          name: `${seriesName}-买入`,
+          name: '金叉',
           type: 'scatter',
-          data: buyMarks,
-          symbol: 'triangle',
-          symbolSize: 9,
-          symbolOffset: [0, -10],
-          itemStyle: { color: '#ec0000', borderColor: '#fff', borderWidth: 1 },
+          data: goldenCross,
+          symbol: 'circle', symbolSize: 8, symbolOffset: [0, -10],
+          itemStyle: { color: '#fff', borderColor: '#ec0000', borderWidth: 2 },
           z: 20,
-          tooltip: { formatter: (p: any) => `${p.data.name}<br/>${p.data.value[0]}<br/>评分: ${p.data.value[1]}` },
+          tooltip: { formatter: (p: any) => `金叉<br/>${p.data.value[0]}<br/>快线: ${Number(p.data.value[1]).toFixed(2)}` },
         })
       }
-      if (sellMarks.length) {
+      if (deadCross.length) {
         subSeries.push({
-          name: `${seriesName}-卖出`,
+          name: '死叉',
           type: 'scatter',
-          data: sellMarks,
-          symbol: 'diamond',
-          symbolSize: 9,
-          symbolOffset: [0, 10],
-          itemStyle: { color: '#00da3c', borderColor: '#fff', borderWidth: 1 },
+          data: deadCross,
+          symbol: 'circle', symbolSize: 8, symbolOffset: [0, 10],
+          itemStyle: { color: '#fff', borderColor: '#00da3c', borderWidth: 2 },
           z: 20,
-          tooltip: { formatter: (p: any) => `${p.data.name}<br/>${p.data.value[0]}<br/>评分: ${p.data.value[1]}` },
+          tooltip: { formatter: (p: any) => `死叉<br/>${p.data.value[0]}<br/>快线: ${Number(p.data.value[1]).toFixed(2)}` },
+        })
+      }
+      if (stratBuy.length) {
+        subSeries.push({
+          name: '策略-买',
+          type: 'scatter',
+          data: stratBuy,
+          symbol: 'triangle', symbolSize: 10, symbolOffset: [0, -16],
+          itemStyle: { color: '#ec0000', borderColor: '#fff', borderWidth: 1 },
+          z: 21,
+          tooltip: { formatter: (p: any) => `${p.data.name}<br/>${p.data.value[0]}` },
+        })
+      }
+      if (stratSell.length) {
+        subSeries.push({
+          name: '策略-卖',
+          type: 'scatter',
+          data: stratSell,
+          symbol: 'diamond', symbolSize: 10, symbolOffset: [0, 16],
+          itemStyle: { color: '#00da3c', borderColor: '#fff', borderWidth: 1 },
+          z: 21,
+          tooltip: { formatter: (p: any) => `${p.data.name}<br/>${p.data.value[0]}` },
         })
       }
 
@@ -267,7 +309,7 @@ export function useCustomIndicatorOverlay(
           min: 0, max: 100,
         },
         series: subSeries,
-        legend: [seriesName],
+        legend: [fastName, slowName],
       }
     }
 

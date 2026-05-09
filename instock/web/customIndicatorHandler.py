@@ -656,7 +656,22 @@ class IndicatorSeriesHandler(webBase.BaseHandler, ABC):
                 self.write(json.dumps({"code": -1, "msg": "指标不存在"},
                                       ensure_ascii=False))
                 return
-            df = _load_hist_df(code)
+            # 根据 start 参数自适应回溯年限，确保覆盖前端 K 线起始位置
+            # （否则默认 5 年加载会让长上市股票（如 300059 自 2010 上市）
+            #  的副图曲线只从 ~5 年前开始）
+            years = 5
+            if start:
+                try:
+                    yrs_needed = max(
+                        1,
+                        int((datetime.datetime.now()
+                             - datetime.datetime.strptime(start[:10], "%Y-%m-%d")
+                             ).days / 365) + 1,
+                    )
+                    years = max(years, yrs_needed)
+                except Exception:
+                    pass
+            df = _load_hist_df(code, years=years)
             if df is None:
                 self.write(json.dumps(
                     {"code": -1, "msg": f"无 K 线数据：{code}"},
