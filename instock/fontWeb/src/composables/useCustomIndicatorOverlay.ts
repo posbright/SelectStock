@@ -187,40 +187,86 @@ export function useCustomIndicatorOverlay(
       const seriesName = isBinary
         ? `${ciName}-触发窗口`
         : `${ciName}-评分`
-      const mainSeries: any = isBinary
-        ? {
-            // 二值模式：用柱状图，仅在命中日绘制 100 高度的红柱（更显眼）
-            name: seriesName,
-            type: 'bar',
-            data: arr.map(v => v === 100 ? 100 : null),
-            barMaxWidth: 6,
-            itemStyle: { color: '#722ed1' },
-            tooltip: { formatter: (p: any) => p.value != null ? `${p.name}: 触发` : '' },
-          }
-        : {
-            name: seriesName,
-            type: 'line',
-            data: arr,
-            connectNulls: true,
-            smooth: true,
-            symbol: 'none',
-            lineStyle: { width: 1.5, color: '#722ed1' },
-            areaStyle: { color: 'rgba(114, 46, 209, 0.08)' },
-          }
+
+      // 主曲线：连续评分用平滑曲线 + 半透明面积；二值序列用 step 折线（清晰呈现触发窗口、与 K 线起止一致）
+      const lineSeries: any = {
+        name: seriesName,
+        type: 'line',
+        data: arr,
+        connectNulls: true,
+        symbol: 'none',
+        z: 5,
+        ...(isBinary
+          ? {
+              step: 'middle',
+              smooth: false,
+              lineStyle: { width: 1.6, color: '#722ed1' },
+              areaStyle: { color: 'rgba(114, 46, 209, 0.18)', origin: 'start' },
+            }
+          : {
+              smooth: true,
+              lineStyle: { width: 1.5, color: '#722ed1' },
+              areaStyle: { color: 'rgba(114, 46, 209, 0.08)' },
+            }),
+      }
+
+      // 在副图上叠加买卖点散点（与主图同步），位置使用对应日期的评分值，
+      // 没有评分时退化到固定 y（80 买 / 20 卖），symbol 偏移避免遮盖曲线
+      const buyMarks: any[] = []
+      const sellMarks: any[] = []
+      for (const p of (seriesData.value.signal_points || []) as SignalPoint[]) {
+        const idx = dateIndex[p.date]
+        if (idx == null) continue
+        const act = (p.action || '').toLowerCase()
+        const isSell = act.startsWith('sell')
+        const yVal = arr[idx] ?? (isSell ? 20 : 80)
+        const point = { value: [p.date, yVal], name: p.action }
+        if (isSell) sellMarks.push(point)
+        else buyMarks.push(point)
+      }
+      const subSeries: any[] = [lineSeries]
+      if (buyMarks.length) {
+        subSeries.push({
+          name: `${seriesName}-买入`,
+          type: 'scatter',
+          data: buyMarks,
+          symbol: 'triangle',
+          symbolSize: 9,
+          symbolOffset: [0, -10],
+          itemStyle: { color: '#ec0000', borderColor: '#fff', borderWidth: 1 },
+          z: 20,
+          tooltip: { formatter: (p: any) => `${p.data.name}<br/>${p.data.value[0]}<br/>评分: ${p.data.value[1]}` },
+        })
+      }
+      if (sellMarks.length) {
+        subSeries.push({
+          name: `${seriesName}-卖出`,
+          type: 'scatter',
+          data: sellMarks,
+          symbol: 'diamond',
+          symbolSize: 9,
+          symbolOffset: [0, 10],
+          itemStyle: { color: '#00da3c', borderColor: '#fff', borderWidth: 1 },
+          z: 20,
+          tooltip: { formatter: (p: any) => `${p.data.name}<br/>${p.data.value[0]}<br/>评分: ${p.data.value[1]}` },
+        })
+      }
+
       subPanel = {
         grid: { left: '8%', right: '3%', height: subHeight, bottom: subBottom },
         xAxis: {
           type: 'category', data: dates,
+          boundaryGap: false,
           axisLabel: { show: false }, axisTick: { show: false }, axisLine: { show: false },
         },
         yAxis: {
-          scale: true, splitNumber: 3,
+          scale: false, splitNumber: 3,
           axisLabel: { show: true, fontSize: 9, color: '#999' },
           axisLine: { show: false }, axisTick: { show: false },
           splitLine: { lineStyle: { color: '#f5f5f5' } },
           min: 0, max: 100,
         },
-        series: [mainSeries],
+        series: subSeries,
         legend: [seriesName],
       }
     }
