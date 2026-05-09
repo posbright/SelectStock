@@ -541,6 +541,8 @@
           <span class="toolbar-hint">指标基于完整历史K线计算，模拟买卖点来自当前模拟盘交易记录。</span>
         </div>
 
+        <CustomIndicatorOverlayBar :state="ciOverlay" />
+
         <el-tabs v-model="stockActivePeriod" @tab-change="renderActiveStockChart">
           <el-tab-pane label="日K" name="daily">
             <div ref="stockDailyEl" class="stock-chart-box"></div>
@@ -661,6 +663,8 @@ import {
   deletePaperTrading, getPortfolioBacktestList, getKlineData, updatePaperTrading,
 } from '@/api/stock'
 import request from '@/api/request'
+import { useCustomIndicatorOverlay } from '@/composables/useCustomIndicatorOverlay'
+import CustomIndicatorOverlayBar from '@/components/CustomIndicatorOverlayBar.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -742,6 +746,19 @@ const selectedStock = ref<any>(null)
 const selectedPaperTrade = ref<any>(null)
 const stockKlines = ref<Record<string, any>>({})
 const stockOverlayIndicators = ref(['MA5', 'MA20', 'MA30', 'MA60', 'BOLL'])
+
+// ── PR-5 自定义指标叠加 ──
+const ciCodeRef = computed(() => {
+  const c = selectedStock.value?.code
+  return c ? String(c).padStart(6, '0') : ''
+})
+const ciDatesRef = computed<string[]>(() => stockKlines.value[stockActivePeriod.value]?.dates || [])
+const ciOverlay = useCustomIndicatorOverlay(
+  ciCodeRef as any,
+  stockActivePeriod as any,
+  ciDatesRef as any,
+)
+watch(() => ciOverlay.extension.value, () => { renderActiveStockChart() }, { deep: true })
 
 // ── 列可见性（聚宽风格列筛选） ──
 const posColumnDefs = [
@@ -1136,6 +1153,10 @@ function renderStockChart(period: 'daily' | 'weekly' | 'monthly') {
   const overlaySeries = buildOverlaySeries(ma, boll)
   const legendData = ['K线', ...overlaySeries.map(s => s.name), '买入', '卖出']
 
+  // PR-5 自定义指标叠加（仅在当前激活的 period 上注入；其他 period 复用默认空 ext）
+  const ext = (period === stockActivePeriod.value) ? ciOverlay.extension.value
+    : { mainSignalSeries: null, subPanel: null, extraXAxisCount: 0 }
+
   instance.on('click', (params: any) => {
     const trade = params?.data?.trade
     if (trade) selectedPaperTrade.value = trade
@@ -1162,23 +1183,26 @@ function renderStockChart(period: 'daily' | 'weekly' | 'monthly') {
     },
     legend: { data: legendData, top: 2, textStyle: { fontSize: 11 } },
     grid: [
-      { left: 58, right: 38, top: 38, height: 270 },
-      { left: 58, right: 38, top: 330, height: 70 },
-      { left: 58, right: 38, top: 420, height: 70 },
+      { left: 58, right: 38, top: 38, height: ext.subPanel ? 240 : 270 },
+      { left: 58, right: 38, top: ext.subPanel ? 300 : 330, height: 60 },
+      { left: 58, right: 38, top: ext.subPanel ? 380 : 420, height: 60 },
+      ...(ext.subPanel ? [{ left: 58, right: 38, top: 460, height: 60 }] : []),
     ],
     dataZoom: [
-      { type: 'inside', xAxisIndex: [0, 1, 2], start: range.start, end: range.end },
-      { type: 'slider', xAxisIndex: [0, 1, 2], start: range.start, end: range.end, bottom: 4, height: 20 },
+      { type: 'inside', xAxisIndex: ext.subPanel ? [0, 1, 2, 3] : [0, 1, 2], start: range.start, end: range.end },
+      { type: 'slider', xAxisIndex: ext.subPanel ? [0, 1, 2, 3] : [0, 1, 2], start: range.start, end: range.end, bottom: 4, height: 20 },
     ],
     xAxis: [
       { type: 'category', data: dates, boundaryGap: true, axisLabel: { fontSize: 10 } },
       { type: 'category', data: dates, gridIndex: 1, axisLabel: { show: false } },
       { type: 'category', data: dates, gridIndex: 2, axisLabel: { fontSize: 10 } },
+      ...(ext.subPanel ? [{ type: 'category' as const, data: dates, gridIndex: 3, axisLabel: { fontSize: 10 } }] : []),
     ],
     yAxis: [
       { scale: true, axisLabel: { fontSize: 10 }, splitLine: { lineStyle: { type: 'dashed', color: '#eee' } } },
       { scale: true, gridIndex: 1, axisLabel: { fontSize: 10 }, splitLine: { show: false } },
       { scale: true, gridIndex: 2, axisLabel: { fontSize: 10 }, splitLine: { show: false } },
+      ...(ext.subPanel ? [{ scale: true, gridIndex: 3, min: 0, max: 100, splitNumber: 3, axisLabel: { fontSize: 10 } }] : []),
     ],
     series: [
       { name: 'K线', type: 'candlestick', data: ohlc, itemStyle: { color: '#f56c6c', color0: '#67c23a', borderColor: '#f56c6c', borderColor0: '#67c23a' } },
@@ -1189,6 +1213,8 @@ function renderStockChart(period: 'daily' | 'weekly' | 'monthly') {
       { name: 'MACD柱', type: 'bar', xAxisIndex: 2, yAxisIndex: 2, data: macd.histogram || [], itemStyle: { color: (p: any) => p.value >= 0 ? '#f56c6c' : '#67c23a' }, barMaxWidth: 8 },
       { name: 'DIF', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macd.dif || [], symbol: 'none', lineStyle: { width: 1, color: '#e6a23c' } },
       { name: 'DEA', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macd.dea || [], symbol: 'none', lineStyle: { width: 1, color: '#409eff' } },
+      ...(ext.mainSignalSeries ? [{ ...ext.mainSignalSeries, xAxisIndex: 0, yAxisIndex: 0 }] : []),
+      ...(ext.subPanel ? ext.subPanel.series.map(s => ({ ...s, xAxisIndex: 3, yAxisIndex: 3 })) : []),
     ],
   })
 }
