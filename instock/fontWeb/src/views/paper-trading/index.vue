@@ -1191,11 +1191,17 @@ function renderStockChart(period: 'daily' | 'weekly' | 'monthly') {
       },
     },
     legend: { data: legendData, top: 2, textStyle: { fontSize: 11 } },
+    title: [
+      { text: 'K线主图', subtext: '蜡烛+MA/BOLL叠加，散点为模拟交易记录', left: 60, top: 20, textStyle: { fontSize: 11, color: '#303133', fontWeight: 'bold' as const }, subtextStyle: { fontSize: 9, color: '#909399' }, triggerEvent: true },
+      { text: '成交量', subtext: '红涨绿跌·按当日K线方向上色', left: 60, top: 312, textStyle: { fontSize: 11, color: '#303133', fontWeight: 'bold' as const }, subtextStyle: { fontSize: 9, color: '#909399' }, triggerEvent: true },
+      { text: 'MACD', subtext: 'DIF/DEA交叉+柱状能量，判趋势强弱', left: 60, top: 402, textStyle: { fontSize: 11, color: '#303133', fontWeight: 'bold' as const }, subtextStyle: { fontSize: 9, color: '#909399' }, triggerEvent: true },
+      ...(ext.subPanel ? [{ text: '自定义指标', subtext: '快慢线EMA交叉+策略买卖点(点击查看理由)', left: 60, top: 492, textStyle: { fontSize: 11, color: '#303133', fontWeight: 'bold' as const }, subtextStyle: { fontSize: 9, color: '#909399' }, triggerEvent: true }] : []),
+    ],
     grid: [
-      { left: 58, right: 38, top: 38, height: 270 },
-      { left: 58, right: 38, top: 330, height: 60 },
-      { left: 58, right: 38, top: 420, height: 60 },
-      ...(ext.subPanel ? [{ left: 58, right: 38, top: 510, height: 80 }] : []),
+      { left: 58, right: 38, top: 60, height: 248 },
+      { left: 58, right: 38, top: 350, height: 40 },
+      { left: 58, right: 38, top: 440, height: 40 },
+      ...(ext.subPanel ? [{ left: 58, right: 38, top: 530, height: 60 }] : []),
     ],
     dataZoom: [
       { type: 'inside', xAxisIndex: ext.subPanel ? [0, 1, 2, 3] : [0, 1, 2], start: range.start, end: range.end },

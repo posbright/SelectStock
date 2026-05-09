@@ -717,6 +717,27 @@ class IndicatorSeriesHandler(webBase.BaseHandler, ABC):
                     })
 
             # 买入信号点 + 风控模拟出场点（per dev plan §4.4 sell-stop / sell-target / sell-time）
+            # 构造买入理由（取指标的 hard_rules / extra_filter / weights 摘要）
+            buy_reason_parts = []
+            if rec.get("hard_rules"):
+                buy_reason_parts.append(f"硬规则命中: {rec['hard_rules']}")
+            if rec.get("extra_filter"):
+                buy_reason_parts.append(f"过滤条件: {rec['extra_filter']}")
+            if rec.get("weights"):
+                _w = rec.get("weights") or {}
+                _top = sorted(_w.items(), key=lambda kv: -abs(float(kv[1] or 0)))[:5]
+                buy_reason_parts.append(
+                    "评分权重Top: " + ", ".join(f"{k}({v:+.2f})" for k, v in _top)
+                )
+            buy_reason = "; ".join(buy_reason_parts) or f"{rec['name']} 信号触发"
+            _reason_text = {
+                "buy": buy_reason,
+                "sell-stop": f"止损出场（≤ {abs(float((rec.get('risk_profile') or {}).get('stop') or -0.08))*100:.1f}%）",
+                "sell-target": f"止盈出场（≥ {abs(float((rec.get('risk_profile') or {}).get('target') or 0.20))*100:.1f}%）",
+                "sell-time": f"持有到期出场（{int((rec.get('risk_profile') or {}).get('max_hold') or 60)} 日）",
+                "sell-fund": "基本面恶化出场",
+                "sell": "策略卖出",
+            }
             signal_points = []
             for i in range(len(d)):
                 if bool(sig.iloc[i]):
@@ -724,6 +745,7 @@ class IndicatorSeriesHandler(webBase.BaseHandler, ABC):
                         "date": str(pd.Timestamp(d["date"].iloc[i]).date()),
                         "price": round(float(d["close"].iloc[i]), 4),
                         "action": "buy",
+                        "reason": _reason_text["buy"],
                     })
 
             risk = rec.get("risk_profile") or {}
@@ -741,10 +763,12 @@ class IndicatorSeriesHandler(webBase.BaseHandler, ABC):
                     "fundamentals-exit": "sell-fund",
                 }
                 for t in trades:
+                    act = _reason_to_action.get(t.reason, "sell")
                     signal_points.append({
                         "date": str(t.exit_date.date()),
                         "price": round(float(t.exit_price), 4),
-                        "action": _reason_to_action.get(t.reason, "sell"),
+                        "action": act,
+                        "reason": _reason_text.get(act, "策略卖出"),
                     })
             except Exception as _e:
                 logging.debug(f"IndicatorSeries simulate skipped: {_e}")

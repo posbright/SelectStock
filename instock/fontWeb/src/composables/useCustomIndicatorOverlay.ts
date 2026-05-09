@@ -149,25 +149,41 @@ export function useCustomIndicatorOverlay(
       for (const p of seriesData.value.signal_points as SignalPoint[]) {
         const idx = dateIndex[p.date]
         if (idx == null) continue
-        const point = { value: [p.date, p.price], name: p.action }
+        const point = { value: [p.date, p.price], name: p.action, reason: p.reason || '' }
         const act = (p.action || '').toLowerCase()
         if (act.startsWith('sell')) sellData.push(point)
         else buyData.push(point)
       }
       const ciName = seriesData.value.name || '自定义指标'
+      // 用文字符号"买"/"卖"，仅 2px 偏移
       mainSignalSeries = {
         name: `${ciName}-信号`,
         type: 'scatter',
         xAxisIndex: 0,
         yAxisIndex: 0,
-        symbolSize: 14,
+        symbol: 'circle',
+        symbolSize: 18,
         data: [
-          ...buyData.map((p) => ({ ...p, itemStyle: { color: '#ec0000', borderColor: '#fff', borderWidth: 1 }, symbol: 'triangle' })),
-          ...sellData.map((p) => ({ ...p, itemStyle: { color: '#00da3c', borderColor: '#fff', borderWidth: 1 }, symbol: 'diamond' })),
+          ...buyData.map((p) => ({
+            ...p,
+            symbolOffset: [0, -2],
+            itemStyle: { color: '#ec0000', borderColor: '#fff', borderWidth: 1 },
+            label: { show: true, formatter: '买', color: '#fff', fontWeight: 'bold', fontSize: 11 },
+          })),
+          ...sellData.map((p) => ({
+            ...p,
+            symbolOffset: [0, 2],
+            itemStyle: { color: '#00da3c', borderColor: '#fff', borderWidth: 1 },
+            label: { show: true, formatter: '卖', color: '#fff', fontWeight: 'bold', fontSize: 11 },
+          })),
         ],
         z: 30,
         tooltip: {
-          formatter: (p: any) => `${p.data.name}<br/>${p.data.value[0]}<br/>价格: ${p.data.value[1]}`,
+          trigger: 'item',
+          formatter: (p: any) => {
+            const head = `<b>${p.data.name}</b><br/>${p.data.value[0]}<br/>价格: ${p.data.value[1]}`
+            return p.data.reason ? `${head}<br/>理由: ${p.data.reason}` : head
+          },
         },
       }
     }
@@ -199,19 +215,7 @@ export function useCustomIndicatorOverlay(
       const fast = ema(fastN)
       const slow = ema(slowN)
 
-      // 计算金叉 / 死叉点（fast 由下穿上 = 金叉买；fast 由上穿下 = 死叉卖）
-      const goldenCross: any[] = []
-      const deadCross: any[] = []
-      for (let i = 1; i < dates.length; i++) {
-        const f0 = fast[i - 1], f1 = fast[i], s0 = slow[i - 1], s1 = slow[i]
-        if (f0 == null || f1 == null || s0 == null || s1 == null) continue
-        if (f0 <= s0 && f1 > s1) {
-          goldenCross.push({ value: [dates[i], f1], name: '金叉' })
-        } else if (f0 >= s0 && f1 < s1) {
-          deadCross.push({ value: [dates[i], f1], name: '死叉' })
-        }
-      }
-
+      // 计算金叉 / 死叉点（用于 tooltip 提示，不在副图上画散点 — 用户可通过两线交叉直接读出）
       // 后端 signal_points（策略真实买卖点）作为可选叠加，颜色更深以区分
       const stratBuy: any[] = []
       const stratSell: any[] = []
@@ -220,7 +224,7 @@ export function useCustomIndicatorOverlay(
         if (idx == null) continue
         const act = (p.action || '').toLowerCase()
         const yVal = arr[idx] ?? (act.startsWith('sell') ? 25 : 75)
-        const point = { value: [p.date, yVal], name: p.action }
+        const point = { value: [p.date, yVal], name: p.action, reason: p.reason || '' }
         if (act.startsWith('sell')) stratSell.push(point)
         else stratBuy.push(point)
       }
@@ -249,37 +253,22 @@ export function useCustomIndicatorOverlay(
           lineStyle: { width: 1.6, color: '#409eff' },
         },
       ]
-      if (goldenCross.length) {
-        subSeries.push({
-          name: '金叉',
-          type: 'scatter',
-          data: goldenCross,
-          symbol: 'circle', symbolSize: 8, symbolOffset: [0, -10],
-          itemStyle: { color: '#fff', borderColor: '#ec0000', borderWidth: 2 },
-          z: 20,
-          tooltip: { formatter: (p: any) => `金叉<br/>${p.data.value[0]}<br/>快线: ${Number(p.data.value[1]).toFixed(2)}` },
-        })
-      }
-      if (deadCross.length) {
-        subSeries.push({
-          name: '死叉',
-          type: 'scatter',
-          data: deadCross,
-          symbol: 'circle', symbolSize: 8, symbolOffset: [0, 10],
-          itemStyle: { color: '#fff', borderColor: '#00da3c', borderWidth: 2 },
-          z: 20,
-          tooltip: { formatter: (p: any) => `死叉<br/>${p.data.value[0]}<br/>快线: ${Number(p.data.value[1]).toFixed(2)}` },
-        })
-      }
       if (stratBuy.length) {
         subSeries.push({
           name: '策略-买',
           type: 'scatter',
           data: stratBuy,
-          symbol: 'triangle', symbolSize: 10, symbolOffset: [0, -16],
+          symbol: 'circle', symbolSize: 16, symbolOffset: [0, -2],
           itemStyle: { color: '#ec0000', borderColor: '#fff', borderWidth: 1 },
+          label: { show: true, formatter: '买', color: '#fff', fontWeight: 'bold', fontSize: 10 },
           z: 21,
-          tooltip: { formatter: (p: any) => `${p.data.name}<br/>${p.data.value[0]}` },
+          tooltip: {
+            trigger: 'item',
+            formatter: (p: any) => {
+              const head = `<b>${p.data.name}</b><br/>${p.data.value[0]}`
+              return p.data.reason ? `${head}<br/>理由: ${p.data.reason}` : head
+            },
+          },
         })
       }
       if (stratSell.length) {
@@ -287,10 +276,17 @@ export function useCustomIndicatorOverlay(
           name: '策略-卖',
           type: 'scatter',
           data: stratSell,
-          symbol: 'diamond', symbolSize: 10, symbolOffset: [0, 16],
+          symbol: 'circle', symbolSize: 16, symbolOffset: [0, 2],
           itemStyle: { color: '#00da3c', borderColor: '#fff', borderWidth: 1 },
+          label: { show: true, formatter: '卖', color: '#fff', fontWeight: 'bold', fontSize: 10 },
           z: 21,
-          tooltip: { formatter: (p: any) => `${p.data.name}<br/>${p.data.value[0]}` },
+          tooltip: {
+            trigger: 'item',
+            formatter: (p: any) => {
+              const head = `<b>${p.data.name}</b><br/>${p.data.value[0]}`
+              return p.data.reason ? `${head}<br/>理由: ${p.data.reason}` : head
+            },
+          },
         })
       }
 

@@ -78,6 +78,7 @@ export interface SignalPoint {
   date: string
   price: number
   action: string
+  reason?: string
 }
 
 export interface ScorePoint {
