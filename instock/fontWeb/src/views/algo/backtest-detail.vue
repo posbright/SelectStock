@@ -1167,7 +1167,10 @@ function renderStockChart(period: 'daily' | 'weekly' | 'monthly') {
       ...(benchmarkOverlay ? [benchmarkOverlay] : []),
       { name: '买入', type: 'scatter', data: tradeMarkers.buy, symbol: 'triangle', symbolSize: 18, itemStyle: { color: '#f56c6c', borderColor: '#8a1f11', borderWidth: 1 }, label: tradeMarkerLabel('buy'), emphasis: { scale: 1.5 } },
       { name: '卖出', type: 'scatter', data: tradeMarkers.sell, symbol: 'diamond', symbolSize: 17, itemStyle: { color: '#67c23a', borderColor: '#2f6f1f', borderWidth: 1 }, label: tradeMarkerLabel('sell'), emphasis: { scale: 1.5 } },
-      { name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volumes, itemStyle: { color: '#dcdfe6' }, barMaxWidth: 8 },
+      { name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volumes.map((v: any, i: number) => ({
+        value: v,
+        itemStyle: { color: (ohlc[i] && Number(ohlc[i][1]) >= Number(ohlc[i][0])) ? '#f56c6c' : '#67c23a' },
+      })), barMaxWidth: 8 },
       { name: 'MACD柱', type: 'bar', xAxisIndex: 2, yAxisIndex: 2, data: macd.histogram || [], itemStyle: { color: (p: any) => p.value >= 0 ? '#f56c6c' : '#67c23a' }, barMaxWidth: 8 },
       { name: 'DIF', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macd.dif || [], symbol: 'none', lineStyle: { width: 1, color: '#e6a23c' } },
       { name: 'DEA', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macd.dea || [], symbol: 'none', lineStyle: { width: 1, color: '#409eff' } },
