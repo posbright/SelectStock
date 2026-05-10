@@ -48,6 +48,7 @@ import instock.web.aiDecisionConfigHandler as aiDecisionConfigHandler
 import instock.web.imCommandHandler as imCommandHandler
 import instock.web.liveTradingHandler as liveTradingHandler
 import instock.web.customIndicatorHandler as customIndicatorHandler
+import instock.web.authHandler as authHandler
 import instock.web.base as webBase
 
 __author__ = 'InStock'
@@ -154,6 +155,19 @@ class Application(tornado.web.Application):
             # Phase 7: 实盘交易连接（默认关闭，由 INSTOCK_LIVE_TRADING_ENABLED=1 启用；默认 broker=dry_run）
             (r"/instock/api/live/status", liveTradingHandler.LiveStatusHandler),
             (r"/instock/api/live/execute_pending", liveTradingHandler.ExecutePendingCommandsHandler),
+            # Phase 8: 鉴权（默认关闭，由 INSTOCK_AUTH_ENABLED=1 启用；未启用时 /me 返回 enabled:false）
+            (r"/instock/api/auth/login", authHandler.LoginHandler),
+            (r"/instock/api/auth/logout", authHandler.LogoutHandler),
+            (r"/instock/api/auth/me", authHandler.MeHandler),
+            # 自助注册（公开端点，受 INSTOCK_REGISTER_ENABLED 控制，默认开启）
+            (r"/instock/api/auth/register/send-code", authHandler.SendRegisterCodeHandler),
+            (r"/instock/api/auth/register", authHandler.RegisterHandler),
+            # Phase 8 Should 8：用户管理（仅 admin）
+            (r"/instock/api/auth/users/list", authHandler.ListUsersHandler),
+            (r"/instock/api/auth/users/save", authHandler.SaveUserHandler),
+            (r"/instock/api/auth/users/delete", authHandler.DeleteUserHandler),
+            # Phase 8 Should 7：审计聚合（admin/operator 可读）
+            (r"/instock/api/auth/audit/list", authHandler.AuditListHandler),
             (r"/instock/api/paper/compare", paperTradingHandler.GetPaperCompareHandler),
             (r"/instock/api/paper/delete", paperTradingHandler.DeletePaperTradingHandler),
             # Phase 9: 自定义综合指标 CRUD + 回测 + 关注榜 + K 线叠加序列
@@ -174,8 +188,12 @@ class Application(tornado.web.Application):
             template_path=os.path.join(os.path.dirname(__file__), "templates"),
             static_path=static_path,
             xsrf_cookies=False,  # True,
-            # cookie加密
-            cookie_secret="027bb1b670eddf0392cdda8709268a17b58b7",
+            # cookie加密：优先 env INSTOCK_SESSION_SECRET（生产部署必须固化）；
+            # 未设置时退回历史硬编码值，保持向后兼容。
+            cookie_secret=os.getenv(
+                "INSTOCK_SESSION_SECRET",
+                "027bb1b670eddf0392cdda8709268a17b58b7",
+            ),
             debug=False,
         )
         super(Application, self).__init__(handlers, **settings)

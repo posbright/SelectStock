@@ -736,21 +736,43 @@ class GetPaperTradingDetailHandler(webBase.BaseHandler, ABC):
                         })
 
             # 最近交易
+            # Phase 3 扩展：LEFT JOIN cn_stock_trade_signal 拉出策略真实理由 / 决策来源 / AI 评分摘要 /
+            # signal_id（前端用于点击查看完整决策），让 paper-trading 详情页与 backtest-detail 行为一致。
             trades = []
             trade_rows_raw = []
             first_trade_date = ''
             if mdb.checkTableIsExist('cn_stock_backtest_trade'):
-                trade_rows_raw = mdb.executeSqlFetch(
-                    'SELECT date, code, name, direction, price, amount, value, commission, tax '
-                    'FROM cn_stock_backtest_trade '
-                    'WHERE paper_id = %s ORDER BY date DESC, id DESC LIMIT 200',
-                    (paper_id,))
+                _has_signal_tbl = False
+                try:
+                    _has_signal_tbl = bool(mdb.checkTableIsExist('cn_stock_trade_signal'))
+                except Exception:
+                    _has_signal_tbl = False
+                if _has_signal_tbl:
+                    trade_rows_raw = mdb.executeSqlFetch(
+                        'SELECT t.date, t.code, t.name, t.direction, t.price, t.amount, t.value, '
+                        '       t.commission, t.tax, t.id, '
+                        '       s.id, s.reason, s.reason_source, s.ai_score, s.ai_action, s.ai_gate_result, '
+                        '       t.close_profit, t.return_rate, t.slippage_cost, '
+                        '       t.reason, t.reason_source '
+                        'FROM cn_stock_backtest_trade t '
+                        'LEFT JOIN cn_stock_trade_signal s '
+                        '       ON s.trade_id = t.id AND s.source_type = %s AND s.source_id = %s '
+                        'WHERE t.paper_id = %s '
+                        'ORDER BY t.date DESC, t.id DESC LIMIT 200',
+                        ('paper', paper_id, paper_id))
+                else:
+                    trade_rows_raw = mdb.executeSqlFetch(
+                        'SELECT date, code, name, direction, price, amount, value, commission, tax, id, '
+                        '       close_profit, return_rate, slippage_cost, reason, reason_source '
+                        'FROM cn_stock_backtest_trade '
+                        'WHERE paper_id = %s ORDER BY date DESC, id DESC LIMIT 200',
+                        (paper_id,))
                 if trade_rows_raw:
                     stock_name_map = _get_stock_name_map([t[1] for t in trade_rows_raw])
                     for t in trade_rows_raw:
                         code = str(t[1] or '').strip()
                         name = (t[2] or stock_name_map.get(code) or '')
-                        trades.append({
+                        item = {
                             'date': str(t[0]) if t[0] else '',
                             'code': code, 'name': name,
                             'direction': t[3],
@@ -759,7 +781,38 @@ class GetPaperTradingDetailHandler(webBase.BaseHandler, ABC):
                             'value': float(t[6]) if t[6] else 0,
                             'commission': float(t[7]) if t[7] else 0,
                             'tax': float(t[8]) if t[8] else 0,
-                        })
+                            'trade_id': int(t[9]) if t[9] is not None else None,
+                        }
+                        if _has_signal_tbl and len(t) >= 21:
+                            # 优先使用 trade 表的 reason / reason_source（撮合阶段写入，
+                            # 反映 derived/strategy/generated 的真实来源）；trade 表为空才回退
+                            # 到 signal.reason（向后兼容旧数据）。
+                            t_reason = (t[19] or '').strip()
+                            t_source = (t[20] or '').strip()
+                            s_reason = (t[11] or '').strip()
+                            s_source = (t[12] or '').strip()
+                            final_reason = t_reason or s_reason
+                            final_source = t_source or s_source
+                            item.update({
+                                'signal_id': int(t[10]) if t[10] is not None else None,
+                                'reason': final_reason,
+                                'reason_source': final_source,
+                                'ai_score': float(t[13]) if t[13] is not None else None,
+                                'ai_action': t[14] or '',
+                                'ai_gate_result': t[15] or '',
+                                'close_profit': float(t[16]) if t[16] is not None else None,
+                                'return_rate': float(t[17]) if t[17] is not None else None,
+                                'slippage_cost': float(t[18]) if t[18] is not None else None,
+                            })
+                        elif (not _has_signal_tbl) and len(t) >= 15:
+                            item.update({
+                                'close_profit': float(t[10]) if t[10] is not None else None,
+                                'return_rate': float(t[11]) if t[11] is not None else None,
+                                'slippage_cost': float(t[12]) if t[12] is not None else None,
+                                'reason': t[13] or '',
+                                'reason_source': t[14] or '',
+                            })
+                        trades.append(item)
                     trade_dates = [_date_text(t[0]) for t in trade_rows_raw]
                     trade_dates = [value for value in trade_dates if value]
                     first_trade_date = min(trade_dates) if trade_dates else ''

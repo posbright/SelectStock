@@ -3,6 +3,18 @@ import Layout from '@/layout/index.vue'
 
 const routes: RouteRecordRaw[] = [
   {
+    path: '/login',
+    name: 'Login',
+    component: () => import('@/views/login.vue'),
+    meta: { hidden: true, public: true, title: '登录' }
+  },
+  {
+    path: '/register',
+    name: 'Register',
+    component: () => import('@/views/register.vue'),
+    meta: { hidden: true, public: true, title: '注册' }
+  },
+  {
     path: '/',
     component: Layout,
     redirect: '/home',
@@ -410,7 +422,20 @@ const routes: RouteRecordRaw[] = [
         path: 'live-trading',
         name: 'LiveTrading',
         component: () => import('@/views/settings/live-trading.vue'),
-        meta: { title: '实盘交易' }
+        meta: { title: '实盘交易', requireRole: ['admin'] }
+      },
+      // Phase 8 Should 7+8：审计页 + 用户管理
+      {
+        path: 'audit',
+        name: 'AuditLog',
+        component: () => import('@/views/settings/audit.vue'),
+        meta: { title: '修改记录', requireRole: ['admin', 'operator'] }
+      },
+      {
+        path: 'users',
+        name: 'UserManagement',
+        component: () => import('@/views/settings/users.vue'),
+        meta: { title: '用户管理', requireRole: ['admin'] }
       }
     ]
   },
@@ -433,6 +458,35 @@ const routes: RouteRecordRaw[] = [
 const router = createRouter({
   history: createWebHistory(),
   routes
+})
+
+/**
+ * Phase 8 路由守卫：
+ * - 应用启动时调用一次 /api/auth/me，缓存 enabled / username。
+ * - 仅当 enabled=true 且未登录时强制跳转 /login。
+ * - 后端 INSTOCK_AUTH_ENABLED=false 时所有路由直通，保持现网体验。
+ */
+router.beforeEach(async (to) => {
+  if (typeof window === 'undefined') return true
+  const { useAuthStore } = await import('@/stores/auth')
+  const authStore = useAuthStore()
+  if (!authStore.bootstrapped) {
+    await authStore.bootstrap()
+  }
+  if (!authStore.enabled) return true
+  if (to.meta?.public) return true
+  if (!authStore.username) {
+    return {
+      path: '/login',
+      query: { redirect: to.fullPath }
+    }
+  }
+  // Should 8：路由 meta.requireRole 限制。
+  const required = (to.meta?.requireRole as string[] | undefined) || []
+  if (required.length > 0 && !authStore.hasRole(...(required as ('admin' | 'operator' | 'viewer')[]))) {
+    return { path: '/home', query: { forbidden: to.fullPath } }
+  }
+  return true
 })
 
 export default router

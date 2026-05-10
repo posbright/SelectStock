@@ -21,6 +21,9 @@ from tornado import gen
 
 import instock.web.base as webBase
 from instock.im import service as im_service
+from instock.lib import ratelimit as _ratelimit
+from instock import auth as _auth
+from instock.auth import require_login, require_role
 
 
 def _to_int(v, default=None):
@@ -64,6 +67,38 @@ class DingtalkCallbackHandler(_BaseIMHandler, ABC):
                 self._write_json({"ok": False, "status": "invalid",
                                   "error": "请求体非 JSON"}, status=400)
                 return
+            # Phase 8 Must 5: IP 白名单（默认未配置 → 不强制）。
+            client_ip = (
+                self.request.headers.get("X-Forwarded-For", "")
+                .split(",")[0].strip()
+                or self.request.remote_ip or ""
+            )
+            if not _auth.is_ip_allowed(client_ip):
+                self._write_json({
+                    "ok": False, "status": "ip_forbidden",
+                    "error": f"IP {client_ip} 不在白名单",
+                }, status=403)
+                return
+            # Phase 8: 按 operator_id 速率限制（默认禁用）。
+            # 默认 INSTOCK_DINGTALK_CALLBACK_RPM 未设置 → no-op。
+            rpm = _ratelimit.dingtalk_callback_rpm()
+            if rpm > 0:
+                op_id = (
+                    body.get("operator_id")
+                    or body.get("senderStaffId")
+                    or (body.get("text") or {}).get("senderStaffId")
+                    or "unknown"
+                )
+                allowed = _ratelimit.check(
+                    "dingtalk_callback", str(op_id),
+                    capacity=float(rpm), refill_per_sec=float(rpm) / 60.0,
+                )
+                if not allowed:
+                    self._write_json({
+                        "ok": False, "status": "rate_limited",
+                        "error": f"超过限速 {rpm}/min",
+                    }, status=429)
+                    return
             headers = {
                 "timestamp": self.request.headers.get("timestamp")
                              or self.request.headers.get("Timestamp") or "",
@@ -130,6 +165,7 @@ class ListOperatorsHandler(_BaseIMHandler, ABC):
 
 
 class SaveOperatorHandler(_BaseIMHandler, ABC):
+    @require_role("admin")
     @gen.coroutine
     def post(self):
         try:
@@ -138,6 +174,9 @@ class SaveOperatorHandler(_BaseIMHandler, ABC):
             except Exception:
                 self._write_json({"ok": False, "error": "请求体非 JSON"}, status=400)
                 return
+            # Phase 8：启用鉴权后由 session 注入 modified_by。
+            if getattr(self, "current_username", None):
+                body["modified_by"] = self.current_username
             try:
                 data = im_service.save_operator(body)
             except ValueError as ve:
@@ -150,6 +189,7 @@ class SaveOperatorHandler(_BaseIMHandler, ABC):
 
 
 class DeleteOperatorHandler(_BaseIMHandler, ABC):
+    @require_role("admin")
     @gen.coroutine
     def post(self):
         try:

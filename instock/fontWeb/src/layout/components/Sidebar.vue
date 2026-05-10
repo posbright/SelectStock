@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
+import { useAuthStore, type Role } from '@/stores/auth'
 
 interface Props {
   isCollapse: boolean
@@ -10,12 +11,29 @@ interface Props {
 defineProps<Props>()
 const route = useRoute()
 const router = useRouter()
+const authStore = useAuthStore()
 
-// 获取路由菜单（过滤 hidden 路由，如 404 页面）
+// 角色匹配：未启用鉴权时一律允许；启用且未登录时只放行无 requireRole 的项。
+const roleAllowed = (meta: RouteRecordRaw['meta']) => {
+  const required = (meta?.requireRole as Role[] | undefined) || []
+  if (required.length === 0) return true
+  if (!authStore.enabled) return true
+  return authStore.hasRole(...required)
+}
+
+// 获取路由菜单（过滤 hidden 路由 + 角色不匹配的入口）
 const menuList = computed(() => {
   return router.options.routes.filter(item => {
     if (item.meta?.hidden) return false
-    return item.path !== '/' || item.children?.length
+    if (item.path === '/' && !item.children?.length) return false
+    // 父级有 requireRole 时整体过滤
+    if (!roleAllowed(item.meta)) return false
+    // 父级若有子项但全部被角色过滤掉，也不显示
+    if (item.children && item.children.length > 0) {
+      const visible = item.children.filter(c => !c.meta?.hidden && roleAllowed(c.meta))
+      if (visible.length === 0) return false
+    }
+    return true
   })
 })
 
@@ -35,9 +53,9 @@ const shouldShowAsSubMenu = (item: RouteRecordRaw) => {
   return true
 }
 
-// 获取可见的子菜单
+// 获取可见的子菜单（同时过滤 hidden 与角色）
 const getVisibleChildren = (item: RouteRecordRaw) => {
-  return item.children?.filter(child => !child.meta?.hidden) || []
+  return item.children?.filter(child => !child.meta?.hidden && roleAllowed(child.meta)) || []
 }
 
 // 获取单个子菜单的路径和标题（用于只有一个子菜单的情况）

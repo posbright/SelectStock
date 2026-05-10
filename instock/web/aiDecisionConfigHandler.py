@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 from tornado import gen
 
 import instock.web.base as webBase
+from instock.auth import require_login, require_role
 from instock.ai_decision.config import (
     CONFIG_TABLE, DEFAULT_API_KEY_ENV, ensure_ai_decision_tables,
 )
@@ -64,8 +65,30 @@ _SELECT_COLS = (
     "system_prompt, user_prompt_template, output_schema, tool_config, "
     "temperature, max_tokens, timeout_seconds, retry_count, "
     "enabled_as_gate, fail_closed, "
-    "buy_threshold, sell_threshold, config_version, created_at, updated_at"
+    "buy_threshold, sell_threshold, config_version, modified_by, created_at, updated_at"
 )
+
+
+def _ensure_modified_by_column():
+    """如旧库无 modified_by 列则补齐。Phase 8 鉴权体系上线前默认写入 'system'。失败仅 warning。"""
+    try:
+        import instock.lib.database as mdb
+    except Exception:
+        return
+    try:
+        rows = mdb.executeSqlFetch(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema=DATABASE() AND table_name=%s AND column_name='modified_by' LIMIT 1",
+            (CONFIG_TABLE,),
+        ) or []
+        if not rows:
+            mdb.executeSql(
+                f"ALTER TABLE `{CONFIG_TABLE}` "
+                "ADD COLUMN `modified_by` VARCHAR(64) NULL DEFAULT NULL AFTER `config_version`"
+            )
+    except Exception as exc:
+        import logging
+        logging.debug("[aiDecisionConfig] 检查/添加 modified_by 列失败: %s", exc)
 
 
 def _row_to_config(row) -> Dict[str, Any]:
@@ -96,14 +119,16 @@ def _row_to_config(row) -> Dict[str, Any]:
         "buy_threshold": float(row[20]) if row[20] is not None else 70.0,
         "sell_threshold": float(row[21]) if row[21] is not None else 40.0,
         "config_version": int(row[22]) if row[22] is not None else 1,
-        "created_at": row[23].strftime("%Y-%m-%d %H:%M:%S") if row[23] else None,
-        "updated_at": row[24].strftime("%Y-%m-%d %H:%M:%S") if row[24] else None,
+        "modified_by": row[23] or None,
+        "created_at": row[24].strftime("%Y-%m-%d %H:%M:%S") if row[24] else None,
+        "updated_at": row[25].strftime("%Y-%m-%d %H:%M:%S") if row[25] else None,
     }
 
 
 def list_configs(source_type: Optional[str] = None,
                  source_id: Optional[int] = None) -> List[Dict[str, Any]]:
     ensure_ai_decision_tables()
+    _ensure_modified_by_column()
     import instock.lib.database as mdb
     if not mdb.checkTableIsExist(CONFIG_TABLE):
         return []
@@ -125,6 +150,7 @@ def list_configs(source_type: Optional[str] = None,
 
 def get_config(config_id: int) -> Optional[Dict[str, Any]]:
     ensure_ai_decision_tables()
+    _ensure_modified_by_column()
     import instock.lib.database as mdb
     rows = mdb.executeSqlFetch(
         f"SELECT {_SELECT_COLS} FROM `{CONFIG_TABLE}` WHERE id=%s LIMIT 1",
@@ -184,6 +210,7 @@ def save_config(payload: Dict[str, Any]) -> Dict[str, Any]:
     if err:
         raise ValueError(err)
     ensure_ai_decision_tables()
+    _ensure_modified_by_column()
     import instock.lib.database as mdb
 
     cid = _to_int(payload.get("id"))
@@ -213,6 +240,8 @@ def save_config(payload: Dict[str, Any]) -> Dict[str, Any]:
     retry_count = _to_int(payload.get("retry_count"), 1)
     buy_threshold = _to_float(payload.get("buy_threshold"), 70.0)
     sell_threshold = _to_float(payload.get("sell_threshold"), 40.0)
+    # Phase 8 鉴权上线前，所有修改记录为 'system'；上线后由 handler 从 session 注入 username。
+    modified_by = (payload.get("modified_by") or "system").strip()[:64] or "system"
 
     if cid:
         mdb.executeSql(
@@ -222,7 +251,7 @@ def save_config(payload: Dict[str, Any]) -> Dict[str, Any]:
             "system_prompt=%s, user_prompt_template=%s, output_schema=%s, tool_config=%s, "
             "temperature=%s, max_tokens=%s, timeout_seconds=%s, retry_count=%s, "
             "enabled_as_gate=%s, fail_closed=%s, "
-            "buy_threshold=%s, sell_threshold=%s, "
+            "buy_threshold=%s, sell_threshold=%s, modified_by=%s, "
             "config_version=COALESCE(config_version,1)+1 "
             "WHERE id=%s",
             (name, enabled, source_type, source_id, strategy_id,
@@ -230,7 +259,7 @@ def save_config(payload: Dict[str, Any]) -> Dict[str, Any]:
              system_prompt, user_prompt_template, output_schema, tool_config,
              temperature, max_tokens, timeout_seconds, retry_count,
              enabled_as_gate, fail_closed,
-             buy_threshold, sell_threshold, cid),
+             buy_threshold, sell_threshold, modified_by, cid),
         )
         out = get_config(cid)
         if out is None:
@@ -245,14 +274,14 @@ def save_config(payload: Dict[str, Any]) -> Dict[str, Any]:
                 f" system_prompt, user_prompt_template, output_schema, tool_config, "
                 f" temperature, max_tokens, timeout_seconds, retry_count, "
                 f" enabled_as_gate, fail_closed, "
-                f" buy_threshold, sell_threshold, config_version) "
-                f"VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1)",
+                f" buy_threshold, sell_threshold, config_version, modified_by) "
+                f"VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1,%s)",
                 (name, enabled, source_type, source_id, strategy_id,
                  provider, model_name, base_url, api_key_ref,
                  system_prompt, user_prompt_template, output_schema, tool_config,
                  temperature, max_tokens, timeout_seconds, retry_count,
                  enabled_as_gate, fail_closed,
-                 buy_threshold, sell_threshold),
+                 buy_threshold, sell_threshold, modified_by),
             )
             cur.execute("SELECT LAST_INSERT_ID()")
             row = cur.fetchone()
@@ -312,6 +341,7 @@ class GetAIDecisionConfigDetailHandler(_BaseAIHandler, ABC):
 
 
 class SaveAIDecisionConfigHandler(_BaseAIHandler, ABC):
+    @require_role("admin", "operator")
     @gen.coroutine
     def post(self):
         try:
@@ -320,6 +350,9 @@ class SaveAIDecisionConfigHandler(_BaseAIHandler, ABC):
             except Exception:
                 self._write_json({"ok": False, "error": "请求体非 JSON"}, status=400)
                 return
+            # Phase 8：启用鉴权后由 session 注入 modified_by。
+            if getattr(self, "current_username", None):
+                body["modified_by"] = self.current_username
             try:
                 cfg = save_config(body)
             except ValueError as ve:
@@ -332,6 +365,7 @@ class SaveAIDecisionConfigHandler(_BaseAIHandler, ABC):
 
 
 class DeleteAIDecisionConfigHandler(_BaseAIHandler, ABC):
+    @require_role("admin", "operator")
     @gen.coroutine
     def post(self):
         try:

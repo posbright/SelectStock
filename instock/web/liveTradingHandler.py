@@ -16,6 +16,8 @@ from tornado import gen
 
 import instock.web.base as webBase
 from instock.live import executor as live_executor
+from instock.lib import ratelimit as _ratelimit
+from instock.auth import require_login, require_role
 
 
 def _to_int(v, default=None):
@@ -51,9 +53,29 @@ class LiveStatusHandler(_BaseLiveHandler, ABC):
 
 
 class ExecutePendingCommandsHandler(_BaseLiveHandler, ABC):
+    @require_role("admin")
     @gen.coroutine
     def post(self):
         try:
+            # Phase 8: 按客户端 IP 速率限制（默认禁用）。
+            # 默认 INSTOCK_LIVE_EXECUTE_RPS 未设置 → no-op。
+            rps = _ratelimit.live_execute_rps()
+            if rps > 0:
+                client_ip = (
+                    self.request.headers.get("X-Forwarded-For", "")
+                    .split(",")[0].strip()
+                    or self.request.remote_ip or "unknown"
+                )
+                allowed = _ratelimit.check(
+                    "live_execute_pending", client_ip,
+                    capacity=float(rps), refill_per_sec=float(rps),
+                )
+                if not allowed:
+                    self._write_json({
+                        "ok": False, "status": "rate_limited",
+                        "error": f"超过限速 {rps}/s",
+                    }, status=429)
+                    return
             try:
                 body = json.loads(self.request.body or b"{}")
             except Exception:

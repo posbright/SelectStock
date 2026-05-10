@@ -27,6 +27,8 @@ from typing import Any, Dict, List, Optional
 from tornado import gen
 
 import instock.web.base as webBase
+from instock import auth as _auth
+from instock.auth import require_login, require_role
 
 CONFIG_TABLE = "cn_stock_notification_config"
 EVENT_TABLE = "cn_stock_notification_event"
@@ -76,9 +78,30 @@ def _ensure_config_version_column():
         logging.debug("[notificationConfig] 检查/添加 config_version 列失败: %s", exc)
 
 
+def _ensure_modified_by_column():
+    """如旧库无 modified_by 列则补齐。Phase 8 鉴权体系上线前默认写入 'system'。失败仅 warning。"""
+    try:
+        import instock.lib.database as mdb
+    except Exception:
+        return
+    try:
+        rows = mdb.executeSqlFetch(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema=DATABASE() AND table_name=%s AND column_name='modified_by' LIMIT 1",
+            (CONFIG_TABLE,),
+        ) or []
+        if not rows:
+            mdb.executeSql(
+                f"ALTER TABLE `{CONFIG_TABLE}` "
+                "ADD COLUMN `modified_by` VARCHAR(64) NULL DEFAULT NULL AFTER `config_version`"
+            )
+    except Exception as exc:
+        logging.debug("[notificationConfig] 检查/添加 modified_by 列失败: %s", exc)
+
+
 def _row_to_config(row) -> Dict[str, Any]:
     """SELECT 列序：id, paper_id, channel, event_type, enabled, webhook_env,
-    secret_env, summary_config, detail_config, config_version, created_at, updated_at."""
+    secret_env, summary_config, detail_config, config_version, modified_by, created_at, updated_at."""
     webhook_env = row[5] or ""
     secret_env = row[6] or ""
     return {
@@ -95,15 +118,16 @@ def _row_to_config(row) -> Dict[str, Any]:
         "summary_config": _safe_json_loads(row[7], default={}),
         "detail_config": _safe_json_loads(row[8], default={}),
         "config_version": int(row[9]) if row[9] is not None else 1,
-        "created_at": row[10].strftime("%Y-%m-%d %H:%M:%S") if row[10] else None,
-        "updated_at": row[11].strftime("%Y-%m-%d %H:%M:%S") if row[11] else None,
+        "modified_by": row[10] or None,
+        "created_at": row[11].strftime("%Y-%m-%d %H:%M:%S") if row[11] else None,
+        "updated_at": row[12].strftime("%Y-%m-%d %H:%M:%S") if row[12] else None,
     }
 
 
 def _select_columns() -> str:
     return (
         "id, paper_id, channel, event_type, enabled, webhook_env, secret_env, "
-        "summary_config, detail_config, config_version, created_at, updated_at"
+        "summary_config, detail_config, config_version, modified_by, created_at, updated_at"
     )
 
 
@@ -112,6 +136,7 @@ def list_configs(paper_id: Optional[int] = None,
     from instock.notification.service import ensure_notification_tables
     ensure_notification_tables()
     _ensure_config_version_column()
+    _ensure_modified_by_column()
     import instock.lib.database as mdb
     where = ["1=1"]
     params: List[Any] = []
@@ -133,6 +158,7 @@ def get_config(config_id: int) -> Optional[Dict[str, Any]]:
     from instock.notification.service import ensure_notification_tables
     ensure_notification_tables()
     _ensure_config_version_column()
+    _ensure_modified_by_column()
     import instock.lib.database as mdb
     rows = mdb.executeSqlFetch(
         f"SELECT {_select_columns()} FROM `{CONFIG_TABLE}` WHERE id=%s LIMIT 1",
@@ -180,6 +206,7 @@ def save_config(payload: Dict[str, Any]) -> Dict[str, Any]:
     from instock.notification.service import ensure_notification_tables
     ensure_notification_tables()
     _ensure_config_version_column()
+    _ensure_modified_by_column()
     import instock.lib.database as mdb
 
     cid = _to_int(payload.get("id"))
@@ -191,15 +218,17 @@ def save_config(payload: Dict[str, Any]) -> Dict[str, Any]:
     secret_env = (payload.get("secret_env") or "").strip() or None
     summary_config = json.dumps(payload.get("summary_config") or {}, ensure_ascii=False)
     detail_config = json.dumps(payload.get("detail_config") or {}, ensure_ascii=False)
+    # Phase 8 鉴权上线前，所有修改记录为 'system'；上线后由 handler 从 session 注入 username。
+    modified_by = (payload.get("modified_by") or "system").strip()[:64] or "system"
 
     if cid:
         # UPDATE + version+1
         mdb.executeSql(
             f"UPDATE `{CONFIG_TABLE}` SET paper_id=%s, channel=%s, event_type=%s, "
             f"enabled=%s, webhook_env=%s, secret_env=%s, summary_config=%s, detail_config=%s, "
-            f"config_version=COALESCE(config_version,1)+1 WHERE id=%s",
+            f"modified_by=%s, config_version=COALESCE(config_version,1)+1 WHERE id=%s",
             (paper_id, channel, event_type, enabled, webhook_env, secret_env,
-             summary_config, detail_config, cid),
+             summary_config, detail_config, modified_by, cid),
         )
         out = get_config(cid)
         if out is None:
@@ -211,10 +240,10 @@ def save_config(payload: Dict[str, Any]) -> Dict[str, Any]:
                 cur.execute(
                     f"INSERT INTO `{CONFIG_TABLE}` "
                     f"(paper_id, channel, event_type, enabled, webhook_env, secret_env, "
-                    f" summary_config, detail_config, config_version) "
-                    f"VALUES (%s,%s,%s,%s,%s,%s,%s,%s,1)",
+                    f" summary_config, detail_config, config_version, modified_by) "
+                    f"VALUES (%s,%s,%s,%s,%s,%s,%s,%s,1,%s)",
                     (paper_id, channel, event_type, enabled, webhook_env, secret_env,
-                     summary_config, detail_config),
+                     summary_config, detail_config, modified_by),
                 )
                 cur.execute("SELECT LAST_INSERT_ID()")
                 row = cur.fetchone()
@@ -368,6 +397,7 @@ class GetNotificationConfigDetailHandler(_BaseConfigHandler, ABC):
 
 
 class SaveNotificationConfigHandler(_BaseConfigHandler, ABC):
+    @require_role("admin", "operator")
     @gen.coroutine
     def post(self):
         try:
@@ -376,6 +406,9 @@ class SaveNotificationConfigHandler(_BaseConfigHandler, ABC):
             except Exception:
                 self._write_json({"ok": False, "error": "请求体非 JSON"}, status=400)
                 return
+            # Phase 8：启用鉴权后由 session 注入 modified_by；未启用时 require_login 设为 'system'。
+            if getattr(self, "current_username", None):
+                body["modified_by"] = self.current_username
             try:
                 cfg = save_config(body)
             except ValueError as ve:
@@ -388,6 +421,7 @@ class SaveNotificationConfigHandler(_BaseConfigHandler, ABC):
 
 
 class DeleteNotificationConfigHandler(_BaseConfigHandler, ABC):
+    @require_role("admin", "operator")
     @gen.coroutine
     def post(self):
         try:
@@ -407,6 +441,7 @@ class DeleteNotificationConfigHandler(_BaseConfigHandler, ABC):
 
 
 class TestSendNotificationHandler(_BaseConfigHandler, ABC):
+    @require_role("admin", "operator")
     @gen.coroutine
     def post(self):
         try:
@@ -424,6 +459,7 @@ class TestSendNotificationHandler(_BaseConfigHandler, ABC):
 
 
 class RetryNotificationEventHandler(_BaseConfigHandler, ABC):
+    @require_role("admin", "operator")
     @gen.coroutine
     def post(self):
         try:
