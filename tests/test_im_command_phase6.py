@@ -44,25 +44,28 @@ class _FakeMDB:
             self.operators = [r for r in self.operators if r["id"] != cid]
             return None
         if s.startswith("update `cn_stock_im_operator_whitelist`"):
-            channel, op_id, op_name, enabled, note, cid = params
+            channel, op_id, op_name, enabled, note, modified_by, cid = params
             for r in self.operators:
                 if r["id"] == int(cid):
                     r.update(channel=channel, operator_id=op_id,
                              operator_name=op_name, enabled=enabled, note=note,
+                             modified_by=modified_by,
                              updated_at=datetime.datetime.now())
             return None
         if s.startswith("insert into `cn_stock_im_operator_whitelist`"):
-            channel, op_id, op_name, enabled, note = params
+            channel, op_id, op_name, enabled, note, modified_by = params
             # Simulate ON DUPLICATE KEY UPDATE on (channel, operator_id)
             for r in self.operators:
                 if r["channel"] == channel and r["operator_id"] == op_id:
                     r.update(operator_name=op_name, enabled=enabled, note=note,
+                             modified_by=modified_by,
                              updated_at=datetime.datetime.now())
                     return None
             self._op_id += 1
             self.operators.append({
                 "id": self._op_id, "channel": channel, "operator_id": op_id,
                 "operator_name": op_name, "enabled": enabled, "note": note,
+                "modified_by": modified_by,
                 "created_at": datetime.datetime.now(),
                 "updated_at": datetime.datetime.now(),
             })
@@ -167,7 +170,7 @@ class _FakeMDB:
 
 def _op_row(r):
     return (r["id"], r["channel"], r["operator_id"], r.get("operator_name"),
-            r.get("enabled", 1), r.get("note"),
+            r.get("enabled", 1), r.get("note"), r.get("modified_by"),
             r.get("created_at"), r.get("updated_at"))
 
 

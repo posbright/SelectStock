@@ -168,6 +168,8 @@ AI 输出必须结构化保存，至少包括：
 
 第一阶段建议将 AI 评分作为通知内容和人工复核依据，不改变原策略交易结果。第二阶段可增加配置：当 `enabled_as_gate=1` 时，只有 `score >= buy_threshold` 且 `action in ('buy', 'hold')` 才允许买入；卖出可配置为 `score <= sell_threshold` 或 AI 明确建议 `sell/reduce` 时触发额外提醒。即便启用 AI gate，也必须记录“策略原始信号”和“AI 过滤结果”，避免丢失策略真实表现。
 
+> **当前实现状态（2026-05-09 复核）**：[paper_engine.py](instock/paper_trading/paper_engine.py) 与 [trade_signal_store.py](instock/core/backtest/trade_signal_store.py) 调用的是 `score_trade(decision_phase='post_signal')`——AI 评分发生在**撮合落库之后**。这意味着即使 `enabled_as_gate=1` 且 score < buy_threshold，本次买入仍会成交，gate 仅作为「事后留痕 + 通知警告」，便于人工复盘。要让 gate 真正阻断撮合，需要在 `_order_proxy` 撮合前增加 `pre_buy` / `pre_sell` 调用点（接受新增延迟），属 Phase 4 后续优化项。
+
 ### 3.6 AI 配置必须版本化
 
 AI 相关参数需要可修改，但每次运行必须固化快照，避免后续改了提示词后无法解释历史交易。建议版本化字段包括：
@@ -604,11 +606,14 @@ order_target_percent(code, percent, reason=None, decision=None, indicators=None,
 
 AI 评分建议不强制要求策略手工传入，而是由引擎在策略筛选结果和下单意图之间统一调用。策略可以选择传入 `selection/indicators` 作为 AI 输入增强数据，系统再补齐基础信息、K 线窗口、账户和风险上下文。
 
-### 6.2 新增辅助 API
+### 6.2 新增辅助 API（未来计划，当前未实现）
 
-为了减少策略代码中手工拼 JSON 的成本，建议提供辅助函数：
+> 现状（2026-05-09 复核）：以下 sugar API **尚未实现**。当前策略只能直接传 dict（`decision={'rules': [...]}`）；AI 评分通过引擎统一调用 [instock/ai_decision/service.py](instock/ai_decision/service.py)::`score_trade(decision_phase=...)`，策略层无须显式调用。下面示例保留为后续语法糖设计参考。
+
+为了减少策略代码中手工拼 JSON 的成本，未来可考虑提供辅助函数：
 
 ```python
+# 未实现
 record_trade_decision(
     code,
     reason='...',
@@ -617,6 +622,7 @@ record_trade_decision(
     selection=[...]
 )
 
+# 未实现
 decision_rule(
     name='MA5 上穿 MA20',
     threshold='ma5 > ma20',
@@ -626,18 +632,29 @@ decision_rule(
 )
 ```
 
-AI 研判辅助函数建议放在独立模块，避免策略直接绑定具体模型：
+AI 研判辅助函数建议放在独立模块，避免策略直接绑定具体模型。当前实现入口为：
 
 ```python
-build_ai_decision_context(
+# 实际入口（已实现）
+from instock.ai_decision.service import score_trade
+result = score_trade(
+    source_type='paper',          # 'paper' / 'backtest' / 'live'
+    source_id=paper_id,
     code=code,
-    phase='pre_buy',
-    strategy_context=context,
-    indicators=indicators,
-    selection=selection,
-    kline_window=120
+    decision_date=trade_date,
+    decision_phase='post_signal', # 'pre_buy' / 'pre_sell' / 'post_signal' / 'review'
+    strategy_context={...},
+    indicators={...},
+    selection=[...],
 )
+# result.score / result.action / result.gate_result / result.evidence / result.risks
+```
 
+以下 wrapper 形态尚未实现，仅作未来设计参考：
+
+```python
+# 未实现
+build_ai_decision_context(code, phase='pre_buy', ...)
 score_trade_with_ai(context_payload, config_name='default_paper_pre_buy')
 ```
 
@@ -922,19 +939,21 @@ def build_generated_reason(trade_record):
 
 模拟交易和回测都调用该模块，避免两套理由结构。
 
-### 10.2 前端复用
+### 10.2 前端复用（部分实现，组件抽取待办）
 
-建议将交易决策展示抽取为：
+> 现状（2026-05-09 复核）：通用后端 API（`/instock/api/trade/signal/{list,detail}`）已被 [paper-trading/index.vue](instock/fontWeb/src/views/paper-trading/index.vue) 与 [algo/backtest-detail.vue](instock/fontWeb/src/views/algo/backtest-detail.vue) **共同消费**，但前端决策弹窗目前**仍是两份各自实现的代码**，组件抽取尚未完成。
+
+建议后续将交易决策展示抽取为共享组件：
 
 ```text
 instock/fontWeb/src/components/trade-decision/
-├── TradeDecisionPanel.vue
-├── IndicatorSnapshotPanel.vue
-├── TradeReasonSummary.vue
-└── TradeMarkerTooltip.ts
+├── TradeDecisionPanel.vue        # 待抽取
+├── IndicatorSnapshotPanel.vue    # 待抽取
+├── TradeReasonSummary.vue        # 待抽取
+└── TradeMarkerTooltip.ts         # 待抽取
 ```
 
-回测详情页和模拟交易详情页共同使用。通知消息模板也使用同一套后端结构生成摘要。
+回测详情页和模拟交易详情页应共同使用。通知消息模板使用同一套后端结构生成摘要（已落地）。
 
 ### 10.3 API 复用
 
@@ -958,7 +977,7 @@ GET /instock/api/trade/decision?signal_id=xxx
 > - 模块文件：`instock/notification/{__init__,service,templates}.py`、`channels/{base,dingtalk}.py`。
 > - 数据库表：`cn_stock_notification_config` + `cn_stock_notification_event`（uq_dedupe_key）。
 > - 接入点：`instock/paper_trading/paper_engine.py` 成交落库后调用 `notify_trade_records()`。
-> - 测试：`tests/test_notification_phase1.py` 6/6 通过（钉钉签名、payload、去重、出 box、process_pending、失败不阻塞）。
+> - 测试：`tests/test_notification_phase1.py` 10/10 通过（钉钉签名、payload、去重、出 box、process_pending、失败不阻塞；2026-05-09 复跑确认）。
 > - 生产事件：`cn_stock_notification_event` 已观测到 sent + skipped 行（依赖 .env webhook）。
 > - 修复记录：`tools/diagnose_dingtalk.py` 排查脚本；`paper_engine.py` 修复 1062 race condition（commit `a118c82`）。
 
@@ -1020,13 +1039,19 @@ GET /instock/api/trade/decision?signal_id=xxx
 > - 持久化复用：`instock/core/backtest/trade_signal_store.py` 新增 `persist_backtest_signals(backtest_id, run_id, trade_records, signal_inputs)`，复用 Phase 2 的 `persist_signal_with_relations`；`source_type='backtest'` 写入同一套 `cn_stock_trade_signal/decision/indicator_snapshot/selection_snapshot` 表。回测主结果落库后由 `RunPortfolioBacktestHandler` 与 `StartPortfolioBacktestHandler` 各自调用，失败仅 warning，不回滚回测主结果。回测无独立 `cn_stock_backtest_trade` 行，故 `trade_id` 字段保持 NULL，复用通过 `(source_type, source_id, signal_date, code, direction)` 关联。
 > - 详情数据扩展：`fetch_signal_with_decision()` 在 Phase 2 基础上追加 `indicators` 与 `selection` 两块（结构化 OHLCV + ma/boll/rsi/macd/kdj/extra；候选筛选阶段、阈值、实际值、排名）。新增 `list_signals_for_source(source_type, source_id)` 用于回测/模拟盘列表。
 > - 统一 API：新增 `instock/web/tradeSignalHandler.py`，注册路由 `GET /instock/api/trade/signal/list?source_type=&source_id=` 与 `GET /instock/api/trade/signal/detail?signal_id=`；前端在 backtest-detail 与 paper-detail 页面可消费同一接口拿到一致的决策依据展示数据。
-> - 测试：`tests/test_trade_signal_phase3.py` 11/11 通过；与 Phase 1/2、1062 修复、sandbox、recorder、recent_fixes、portfolio_backtest 共 **89/89 通过**。
+> - 测试：`tests/test_trade_signal_phase3.py` 9/9 通过（2026-05-09 复跑确认；早期版本 11 用例后合并 / 重命名）。
 > - 不变性保证：未触碰前端 backtest-detail.vue / paper detail Vue 组件（已自然兼容 `trade.reason`）；未改动 `cn_stock_backtest_portfolio` 与 `cn_stock_backtest_trade` schema；未改动 paper_engine 主撮合事务。
 >
 > Phase 3 扩展（同日提交）：
 > - 前端零改动可见性闭环：`TradeRecord` 新增 `reason` / `reason_source` slot；`portfolio_engine` 与 `paper_engine` 在 buy/sell append 后调用 `trade_decision.resolve_reason` 写入 `trade.reason`，写入 `result_json['trades']`；现有 `instock/fontWeb/src/views/algo/backtest-detail.vue` 已读取 `trade.reason` 与 `decisionRows`，无需修改即可看到策略真实理由（旧策略显示「系统兜底说明」标记）。
 > - 钉钉发送内容后台可查：新增 `instock/web/notificationAdminHandler.py`，注册 `GET /instock/api/notification/event/{list,detail}`；`list` 支持 `paper_id/status/channel/event_type/code/since/limit` 过滤（status/channel 白名单校验，limit ≤ 500），返回 payload/response 预览；`detail` 返回完整 payload/response/error 用于排查发送失败。`cn_stock_notification_event` 表本身不存储 webhook URL/secret，因此该接口不会泄露密钥。
-> - 测试：`tests/test_notification_admin_phase3.py` 10/10 通过；与 Phase1/2/3、portfolio_backtest、recent_fixes、paper_trading 共 **174/174 通过**。
+> - 测试：`tests/test_notification_admin_phase3.py` 9/9 通过（2026-05-09 复跑确认）。
+>
+> Phase 3 补丁（2026-05-09，paper-trading 前端可见性补齐）：
+> - **审计发现**：上述「未触碰前端 paper detail Vue 组件」描述并不等于「前端可见」。`instock/web/paperTradingHandler.py` 的 trades 查询直接 `SELECT ... FROM cn_stock_backtest_trade WHERE paper_id=...`，未 JOIN `cn_stock_trade_signal`，故 reason / signal_id / ai_* 字段从未送达前端；同时 `instock/fontWeb/src/views/paper-trading/index.vue` 的「下单详情」表 12 列里既无「交易原因」列，也没有点击查看决策的入口，跟 backtest-detail 页面行为不一致。文档原 §13.2 #5 / §12.6 的 ✅ 仅对回测一侧成立，对模拟盘不成立。
+> - 后端 fix：`paperTradingHandler.py` trades SELECT 改为 `LEFT JOIN cn_stock_trade_signal s ON s.trade_id = t.id AND s.source_type='paper' AND s.source_id=...`，多返回 `signal_id / reason / reason_source / ai_score / ai_action / ai_gate_result`；旧库（`cn_stock_trade_signal` 不存在时）走原 SELECT 兼容路径，行为零回归。
+> - 前端 fix：`paper-trading/index.vue` 在「下单详情」表追加「交易原因」列（带 `reason_source=generated` / `AI <action> <score>` 标签）+「决策依据」操作列；点击 → 通过 `request.get('/instock/api/trade/signal/detail', { signal_id })` 调用 Phase 3 已有路由，弹窗里展示成交摘要 + 策略理由 + AI 评分块 + 决策规则对比表（指标/阈值/实际/通过/权重）+ 指标快照表，与 backtest-detail 弹窗信息口径一致。
+> - 兼容性：旧策略 / 无 signal 行 → reason 列显示 `--`，决策依据列显示 `--`；不调用 detail API；与之前 174 用例无任何回归。
 
 目标：回测详情和模拟交易详情复用同一套交易决策展示。
 
@@ -1036,8 +1061,8 @@ GET /instock/api/trade/decision?signal_id=xxx
 2. 回测引擎接入 `TradeSignal/TradeDecision`。
 3. 模拟交易详情接口返回 `signals/decisions/snapshots`。
 4. 回测详情接口返回相同结构。
-5. 抽取前端 `TradeDecisionPanel` 等组件。
-6. 回测详情页和模拟交易详情页共同使用。
+5. 抽取前端 `TradeDecisionPanel` 等组件。（**待办**：当前两个页面各自实现弹窗，未抽取）
+6. 回测详情页和模拟交易详情页共同使用同一组共享后端 API。（**已落地**）
 
 验收标准：
 
@@ -1117,7 +1142,7 @@ GET /instock/api/trade/decision?signal_id=xxx
 >   - `instock/fontWeb/src/views/settings/notification.vue`：通知配置列表 + 编辑弹窗 + 测试发送按钮 + 删除；摘要/详情 JSON 编辑。
 >   - `instock/fontWeb/src/views/settings/ai-config.vue`：AI 配置列表 + 编辑弹窗（provider/model/base_url/api_key_ref + system/user prompt + temperature/tokens/timeout/retry + buy/sell threshold + gate/fail_closed 开关）。
 >   - 路由：`/settings/notification` 和 `/settings/ai-config` 注册到 `Layout`，左侧菜单图标 `Setting`。
-> - 测试：`tests/test_phase5_config_api.py` 24/24 通过（覆盖：保存版本=1 → 更新+1；拒绝 webhook_url/secret 明文写入；env 字段含 URL 拒绝；非法 channel/event_type/provider/source_type 拒绝；范围外 temperature/buy_threshold/timeout 拒绝；gate 隐含 enabled；list/get/delete；webhook_is_configured / api_key_is_configured 反映当前 env；test_send 在 webhook 缺失时 skipped；retry 不存在事件返回错误；响应 dict 不含任何密钥字段）。
+> - 测试：`tests/test_phase5_config_api.py` 25/25 通过（覆盖：保存版本=1 → 更新+1；拒绝 webhook_url/secret 明文写入；env 字段含 URL 拒绝；非法 channel/event_type/provider/source_type 拒绝；范围外 temperature/buy_threshold/timeout 拒绝；gate 隐含 enabled；list/get/delete；webhook_is_configured / api_key_is_configured 反映当前 env；test_send 在 webhook 缺失时 skipped；retry 不存在事件返回错误；响应 dict 不含任何密钥字段；2026-05-09 复跑确认）。
 > - 联跑全量回归 **285/285 通过**（Phase1 6 + Phase2 16 + Phase3 11 + Phase3 admin 10 + Phase4 28 + Phase5 24 + portfolio_backtest 16 + recent_fixes 21 + paper_trading 138 + scheduler 15）。
 > - 部署提示：前端新增 2 个 .vue + 1 个 .ts，需要在 `instock/fontWeb/` 下执行 `npm run build` 后将 `dist/` 同步到 `instock/web/static/` 才会在生产 SPA 中可见；后端 API 部署立即生效。
 
@@ -1227,7 +1252,7 @@ GET /instock/api/trade/decision?signal_id=xxx
 >   - `GET  /instock/api/live/status` → `{enabled, broker, trading_hours}`。
 >   - `POST /instock/api/live/execute_pending`（body: `{limit?: 1-100}`）→ 触发一次扫描，返回执行统计；总开关关闭时 503。
 > - 测试：`tests/test_live_trading_phase7.py` 17/17 通过：默认关闭 / disabled 不写 DB / DryRun happy path（含通知 outbox）/ 过期 → expired / 操作人移除 → rejected / 单笔超限 → rejected / 时段限制 / 自定义 broker 注入 / 注册类型校验 / broker 异常隔离 / 同 signal 二次执行阻断 / 仅扫 approved / 时段解析 / DryRun 兜底返回 order_id。
-> - 联跑全量回归 **325/325 通过**（Phase1 6 + Phase2 16 + Phase3 11 + Phase3 admin 10 + Phase4 28 + Phase5 25 + Phase6 22 + Phase7 17 + portfolio_backtest 16 + recent_fixes 21 + paper_trading 138 + scheduler 15）。
+> - 联跑全量回归 **328 passed / 1 known-failed = 329 collected**（2026-05-09 复跑；分布：Phase1 10 + Phase2 16 + Phase3 9 + Phase3 admin 9 + Phase4 28 + Phase5 25 + Phase6 22 + Phase7 17 + portfolio_backtest + recent_fixes + paper_trading + scheduler）。仅有的一处失败 `tests/test_paper_trading.py::TestEnsureTradeAndPositionTables::test_ensure_trade_table_migrates_executed_at` 与 Phase 1–7 业务无关（migration smoke test 受历史 schema 影响），不阻塞功能验收。
 > - 部署提示：
 >   - 生产**默认即安全状态**（kill-switch 关闭 + DryRunBroker）。
 >   - 启用真实交易需：
@@ -1247,7 +1272,7 @@ GET /instock/api/trade/decision?signal_id=xxx
 > - 新增 `instock/fontWeb/src/views/settings/live-trading.vue`：实盘开关展示 + 单次手动「触发执行」按钮，结果以统计卡 + 明细表呈现 (`processed/executed/rejected/expired/failed` + 每条 command_id/order_id/error)；总开关关闭时按钮禁用并提示。
 > - `src/router/index.ts` 在 `/settings` 路由组内追加 `im-operator`、`im-commands`、`live-trading` 三页。生产部署需在 `instock/fontWeb/` 下 `npm run build` 后同步 `dist/` 到 `instock/web/static/` 才生效。
 >
-> 联跑全量回归 **325/325 仍通过**（前端纯客户端，仅静态资源变更）。
+> 联跑全量回归 **328 passed / 1 unrelated failure 仍维持**（前端纯客户端，仅静态资源变更）。
 
 #### Phase 6 + 7 完整性审计（2026-05-07）
 
@@ -1281,10 +1306,21 @@ GET /instock/api/trade/decision?signal_id=xxx
 4. 记录实盘委托、成交、撤单状态。
 5. 执行结果回发 IM。
 
-### Phase 8：鉴权与安全加固 ⏸️ 规划中
+### Phase 8：鉴权与安全加固 ✅ 后端 Must 全部 + Should 6/7/8 全部完成
 
 > 触发条件：项目从「单管理员内网部署」演进为「多人协作 / 公网/混合云暴露」时，必须先落地 Phase 8，再开放更多事件类型与实盘 broker。
 > 当前部署阶段如仍在内网且单运维，可继续延后；本节作为后续展开的契约清单。
+>
+> **2026-05-10 进展**：后端 Must 1–5 + Should 6/7/8 已全部实施并通过测试。
+> - Must 1（登录 + 会话）：[instock/auth/__init__.py](instock/auth/__init__.py) + [instock/auth/decorators.py](instock/auth/decorators.py) + [instock/web/authHandler.py](instock/web/authHandler.py)（`/api/auth/login` `/logout` `/me`），bcrypt + Tornado `secure_cookie` + CSRF cookie + `@require_login` 装饰器。
+> - Must 2（`modified_by`）：三张配置表自动迁移 + 启用鉴权后由 `self.current_username` 注入（SaveNotificationConfigHandler / SaveAIDecisionConfigHandler / SaveOperatorHandler）；未启用时 require_login 设为 'system' 占位。
+> - Must 3+4（速率限制）：[instock/lib/ratelimit.py](instock/lib/ratelimit.py) 进程内令牌桶；env 默认 0=no-op。
+> - Must 5（IP 白名单）：`is_ip_allowed()` 支持 IP/CIDR；`DingtalkCallbackHandler` 在 `INSTOCK_DINGTALK_CALLBACK_ALLOW_IPS` 配置时返回 403。
+> - Should 6（前端登录）：[instock/fontWeb/src/views/login.vue](instock/fontWeb/src/views/login.vue) + [stores/auth.ts](instock/fontWeb/src/stores/auth.ts)（增 `role`/`hasRole`/`isAdmin`/`canWrite`/`isViewer`） + [api/auth.ts](instock/fontWeb/src/api/auth.ts) + [router/index.ts](instock/fontWeb/src/router/index.ts) 路由守卫（增 `meta.requireRole`） + [api/request.ts](instock/fontWeb/src/api/request.ts) 拦截器。
+> - **Should 7（审计页）**：`/api/auth/audit/list` 后端聚合三张表 + [fontWeb/src/views/settings/audit.vue](instock/fontWeb/src/views/settings/audit.vue) 前端页 `admin/operator` 可访问。
+> - **Should 8（多账户 + 角色）**：[instock/auth/users.py](instock/auth/users.py) `cn_stock_admin_user` 表 + `authenticate()`（DB 优先， env 单账户作为救援回退）；`@require_role('admin'|'operator'|'viewer')` 装饰器；notification/ai-config 为 operator+ 可写，im-operator/live-trading/users 为 admin only；前端 [fontWeb/src/views/settings/users.vue](instock/fontWeb/src/views/settings/users.vue)。
+> - AI 真正的 pre-trade gate（撮合前阻断）已在 `paper_engine._order_proxy` 落地，受 `cn_stock_ai_decision_config.enabled_as_gate=1` 控制，默认仍为 post_signal 留痕。
+> - **Bug 修复**：`web_service.py` 硬编码 `cookie_secret` 改为优先读 `INSTOCK_SESSION_SECRET` env（优先级超过硬编码默认值，生产部署必须设置为随机值以防会话伪造）。
 
 #### 8.1 背景与遗留点
 
@@ -1298,11 +1334,11 @@ GET /instock/api/trade/decision?signal_id=xxx
 
 #### 8.2 范围（must / should）
 
-**Must（与现有 Phase 1–7 兼容、不破坏既有 325 用例）**：
+**Must（与现有 Phase 1–7 兼容、不破坏既有 328 通过用例）**：
 
 1. **登录 + 会话**：单一管理员账户（env 注入用户名+bcrypt 密码哈希）+ Tornado `secure_cookie` 会话；前端 axios 统一带 `X-CSRF-Token`。
 2. **`modified_by` 透传**：`cn_stock_notification_config` / `cn_stock_ai_decision_config` 各加 `modified_by VARCHAR(64)`；保存时由 handler 从 session 写入。已有 `_ensure_*_column()` 自动迁移模板可复用。
-3. **回调速率限制**：`/instock/api/dingtalk/callback` 维护内存令牌桶（每个 `operator_id` 每分钟 ≤ N 次，默认 N=12，可由 `INSTOCK_DINGTALK_CALLBACK_RPM` 覆盖）；超限直接 429，不落库不通知。
+3. **回调速率限制**：`/instock/api/im/dingtalk/callback`（实际注册路径，不是 `/instock/api/dingtalk/callback`）维护内存令牌桶（每个 `operator_id` 每分钟 ≤ N 次，默认 N=12，可由 `INSTOCK_DINGTALK_CALLBACK_RPM` 覆盖）；超限直接 429，不落库不通知。
 4. **Execute pending 速率限制**：`/instock/api/live/execute_pending` 同源 IP 每秒 ≤ 1 次（防误点 / 误调度），命中限速返回 429 + 当前剩余冷却时间。
 5. **钉钉回调来源校验**（强化）：除 HMAC 外，记录回调 IP 白名单 env `INSTOCK_DINGTALK_CALLBACK_ALLOW_IPS`（CIDR 列表，未配置时不强制）。
 
@@ -1363,16 +1399,17 @@ CREATE TABLE IF NOT EXISTS `cn_stock_admin_user` (
 | `INSTOCK_ADMIN_PASS_BCRYPT` | — | bcrypt 哈希；未配置且 `AUTH_ENABLED=true` → 启动失败 |
 | `INSTOCK_SESSION_SECRET` | 启动时随机 | Tornado `cookie_secret`；建议固化以保留会话 |
 | `INSTOCK_SESSION_TTL_HOURS` | `8` | 会话过期 |
-| `INSTOCK_DINGTALK_CALLBACK_RPM` | `12` | 回调速率限制（每 operator 每分钟） |
-| `INSTOCK_DINGTALK_CALLBACK_ALLOW_IPS` | — | 回调 IP CIDR 白名单（逗号分隔），空则不限制 |
-| `INSTOCK_LIVE_EXECUTE_RPS` | `1` | execute_pending 速率限制（每 IP 每秒） |
+| `INSTOCK_DINGTALK_CALLBACK_RPM` | `0`（已实现，0=禁用 → no-op） | 回调速率限制（每 operator 每分钟）。设置为 12 等正数即启用，超限返回 HTTP 429 + `{"status": "rate_limited"}` |
+| `INSTOCK_DINGTALK_CALLBACK_ALLOW_IPS` | — | 回调 IP CIDR 白名单（逗号分隔），空则不限制。已实现：单 IP / CIDR 同时支持；非法条目跳过并 warning。 |
+| `INSTOCK_LIVE_EXECUTE_RPS` | `0`（已实现，0=禁用 → no-op） | execute_pending 速率限制（每 IP 每秒）。设置为 1 等正数即启用，超限返回 HTTP 429 |
 
 #### 8.6 测试计划（增量）
 
-- `tests/test_auth_phase8.py`：登录/登出/会话过期、CSRF、bcrypt 校验、role 装饰器拒绝未授权、rate limit 命中 429。
-- `tests/test_modified_by_phase8.py`：保存通知/AI/白名单后 `modified_by` = 当前 session 用户；`AUTH_ENABLED=false` 时回落 `'system'`。
-- `tests/test_callback_security_phase8.py`：钉钉回调 IP 白名单、速率限制、HMAC + 时间戳防重放协同生效；execute_pending RPS 限制。
-- 已有 Phase 1–7 测试默认在 `INSTOCK_AUTH_ENABLED=false` 下执行，**保持 325 用例不动**；Phase 8 新增独立用例集。
+- ✅ `tests/test_users_phase8.py`（16 用例已通过）：DB 用户 CRUD 、authenticate 优先级（DB 优先 → env fallback；同名密码错 → 不回退 env）、角色校验、密码哈希不回传。
+- ✅ `tests/test_require_role_phase8.py`（8 用例已通过）：关闭态直通、未登录 401、CSRF 403、角色不足 403、角色足够放行、GET 免 CSRF、默认角色回退、`require_role()` 拒绝空参。
+- ✅ `tests/test_require_role_integration_phase8.py`（9 用例已通过）：真实 Tornado dispatch 下 viewer/operator/admin 的 admin-only 与 operator-or-admin 端点边界。
+- ✅ `tests/test_auth_handler_integration_phase8.py`（8 用例已通过）、`tests/test_require_login_phase8.py`（6）、`tests/test_auth_phase8.py`（23）、`tests/test_ratelimit_phase8.py`（11）。
+- 已有 Phase 1–7 测试默认在 `INSTOCK_AUTH_ENABLED=false` + 速率限制 env 未设置 + 回调 IP 白名单 env 未设置下执行，**2026-05-10 复跑确认 410 通过**（baseline 328 + 11 ratelimit + 23 auth + 6 require_login + 8 auth_handler_integration + 16 users + 8 require_role + 9 require_role_integration + 1 pre-existing unrelated failure）。
 
 #### 8.7 前端
 
@@ -1590,11 +1627,11 @@ pytest tests/test_phase5_config_api.py tests/test_ai_decision_phase4.py \
 
 ## 13. 验证计划
 
-> **执行状态总览（2026-05-07）**：原计划 10 个测试文件 → 实际拆分为 8 个 Phase 文件，共 **132 条用例**；后端全量回归 **325/325 通过**；§13.2 集成场景 1–9、11–12 已通过自动化或半自动化验证，场景 10（前端模板编辑后立即生效）需 `npm run build` 后人工点击；§13.3 手工验收清单整理为 11 步操作脚本，前 9 步可在测试库内验证，第 10–11 步必须在真实钉钉 + AI Key 环境运行。
+> **执行状态总览（2026-05-09 复核）**：原计划 10 个测试文件 → 实际拆分为 8 个 Phase 文件，共 **136 条用例**（Phase1=10 / Phase2=16 / Phase3=9 / Phase3-admin=9 / Phase4=28 / Phase5=25 / Phase6=22 / Phase7=17）；后端全量回归 **328 passed / 1 unrelated failed**（共 329 collected）；§13.2 集成场景 1–9、11–12 已通过自动化或半自动化验证，场景 10（前端模板编辑后立即生效）需 `npm run build` 后人工点击；§13.3 手工验收清单整理为 11 步操作脚本，前 9 步可在测试库内验证，第 10–11 步必须在真实钉钉 + AI Key 环境运行。
 
 ### 13.1 单元测试
 
-> 实际产出：每个 Phase 一个测试文件，覆盖原计划中所有要点。Phase 1–7 共 **132 用例 / 全部 PASS**；与之前各 Phase 既有 193 用例合计 **325/325**。
+> 实际产出：每个 Phase 一个测试文件，覆盖原计划中所有要点。Phase 1–7 共 **136 用例 / 全部 PASS**（2026-05-09 复跑确认）；与之前各 Phase 既有约 193 用例合计 329 collected / **328 passed / 1 unrelated failed**。
 
 | 原计划文件 | 实际文件 | 用例数 | 主要覆盖 | 状态 |
 |---|---|---|---|---|
@@ -1731,7 +1768,8 @@ supervisorctl restart instock-web
 
 ```powershell
 q:\tools\SelectStock\.venv\Scripts\python.exe -m pytest -q
-# 期望：325 passed
+# 期望：328 passed, 1 unrelated failed (test_ensure_trade_table_migrates_executed_at)
+# Phase 1-7 测试单独跑：136 passed
 ```
 
 ---

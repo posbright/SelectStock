@@ -35,6 +35,101 @@ _INDEX_CODES = {
     '399001', '399006', '399300', '399905', '399951',
 }
 
+# 模块级股票名称缓存：避免每笔交易/通知都打 DB
+_STOCK_NAME_CACHE = {}
+
+
+def _resolve_stock_name(code):
+    """根据 code 取股票/指数名称（带模块级缓存）。
+
+    用于补全 paper_engine 持仓/交易记录中的 ``name`` 字段（IM 通知、前端列表
+    都依赖该字段；若策略只调用 ``order(code, ...)`` 而未指定名称，
+    Position.name 默认空串，导致下游展示只有代码不易识别）。
+    """
+    code = _normalize_security_code(code)
+    if not code:
+        return ''
+    if code in _STOCK_NAME_CACHE:
+        return _STOCK_NAME_CACHE[code]
+    name = ''
+    try:
+        import instock.lib.database as mdb
+        # 优先 cn_stock_spot（A 股个股），命中即返回
+        rows = mdb.executeSqlFetch(
+            'SELECT name FROM cn_stock_spot WHERE code=%s LIMIT 1', (code,))
+        if rows and rows[0] and rows[0][0]:
+            name = str(rows[0][0]).strip()
+        else:
+            # 指数（cn_index_spot）兜底
+            rows = mdb.executeSqlFetch(
+                'SELECT name FROM cn_index_spot WHERE code=%s LIMIT 1', (code,))
+            if rows and rows[0] and rows[0][0]:
+                name = str(rows[0][0]).strip()
+    except Exception:
+        logging.debug(f"[模拟交易] 查询股票名称失败 code={code}", exc_info=True)
+    _STOCK_NAME_CACHE[code] = name
+    return name
+
+
+def _build_derived_reason(direction, order_info, log_lines, exec_price=None,
+                           exec_amount=None, strategy_name=None):
+    """从策略 log + order 参数派生真实交易理由（reason_source='derived'）。
+
+    优先级：
+      1) 策略 ``log.info/warn`` 中提到该 code 的最近条目（截取 5 条）。
+      2) order_api + target_amount/value/percent + 实际成交价数量。
+    """
+    code = order_info.get('code') or ''
+    matched = []
+    if log_lines:
+        # 反向扫描最近 50 条，挑出明确提到该 code 的（最多 5 条）
+        for line in reversed(log_lines[-50:]):
+            if code and code in str(line):
+                matched.append(str(line).strip())
+                if len(matched) >= 5:
+                    break
+        matched.reverse()
+
+    parts = []
+    if strategy_name:
+        parts.append(f"[{strategy_name}]")
+    parts.append('买入' if direction == 'buy' else '卖出/调仓')
+
+    api = order_info.get('order_api') or ''
+    api_desc_map = {
+        'order': 'order(amount)',
+        'order_target': 'order_target(target_amount)',
+        'order_value': 'order_value(value)',
+        'order_target_value': 'order_target_value(target_value)',
+        'order_target_percent': 'order_target_percent(target_percent)',
+    }
+    if api:
+        parts.append(f"({api_desc_map.get(api, api)})")
+
+    param_bits = []
+    if order_info.get('target_amount') is not None:
+        param_bits.append(f"目标股数={order_info['target_amount']}")
+    if order_info.get('target_percent') is not None:
+        try:
+            param_bits.append(f"目标仓位={float(order_info['target_percent']) * 100:.2f}%")
+        except Exception:
+            pass
+    if order_info.get('value') is not None and order_info.get('order_api') in (
+            'order_value', 'order_target_value'):
+        try:
+            param_bits.append(f"目标市值Δ={float(order_info['value']):.0f}元")
+        except Exception:
+            pass
+    if exec_price is not None and exec_amount:
+        param_bits.append(f"实际成交 {exec_amount} 股 @ {float(exec_price):.3f}")
+    if param_bits:
+        parts.append('；'.join(param_bits))
+
+    head = ' '.join(parts)
+    if matched:
+        return head + '\n策略日志:\n  - ' + '\n  - '.join(matched)
+    return head
+
 
 def _normalize_security_code(code):
     text = str(code or '').strip()
@@ -353,6 +448,20 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
         api_ns = _create_api(context, data_proxy, g)
         pending_orders = []
 
+        # Phase 8: AI pre-trade gate 配置只在每轮执行开始时加载一次（缓存到闭包），
+        # 避免策略生成多笔订单时反复打 DB。任何加载异常都视为「未启用 gate」放行。
+        _ai_gate_cfg = None
+        try:
+            from instock.ai_decision import config as _ai_cfg_pre
+            _ai_gate_cfg = _ai_cfg_pre.load_config_for_source('paper', paper_id)
+            if _ai_gate_cfg is not None and not _ai_gate_cfg.is_gate():
+                _ai_gate_cfg = None  # 仅留痕模式 → 不启用 pre-trade 阻断
+        except Exception as _ai_cfg_err:
+            logging.debug(
+                f"[模拟交易] AI gate 配置加载失败(放行所有订单): {_ai_cfg_err}"
+            )
+            _ai_gate_cfg = None
+
         def _order_proxy(code, amount=None, value=None, *,
                           reason=None, decision=None, indicators=None, selection=None,
                           order_api=None, target_amount=None, target_percent=None):
@@ -390,6 +499,44 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                         'volume': int(spot['volume']),
                         'pre_close': float(spot['pre_close']) if pd.notna(spot.get('pre_close')) else float(spot['close']),
                     })
+            # Phase 8: AI 真正的 pre-trade gate（默认关闭：cfg.is_gate()=False
+            # 时不会进入此分支）。仅当配置 enabled=1 AND enabled_as_gate=1 时
+            # 启用：撮合前调用 score_trade(decision_phase='pre_buy'/'pre_sell')；
+            # 若返回 GATE_REJECT，则跳过本笔订单（不进入 pending_orders），
+            # 等价于策略未发出信号。任何异常（DB / provider / 配置）均放行
+            # 并 warning，避免 AI 故障阻塞撮合。
+            #
+            # 推断方向：order/order_target → amount 符号；
+            #          order_value/order_target_value/order_target_percent → value 符号。
+            _direction = None
+            if amount is not None and amount != 0:
+                _direction = 'buy' if amount > 0 else 'sell'
+            elif value is not None and value != 0:
+                _direction = 'buy' if value > 0 else 'sell'
+            if _direction is not None:
+                try:
+                    if _ai_gate_cfg is not None:
+                        from instock.ai_decision import service as _ai_svc_pre
+                        from instock.ai_decision.schema import GATE_REJECT as _GATE_REJECT
+                        _phase = 'pre_buy' if _direction == 'buy' else 'pre_sell'
+                        _ai_pre = _ai_svc_pre.score_trade(
+                            cfg=_ai_gate_cfg, source_type='paper', source_id=paper_id,
+                            run_id=None, code=code, name=None,
+                            decision_date=date_str, decision_phase=_phase,
+                            direction=_direction,
+                            indicators=indicators, selection=selection,
+                        ) or {}
+                        if _ai_pre.get('ai_gate_result') == _GATE_REJECT:
+                            logging.info(
+                                f"[模拟交易] AI 闸门拒绝 {code} {_direction} "
+                                f"(score={_ai_pre.get('ai_score')}, "
+                                f"reason={(_ai_pre.get('reason_summary') or '')[:80]})"
+                            )
+                            return
+                except Exception as _ai_pre_err:
+                    logging.warning(
+                        f"[模拟交易] AI pre-trade gate 异常(放行 {code}): {_ai_pre_err}"
+                    )
             pending_orders.append({
                 'code': code, 'amount': amount, 'value': value,
                 # Phase 2: 策略可显式传入交易解释；旧策略不传则为 None。
@@ -520,6 +667,8 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                         continue
 
                 pos = context.portfolio._get_or_create_position(code)
+                if not pos.name:
+                    pos.name = _resolve_stock_name(code)
                 pos._on_buy(amount, actual_price, commission)
                 pos._update_price(exec_price)  # 用市场收盘价估值，而非含滑点的成交价
                 context.portfolio.available_cash -= (total_cost + commission)
@@ -528,7 +677,12 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                 trade.commission = round(commission, 2)
                 try:
                     from instock.core.backtest import trade_decision as _td
-                    _r = _td.resolve_reason('buy', order_info.get('reason'))
+                    _derived = _build_derived_reason(
+                        'buy', order_info, api_ns.get('_log_buffer') or [],
+                        exec_price=exec_price, exec_amount=amount,
+                        strategy_name=strategy_name)
+                    _r = _td.resolve_reason('buy', order_info.get('reason'),
+                                             derived_reason=_derived)
                     trade.reason = _r.get('reason', '')
                     trade.reason_source = _r.get('reason_source', '')
                 except Exception:
@@ -551,15 +705,31 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                 commission = max(total_income * context.commission_rate, 5.0)
                 tax = total_income * context.stamp_tax_rate
 
+                # Bug 修复：在 _on_sell 之前捕获 avg_cost；若清仓 _on_sell 会把
+                # avg_cost 重置为 0，导致后续平仓盈亏/收益率计算永远为 0。
+                avg_cost_before = float(pos.avg_cost or 0.0)
+                if not pos.name:
+                    pos.name = _resolve_stock_name(code)
+                pos_name_before = pos.name
                 pos._on_sell(sell_amount, exec_price)  # 剩余持仓以市场收盘价估值
                 context.portfolio.available_cash += (total_income - commission - tax)
 
-                trade = TradeRecord(run_date_nph, code, pos.name, 'sell', exec_price, sell_amount)
+                trade = TradeRecord(run_date_nph, code, pos_name_before, 'sell', exec_price, sell_amount)
                 trade.commission = round(commission, 2)
                 trade.tax = round(tax, 2)
+                # 平仓盈亏 = (实际成交价 - 持仓均价) * 数量 - 佣金 - 印花税
+                # 收益率 = (实际成交价 / 持仓均价 - 1) * 100   （含滑点扣减）
+                if avg_cost_before > 0 and sell_amount > 0:
+                    trade.close_profit = (actual_price - avg_cost_before) * sell_amount - commission - tax
+                    trade.return_rate = (actual_price / avg_cost_before - 1.0) * 100.0
                 try:
                     from instock.core.backtest import trade_decision as _td
-                    _r = _td.resolve_reason('sell', order_info.get('reason'))
+                    _derived = _build_derived_reason(
+                        'sell', order_info, api_ns.get('_log_buffer') or [],
+                        exec_price=exec_price, exec_amount=sell_amount,
+                        strategy_name=strategy_name)
+                    _r = _td.resolve_reason('sell', order_info.get('reason'),
+                                             derived_reason=_derived)
                     trade.reason = _r.get('reason', '')
                     trade.reason_source = _r.get('reason_source', '')
                 except Exception:
@@ -617,20 +787,32 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                     try:
                         cur.execute(
                             'INSERT INTO cn_stock_backtest_trade '
-                            '(paper_id, date, executed_at, code, name, direction, price, amount, value, commission, tax) '
-                            'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                            '(paper_id, date, executed_at, code, name, direction, price, amount, value, '
+                            ' commission, tax, close_profit, return_rate, slippage_cost, reason, reason_source) '
+                            'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
                             (paper_id, date_str, now_dt, t.code, t.name, t.direction,
-                             t.price, t.amount, t.value, t.commission, t.tax))
+                             t.price, t.amount, t.value, t.commission, t.tax,
+                             round(float(getattr(t, 'close_profit', 0) or 0), 2),
+                             round(float(getattr(t, 'return_rate', 0) or 0), 4),
+                             round(float(getattr(t, 'slippage_cost', 0) or 0), 2),
+                             (getattr(t, 'reason', '') or '')[:2000],
+                             (getattr(t, 'reason_source', '') or '')[:32]))
                     except Exception as trade_err:
-                        if 'executed_at' not in str(trade_err):
+                        # 旧表结构兜底：缺 executed_at 或新增的 close_profit 等列时降级。
+                        msg = str(trade_err)
+                        if ('executed_at' in msg or 'close_profit' in msg or
+                                'return_rate' in msg or 'slippage_cost' in msg or
+                                'reason' in msg):
+                            logging.warning(
+                                f"[模拟交易] 列缺失({msg})，使用旧表结构记录交易，新字段丢失")
+                            cur.execute(
+                                'INSERT INTO cn_stock_backtest_trade '
+                                '(paper_id, date, code, name, direction, price, amount, value, commission, tax) '
+                                'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                                (paper_id, date_str, t.code, t.name, t.direction,
+                                 t.price, t.amount, t.value, t.commission, t.tax))
+                        else:
                             raise
-                        logging.warning("[模拟交易] executed_at 列不存在，使用旧表结构记录交易")
-                        cur.execute(
-                            'INSERT INTO cn_stock_backtest_trade '
-                            '(paper_id, date, code, name, direction, price, amount, value, commission, tax) '
-                            'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
-                            (paper_id, date_str, t.code, t.name, t.direction,
-                             t.price, t.amount, t.value, t.commission, t.tax))
                     try:
                         trade_ids.append(int(cur.lastrowid) if cur.lastrowid else None)
                     except Exception:
@@ -714,7 +896,15 @@ def run_paper_trading_daily(paper_id, scheduled=False, now=None):
                 run_id = f"paper-{paper_id}-{now_dt.strftime('%Y%m%d%H%M%S')}"
                 for idx, t in enumerate(trade_records):
                     order_info = signal_inputs[idx] if idx < len(signal_inputs) else {}
-                    resolved = _td.resolve_reason(t.direction, order_info.get('reason'))
+                    # 复用撮合阶段已落到 TradeRecord 的真实 reason / reason_source，
+                    # 避免在此处再次 resolve 时丢失 derived 上下文，导致信号表里又
+                    # 写回 generated 兜底文案。
+                    resolved = {
+                        'reason': getattr(t, 'reason', '') or '',
+                        'reason_source': getattr(t, 'reason_source', '') or 'generated',
+                    }
+                    if not resolved['reason']:
+                        resolved = _td.resolve_reason(t.direction, order_info.get('reason'))
                     norm = _td.normalize_decision_payload(
                         order_info.get('decision'),
                         indicators=order_info.get('indicators'),
@@ -970,12 +1160,25 @@ def _create_api(context, data_proxy, g):
         _daily_callbacks.append(func)
 
     class _Log:
-        def info(self, msg): logging.info(f"[模拟盘策略] {msg}")
-        def warn(self, msg): logging.warning(f"[模拟盘策略] {msg}")
-        def warning(self, msg): logging.warning(f"[模拟盘策略] {msg}")
-        def error(self, msg): logging.error(f"[模拟盘策略] {msg}")
+        def __init__(self, buf):
+            self._buf = buf
+        def _capture(self, level, msg):
+            try:
+                text = msg if isinstance(msg, str) else str(msg)
+            except Exception:
+                text = repr(msg)
+            self._buf.append(f"[{level}] {text}")
+            # 限长，避免长跑模拟盘内存涨
+            if len(self._buf) > 200:
+                del self._buf[:len(self._buf) - 200]
+        def info(self, msg): self._capture('info', msg); logging.info(f"[模拟盘策略] {msg}")
+        def warn(self, msg): self._capture('warn', msg); logging.warning(f"[模拟盘策略] {msg}")
+        def warning(self, msg): self._capture('warn', msg); logging.warning(f"[模拟盘策略] {msg}")
+        def error(self, msg): self._capture('error', msg); logging.error(f"[模拟盘策略] {msg}")
         def debug(self, msg): logging.debug(f"[模拟盘策略] {msg}")
         def set_level(self, *args, **kwargs): pass
+
+    _strategy_log_buffer = []
 
     def get_all_cached_stocks():
         try:
@@ -1234,7 +1437,8 @@ def _create_api(context, data_proxy, g):
         'history': history,
         'attribute_history': attribute_history,
         'get_price': get_price,
-        'log': _Log(),
+        'log': _Log(_strategy_log_buffer),
+        '_log_buffer': _strategy_log_buffer,
         'g': g,
         'record': lambda **kw: None,
         'set_benchmark': lambda code: setattr(context, 'benchmark', _normalize_security_code(code)),
@@ -1412,6 +1616,23 @@ def _ensure_trade_table():
                     'ADD COLUMN executed_at DATETIME NULL AFTER date')
         except Exception as e:
             logging.warning(f"[模拟交易] executed_at 列检查/迁移失败(不阢达主逻辑): {e}")
+        # Phase 3 补丁：补充平仓盈亏 / 收益率 / 滑点成本 / reason / reason_source 列
+        # （旧表未持久化导致前端、通知中卖出 PnL 永远为 0，reason 仅能从 signal 表回溯）。
+        _migrations = [
+            ("close_profit", "ADD COLUMN close_profit DECIMAL(15,2) NULL AFTER tax"),
+            ("return_rate",  "ADD COLUMN return_rate DECIMAL(10,4) NULL AFTER close_profit"),
+            ("slippage_cost","ADD COLUMN slippage_cost DECIMAL(15,2) NULL AFTER return_rate"),
+            ("reason",       "ADD COLUMN reason VARCHAR(2000) NULL AFTER slippage_cost"),
+            ("reason_source","ADD COLUMN reason_source VARCHAR(32) NULL AFTER reason"),
+        ]
+        for col, ddl in _migrations:
+            try:
+                exists = mdb.executeSqlFetch(f"SHOW COLUMNS FROM cn_stock_backtest_trade LIKE '{col}'")
+                if not exists:
+                    logging.info(f"[模拟交易] 为 cn_stock_backtest_trade 添加 {col} 列")
+                    mdb.executeSql(f"ALTER TABLE cn_stock_backtest_trade {ddl}")
+            except Exception as e:
+                logging.warning(f"[模拟交易] {col} 列迁移失败(不影响主逻辑): {e}")
         return
     mdb.executeSql('''
         CREATE TABLE IF NOT EXISTS `cn_stock_backtest_trade` (
@@ -1428,6 +1649,11 @@ def _ensure_trade_table():
             `value` DECIMAL(15,2),
             `commission` DECIMAL(10,2),
             `tax` DECIMAL(10,2),
+            `close_profit` DECIMAL(15,2) NULL,
+            `return_rate` DECIMAL(10,4) NULL,
+            `slippage_cost` DECIMAL(15,2) NULL,
+            `reason` VARCHAR(2000) NULL,
+            `reason_source` VARCHAR(32) NULL,
             INDEX `idx_bt_date` (`backtest_id`, `date`),
             INDEX `idx_paper_date` (`paper_id`, `date`),
             INDEX `idx_paper_executed_at` (`paper_id`, `executed_at`)

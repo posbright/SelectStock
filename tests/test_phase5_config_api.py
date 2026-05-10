@@ -59,13 +59,14 @@ class _FakeMDB:
             return None
         if s.startswith("update `cn_stock_notification_config`"):
             (paper_id, channel, event_type, enabled, webhook_env, secret_env,
-             summary_config, detail_config, cid) = params
+             summary_config, detail_config, modified_by, cid) = params
             for r in self.tables["cn_stock_notification_config"]:
                 if r["id"] == cid:
                     r.update({
                         "paper_id": paper_id, "channel": channel, "event_type": event_type,
                         "enabled": enabled, "webhook_env": webhook_env, "secret_env": secret_env,
                         "summary_config": summary_config, "detail_config": detail_config,
+                        "modified_by": modified_by,
                         "config_version": (r.get("config_version") or 1) + 1,
                         "updated_at": datetime.datetime.now(),
                     })
@@ -78,7 +79,7 @@ class _FakeMDB:
                 "system_prompt", "user_prompt_template", "output_schema", "tool_config",
                 "temperature", "max_tokens", "timeout_seconds", "retry_count",
                 "enabled_as_gate", "fail_closed",
-                "buy_threshold", "sell_threshold",
+                "buy_threshold", "sell_threshold", "modified_by",
             ]
             cid = params[-1]
             kv = dict(zip(keys, params[:-1]))
@@ -134,13 +135,14 @@ class _FakeMDB:
                 self.parent._auto_id["cn_stock_notification_config"] += 1
                 new_id = self.parent._auto_id["cn_stock_notification_config"]
                 (paper_id, channel, event_type, enabled, webhook_env, secret_env,
-                 summary_config, detail_config) = params
+                 summary_config, detail_config, modified_by) = params
                 self.parent.tables["cn_stock_notification_config"].append({
                     "id": new_id, "paper_id": paper_id, "channel": channel,
                     "event_type": event_type, "enabled": enabled,
                     "webhook_env": webhook_env, "secret_env": secret_env,
                     "summary_config": summary_config, "detail_config": detail_config,
                     "config_version": 1,
+                    "modified_by": modified_by,
                     "created_at": datetime.datetime.now(),
                     "updated_at": datetime.datetime.now(),
                 })
@@ -154,7 +156,7 @@ class _FakeMDB:
                     "system_prompt", "user_prompt_template", "output_schema", "tool_config",
                     "temperature", "max_tokens", "timeout_seconds", "retry_count",
                     "enabled_as_gate", "fail_closed",
-                    "buy_threshold", "sell_threshold",
+                    "buy_threshold", "sell_threshold", "modified_by",
                 ]
                 kv = dict(zip(keys, params))
                 kv["id"] = new_id
@@ -185,7 +187,8 @@ def _dict_to_row_notif(r):
         r["id"], r.get("paper_id"), r.get("channel"), r.get("event_type"),
         r.get("enabled", 0), r.get("webhook_env"), r.get("secret_env"),
         r.get("summary_config"), r.get("detail_config"),
-        r.get("config_version", 1), r.get("created_at"), r.get("updated_at"),
+        r.get("config_version", 1), r.get("modified_by"),
+        r.get("created_at"), r.get("updated_at"),
     )
 
 
@@ -200,7 +203,8 @@ def _dict_to_row_ai(r):
         r.get("timeout_seconds", 20), r.get("retry_count", 1),
         r.get("enabled_as_gate", 0), r.get("fail_closed", 0),
         r.get("buy_threshold", 70.0), r.get("sell_threshold", 40.0),
-        r.get("config_version", 1), r.get("created_at"), r.get("updated_at"),
+        r.get("config_version", 1), r.get("modified_by"),
+        r.get("created_at"), r.get("updated_at"),
     )
 
 

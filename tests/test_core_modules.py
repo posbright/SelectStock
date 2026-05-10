@@ -36,6 +36,11 @@ import pandas as pd
 # Ensure project root is on sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+# Pre-import in dependency order to break circular import seen when
+# TestSingletonTradeDate runs in isolation (singleton_trade_date <-> stockfetch <-> trade_time).
+import instock.core.stockfetch  # noqa: E402,F401
+import instock.core.singleton_trade_date  # noqa: E402,F401
+
 
 # ============================================================
 # 1. tablestructure
@@ -895,6 +900,7 @@ class TestSingletonTradeDate(unittest.TestCase):
     @patch('instock.core.singleton_trade_date.stf.fetch_stocks_trade_date')
     def test_trade_date_loads_data(self, mock_fetch):
         from instock.core.singleton_trade_date import stock_trade_date
+        self._clear_singleton(stock_trade_date)
         # Need > 30 entries to pass the check
         many_dates = {datetime.date(2020, 1, i + 1) for i in range(31)}
         mock_fetch.return_value = many_dates
@@ -905,12 +911,14 @@ class TestSingletonTradeDate(unittest.TestCase):
     @patch('instock.core.singleton_trade_date.stf.fetch_stocks_trade_date', return_value=None)
     def test_trade_date_handles_none(self, mock_fetch):
         from instock.core.singleton_trade_date import stock_trade_date
+        self._clear_singleton(stock_trade_date)
         td = stock_trade_date()
         self.assertIsNone(td.get_data())
 
     @patch('instock.core.singleton_trade_date.stf.fetch_stocks_trade_date')
     def test_trade_date_rejects_too_few_results(self, mock_fetch):
         from instock.core.singleton_trade_date import stock_trade_date
+        self._clear_singleton(stock_trade_date)
         mock_fetch.return_value = {datetime.date(2025, 1, 2)}  # only 1 date
         td = stock_trade_date()
         # Should keep data as None since result has <= 30 items

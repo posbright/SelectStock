@@ -48,7 +48,12 @@ def _build_reason_block(event: Dict[str, Any]) -> str:
     if not reason:
         return ""
     source = event.get("reason_source") or "strategy"
-    source_label = "策略真实理由" if source == "strategy" else "系统兜底说明（非策略显式提供）"
+    source_label_map = {
+        "strategy": "策略真实理由",
+        "derived": "系统从策略日志/订单参数派生",
+        "generated": "系统兜底说明（非策略显式提供）",
+    }
+    source_label = source_label_map.get(source, source)
     return f"\n## 交易理由（来源：{source_label}）\n\n> {reason}\n"
 
 
@@ -295,18 +300,51 @@ def _build_execution_block(event: Dict[str, Any]) -> str:
 
 
 def _build_link_block(event: Dict[str, Any]) -> str:
-    """末尾详情链接。base url 来自 ``INSTOCK_WEB_BASE_URL``，未配置时省略。"""
+    """末尾详情链接。
+
+    - base url 优先取 ``INSTOCK_WEB_BASE_URL``；未配置时回退到
+      ``http://<hostname>:9988``，仍可在内网点击。
+    - 使用 Markdown ``[文本](URL)`` 语法，DingTalk 客户端可直接点击跳转浏览器。
+    - 历史上的 ``/trade/signal`` 路由前端并不存在，会被 Vue Router NotFound 捕获
+      （表现为页面 404）。统一改为指向已存在的 ``/algo/paper?id=<paper_id>``，
+      并通过 ``signal_id`` 查询参数让前端自动打开决策详情弹窗。
+    - 如果通知里只有 signal_id 而无 paper_id，则尝试从 trade_signal 表反查
+      （source_type='paper' → source_id 即 paper_id），失败时再退化为只展示信号 ID。
+    """
     import os
+    import socket
     base = (os.environ.get("INSTOCK_WEB_BASE_URL") or "").rstrip("/")
     if not base:
-        return ""
+        try:
+            host = socket.gethostname() or "127.0.0.1"
+        except Exception:
+            host = "127.0.0.1"
+        base = f"http://{host}:9988"
+
     paper_id = event.get("paper_id")
     signal_id = event.get("signal_id")
+
+    # 若仅有 signal_id，反查 paper_id 以拼成可用链接
+    if signal_id and not paper_id:
+        try:
+            from instock.core.backtest.trade_signal_store import fetch_signal_with_decision
+            sig = fetch_signal_with_decision(int(signal_id)) or {}
+            if (sig.get("source_type") == "paper") and sig.get("source_id"):
+                paper_id = sig.get("source_id")
+        except Exception:
+            paper_id = paper_id  # noqa: silent fallback
+
     lines = ["\n## 查看详情\n"]
-    if paper_id:
-        lines.append(f"- 模拟盘详情：{base}/algo/paper?id={paper_id}")
-    if signal_id:
-        lines.append(f"- 信号详情：{base}/trade/signal?signal_id={signal_id}")
+    if paper_id and signal_id:
+        url = f"{base}/algo/paper?id={paper_id}&signal_id={signal_id}"
+        lines.append(f"- [📊 模拟盘 #{paper_id} · 信号 #{signal_id} 决策详情]({url})")
+    elif paper_id:
+        url = f"{base}/algo/paper?id={paper_id}"
+        lines.append(f"- [📊 模拟盘 #{paper_id} 详情]({url})")
+    elif signal_id:
+        # paper_id 缺失：退化为打开模拟盘列表（用户可手动点开），URL 仍可点击
+        url = f"{base}/algo/paper?signal_id={signal_id}"
+        lines.append(f"- [🔍 信号 #{signal_id} 决策详情]({url})")
     if len(lines) == 1:
         return ""
     return "\n".join(lines) + "\n"

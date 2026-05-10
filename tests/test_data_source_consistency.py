@@ -27,7 +27,7 @@ errors = []
 
 
 def test(name):
-    """测试装饰器"""
+    """测试装饰器（自定义运行器，非 pytest 收集对象）。"""
     def decorator(func):
         global passed, failed, errors
         try:
@@ -43,6 +43,10 @@ def test(name):
             failed += 1
             errors.append(f"{name}: {e}")
     return decorator
+
+
+# 防止 pytest 把上面的 `test` 工厂函数收集为测试用例
+test.__test__ = False  # type: ignore[attr-defined]
 
 
 # ============================================================

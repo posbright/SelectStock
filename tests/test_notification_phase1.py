@@ -108,14 +108,18 @@ def test_trade_markdown_sell_includes_close_profit_and_return_rate():
     assert "收益率：+4.61%" in md
 
 
-def test_trade_markdown_omits_link_block_without_base_url(monkeypatch):
+def test_trade_markdown_link_block_uses_hostname_fallback(monkeypatch):
+    """没有配置 INSTOCK_WEB_BASE_URL 时，回退到 http://<hostname>:9988，仍渲染可点击链接。"""
     monkeypatch.delenv("INSTOCK_WEB_BASE_URL", raising=False)
     md = build_trade_markdown({
         "paper_id": 4, "trade_date": "2026-04-30",
         "code": "600016", "name": "民生银行", "direction": "buy",
         "price": 3.74, "amount": 100, "value": 374,
     })["markdown"]
-    assert "查看详情" not in md
+    assert "## 查看详情" in md
+    # Markdown 链接语法 [text](url) 让 DingTalk 客户端可直接点击跳浏览器
+    assert "](http://" in md
+    assert ":9988/algo/paper?id=4" in md
 
 
 def test_trade_markdown_renders_link_block_when_base_url_set(monkeypatch):
@@ -126,8 +130,12 @@ def test_trade_markdown_renders_link_block_when_base_url_set(monkeypatch):
         "price": 3.74, "amount": 100, "value": 374, "signal_id": 12345,
     })["markdown"]
     assert "## 查看详情" in md
-    assert "https://example.com/instock/algo/paper?id=4" in md
-    assert "https://example.com/instock/trade/signal?signal_id=12345" in md
+    # 同时具有 paper_id + signal_id 时合并为单个深链，前端会自动打开决策详情弹窗
+    assert "https://example.com/instock/algo/paper?id=4&signal_id=12345" in md
+    # 必须使用 Markdown [text](url) 语法
+    assert "](https://example.com/instock/algo/paper?id=4&signal_id=12345)" in md
+    # 旧的 /trade/signal 路由前端不存在（NotFound），不应再出现
+    assert "/trade/signal?" not in md
 
 
 

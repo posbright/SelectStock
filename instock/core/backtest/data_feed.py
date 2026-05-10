@@ -46,13 +46,75 @@ def _should_route_stock_loader_to_index(code):
     return clean in _STOCK_LOADER_INDEX_CODES or clean.startswith('399')
 
 
+# A 股代码合法前缀（沪市6/5；深市/北交所 0/1/3/4/8）。
+# 用于在调用东方财富前过滤明显非法的代码（如 999999），避免日志噪声和无谓重试。
+_VALID_STOCK_PREFIXES = ('0', '1', '3', '4', '5', '6', '8')
+
+
+def _is_likely_stock_code(code):
+    clean = _normalize_code(code)
+    return len(clean) == 6 and clean.isdigit() and clean[0] in _VALID_STOCK_PREFIXES
+
+
+def _normalize_em_df(raw, code):
+    """将东方财富中文列 DataFrame 转为标准化结果，失败返回 None。"""
+    col_map = {'日期': 'date', '开盘': 'open', '收盘': 'close',
+               '最高': 'high', '最低': 'low', '成交量': 'volume',
+               '成交额': 'amount'}
+    df = raw.rename(columns=col_map)
+    for c in ['date', 'open', 'high', 'low', 'close', 'volume']:
+        if c not in df.columns:
+            logging.warning(f"EastMoney数据缺少 {c} 列: {code}")
+            return None
+    df['date'] = pd.to_datetime(df['date'])
+    for c in ['open', 'high', 'low', 'close']:
+        df[c] = pd.to_numeric(df[c], errors='coerce')
+    df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0).astype('int64')
+    if 'amount' in df.columns:
+        df['amount'] = pd.to_numeric(df['amount'], errors='coerce').fillna(0)
+        df = df[['date', 'open', 'high', 'low', 'close', 'volume', 'amount']]
+    else:
+        df = df[['date', 'open', 'high', 'low', 'close', 'volume']]
+    return df.sort_values('date').reset_index(drop=True)
+
+
+def _fetch_stock_from_akshare(code, start_date=None, end_date=None, adjust='qfq'):
+    """akshare 备用通道：当 EastMoney push2his 接口持续 500/网络异常时使用。
+
+    akshare.stock_zh_a_hist 走的是不同的 EM 端点（kline-pre），
+    在 push2his 故障时往往仍可用。返回标准化 DataFrame 或 None。
+    """
+    try:
+        import akshare as ak
+        sd = pd.Timestamp(start_date).strftime('%Y%m%d') if start_date else '19700101'
+        ed = pd.Timestamp(end_date).strftime('%Y%m%d') if end_date else '20500101'
+        raw = ak.stock_zh_a_hist(symbol=code, period='daily',
+                                 start_date=sd, end_date=ed, adjust=adjust)
+        if raw is None or len(raw) == 0:
+            return None
+        df = _normalize_em_df(raw, code)
+        if df is not None and len(df) > 0:
+            logging.info(f"从 akshare 获取 {code} K线数据(EM 备用通道): {len(df)} 条 "
+                         f"({df['date'].iloc[0].date()} ~ {df['date'].iloc[-1].date()})")
+        return df
+    except Exception as e:
+        logging.debug(f"akshare 获取 {code} 数据失败: {e}")
+        return None
+
+
 def _fetch_stock_from_eastmoney(code, start_date=None, end_date=None, adjust='qfq'):
     """
     从 EastMoney API 获取个股日 K 线，返回标准化的 DataFrame。
 
+    若 EastMoney push2his 持续 5xx/网络异常，自动降级到 akshare 备用通道。
     Returns:
         DataFrame with columns [date, open, high, low, close, volume] or None
     """
+    # 早期过滤明显非法代码（避免对 999999 等占位符发请求并刷日志）
+    if not _is_likely_stock_code(code):
+        logging.debug(f"跳过非 A 股代码: {code}")
+        return None
+
     try:
         from instock.core.crawling.stock_hist_em import stock_zh_a_hist
         sd = pd.Timestamp(start_date).strftime('%Y%m%d') if start_date else '19700101'
@@ -60,32 +122,34 @@ def _fetch_stock_from_eastmoney(code, start_date=None, end_date=None, adjust='qf
         raw = stock_zh_a_hist(symbol=code, start_date=sd, end_date=ed,
                               period='daily', adjust=adjust)
         if raw is None or len(raw) == 0:
-            return None
+            # 主通道空数据 → 尝试 akshare 备用通道
+            return _fetch_stock_from_akshare(code, start_date, end_date, adjust)
 
-        # 东方财富返回中文列名，需映射
-        col_map = {'日期': 'date', '开盘': 'open', '收盘': 'close',
-                    '最高': 'high', '最低': 'low', '成交量': 'volume',
-                    '成交额': 'amount'}
-        df = raw.rename(columns=col_map)
-        for c in ['date', 'open', 'high', 'low', 'close', 'volume']:
-            if c not in df.columns:
-                logging.warning(f"EastMoney数据缺少 {c} 列: {code}")
-                return None
-        df['date'] = pd.to_datetime(df['date'])
-        for c in ['open', 'high', 'low', 'close']:
-            df[c] = pd.to_numeric(df[c], errors='coerce')
-        df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0).astype(int)
-        if 'amount' in df.columns:
-            df['amount'] = pd.to_numeric(df['amount'], errors='coerce').fillna(0)
-            df = df[['date', 'open', 'high', 'low', 'close', 'volume', 'amount']]
-        else:
-            df = df[['date', 'open', 'high', 'low', 'close', 'volume']]
-        df = df.sort_values('date').reset_index(drop=True)
+        df = _normalize_em_df(raw, code)
+        if df is None:
+            return None
         logging.info(f"从 EastMoney 获取 {code} K线数据: {len(df)} 条 "
                      f"({df['date'].iloc[0].date()} ~ {df['date'].iloc[-1].date()})")
         return df
+    except KeyError as e:
+        # 未知股票代码前缀 → 不需要重试，DEBUG 级别
+        logging.debug(f"跳过 EastMoney 获取 {code}: {e}")
+        return None
     except Exception as e:
-        logging.warning(f"EastMoney 获取 {code} 数据失败: {e}")
+        # 含 5xx / 网络异常等：尝试 akshare 备用通道
+        err_str = str(e)
+        is_transient = any(kw in err_str for kw in (
+            '500 Server Error', '502', '503', '504',
+            'ConnectionError', 'Timeout', 'timed out', 'Max retries',
+            'RemoteDisconnected', 'SSLError',
+        ))
+        if is_transient:
+            logging.warning(f"EastMoney 获取 {code} 失败({type(e).__name__})，尝试 akshare 备用: {err_str[:120]}")
+            fallback = _fetch_stock_from_akshare(code, start_date, end_date, adjust)
+            if fallback is not None:
+                return fallback
+        else:
+            logging.warning(f"EastMoney 获取 {code} 数据失败: {e}")
         return None
 
 
@@ -258,6 +322,26 @@ def load_stock_data(code, start_date=None, end_date=None):
     return df
 
 
+def _quarantine_corrupt_cache(path):
+    """把损坏的缓存文件改名为 .corrupt，避免反复读取报警。
+
+    后续 _save_cache / _save_index_cache 写入时，原路径已不存在，
+    会作为全新缓存写入，相当于"读取失败 → 强制重写"。
+    """
+    try:
+        if os.path.exists(path):
+            backup = path + '.corrupt'
+            try:
+                if os.path.exists(backup):
+                    os.remove(backup)
+            except Exception:
+                pass
+            os.rename(path, backup)
+            logging.warning(f"已将损坏缓存改名为 {os.path.basename(backup)}，下次访问将重建")
+    except Exception as e:
+        logging.debug(f"隔离损坏缓存失败 {path}: {e}")
+
+
 def _load_from_cache(code):
     """
     从本地 pickle 缓存加载，返回 DataFrame 或 None
@@ -265,6 +349,9 @@ def _load_from_cache(code):
     缓存搜索顺序：
     1. stockfetch 统一缓存路径: cache/hist/{code[:3]}/{code}qfq.gzip.pickle（压缩pickle）
     2. data_feed 旧缓存路径: cache/hist/{code}.gzip.pickle（普通pickle）
+
+    读取失败的缓存文件会被改名为 .corrupt，并返回 None
+    以触发上层在线获取并重写完整缓存。
     """
     # 优先：stockfetch 统一路径
     cache_dir_unified = os.path.join(_CACHE_DIR, code[:3])
@@ -275,8 +362,14 @@ def _load_from_cache(code):
             df = _normalize_cache_df(df)
             if df is not None:
                 return df
+            # 文件可读但无法标准化：视为损坏
+            logging.warning(f"统一缓存内容不合法 {code}，触发隔离重建")
+            _quarantine_corrupt_cache(cache_file_unified)
         except Exception as e:
             logging.warning(f"读取统一缓存失败 {code}: {e}")
+            _quarantine_corrupt_cache(cache_file_unified)
+            # 读取失败时强制返回 None，触发在线重新拉取并重写完整缓存
+            return None
 
     # 降级：旧 data_feed 路径
     cache_file = os.path.join(_CACHE_DIR, f"{code}.gzip.pickle")
@@ -284,9 +377,13 @@ def _load_from_cache(code):
         return None
     try:
         df = pd.read_pickle(cache_file)
-        return _normalize_cache_df(df)
+        normalized = _normalize_cache_df(df)
+        if normalized is None:
+            _quarantine_corrupt_cache(cache_file)
+        return normalized
     except Exception as e:
         logging.warning(f"加载K线缓存异常 {code}: {e}")
+        _quarantine_corrupt_cache(cache_file)
         return None
 
 
@@ -295,26 +392,65 @@ def _load_index_from_cache(code):
     从指数缓存目录加载，返回 DataFrame 或 None
 
     缓存路径: cache/hist/index/{code}.gzip.pickle
+    读取失败的文件会被改名为 .corrupt，由 _save_index_cache 重写。
     """
     cache_file = os.path.join(_CACHE_DIR, 'index', f"{code}.gzip.pickle")
     if not os.path.exists(cache_file):
         return None
     try:
         df = pd.read_pickle(cache_file, compression="gzip")
-        return _normalize_cache_df(df)
+        normalized = _normalize_cache_df(df)
+        if normalized is None:
+            logging.warning(f"指数缓存内容不合法 {code}，触发隔离重建")
+            _quarantine_corrupt_cache(cache_file)
+        return normalized
     except Exception as e:
-        logging.debug(f"加载指数缓存异常 {code}: {e}")
+        logging.warning(f"加载指数缓存异常 {code}: {e}")
+        _quarantine_corrupt_cache(cache_file)
         return None
 
 
 def _save_index_cache(code, df):
-    """保存指数 DataFrame 到缓存文件"""
+    """合并并保存指数 DataFrame 到缓存文件。
+
+    与现有缓存按 date 去重合并后整体写入，避免回测仅请求局部区间时
+    把已有的多年历史数据覆盖成短区间（曾导致 K 线页面基准只显示
+    2022-2024 的数据）。
+    """
     try:
+        if df is None or len(df) == 0:
+            return
         index_dir = os.path.join(_CACHE_DIR, 'index')
         os.makedirs(index_dir, exist_ok=True)
         cache_file = os.path.join(index_dir, f"{code}.gzip.pickle")
-        df.to_pickle(cache_file, compression="gzip")
-        logging.debug(f"指数缓存已更新: {code} ({len(df)} 条)")
+
+        merged = df.copy()
+        if 'date' in merged.columns:
+            merged['date'] = pd.to_datetime(merged['date'])
+
+        # 与已有缓存合并（如存在）
+        if os.path.exists(cache_file):
+            try:
+                existing = pd.read_pickle(cache_file, compression="gzip")
+                if existing is not None and len(existing) > 0 and 'date' in existing.columns:
+                    existing = existing.copy()
+                    existing['date'] = pd.to_datetime(existing['date'])
+                    merged = pd.concat([existing, merged], ignore_index=True)
+            except Exception as e:
+                logging.warning(f"读取已有指数缓存失败，将以新数据覆盖: {code} - {e}")
+
+        if 'date' in merged.columns:
+            # 保留新写入的数据（after concat，新数据在后），按日期去重排序
+            merged = merged.drop_duplicates(subset=['date'], keep='last')
+            merged = merged.sort_values('date').reset_index(drop=True)
+
+        # 原子写入
+        tmp_file = cache_file + '.tmp'
+        merged.to_pickle(tmp_file, compression="gzip")
+        if os.path.exists(cache_file):
+            os.remove(cache_file)
+        os.rename(tmp_file, cache_file)
+        logging.debug(f"指数缓存已更新（合并）: {code} ({len(merged)} 条)")
     except Exception as e:
         logging.warning(f"指数缓存保存失败 {code}: {e}")
 
@@ -509,7 +645,16 @@ def load_benchmark_data(code='000300', start_date=None, end_date=None):
                     logging.info(f"从 EastMoney 指数API 获取基准 {code} 数据: {len(idx_df)} 条")
                     return idx_df
         except Exception as e:
-            logging.debug(f"EastMoney 指数API 获取 {code} 失败: {e}")
+            err_str = str(e)
+            is_transient = any(kw in err_str for kw in (
+                '500 Server Error', '502', '503', '504',
+                'ConnectionError', 'Timeout', 'timed out', 'Max retries',
+                'RemoteDisconnected', 'SSLError',
+            ))
+            if is_transient:
+                logging.warning(f"EastMoney 指数API 获取 {code} 失败({type(e).__name__})，将尝试 AkShare 备用通道")
+            else:
+                logging.debug(f"EastMoney 指数API 获取 {code} 失败: {e}")
 
     # 3. 降级：尝试从股票缓存加载（仅对非指数代码有效，避免对指数代码调用股票 API 产生 500 错误）
     if not is_index:
@@ -533,13 +678,20 @@ def load_benchmark_data(code='000300', start_date=None, end_date=None):
 
         idx_df = ak.stock_zh_index_daily(symbol=ak_code)
         if idx_df is not None and len(idx_df) > 0:
+            idx_df = idx_df.copy()
             idx_df['date'] = pd.to_datetime(idx_df['date'])
+            if 'volume' in idx_df.columns:
+                idx_df['volume'] = pd.to_numeric(idx_df['volume'], errors='coerce').fillna(0).astype('int64')
+            # 写入指数缓存（_save_index_cache 已合并，不会覆盖历史）
+            if is_index:
+                _save_index_cache(code, idx_df)
             if start_date:
                 idx_df = idx_df[idx_df['date'] >= pd.Timestamp(start_date)]
             if end_date:
                 idx_df = idx_df[idx_df['date'] <= pd.Timestamp(end_date)]
             idx_df = idx_df.sort_values('date').reset_index(drop=True)
             if len(idx_df) > 0:
+                idx_df['pre_close'] = idx_df['close'].shift(1)
                 logging.info(f"从 AkShare 获取基准指数 {code} ({ak_code}) 数据: {len(idx_df)} 条")
                 return idx_df
 
@@ -548,13 +700,19 @@ def load_benchmark_data(code='000300', start_date=None, end_date=None):
         logging.debug(f"尝试替代前缀 {alt_code}")
         idx_df = ak.stock_zh_index_daily(symbol=alt_code)
         if idx_df is not None and len(idx_df) > 0:
+            idx_df = idx_df.copy()
             idx_df['date'] = pd.to_datetime(idx_df['date'])
+            if 'volume' in idx_df.columns:
+                idx_df['volume'] = pd.to_numeric(idx_df['volume'], errors='coerce').fillna(0).astype('int64')
+            if is_index:
+                _save_index_cache(code, idx_df)
             if start_date:
                 idx_df = idx_df[idx_df['date'] >= pd.Timestamp(start_date)]
             if end_date:
                 idx_df = idx_df[idx_df['date'] <= pd.Timestamp(end_date)]
             idx_df = idx_df.sort_values('date').reset_index(drop=True)
             if len(idx_df) > 0:
+                idx_df['pre_close'] = idx_df['close'].shift(1)
                 logging.info(f"从 AkShare 获取基准指数 {code} ({alt_code}) 数据: {len(idx_df)} 条")
                 return idx_df
     except Exception as e:

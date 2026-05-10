@@ -17,6 +17,7 @@ import json
 from typing import Any, Dict, Iterable, List, Optional
 
 REASON_SOURCE_STRATEGY = "strategy"
+REASON_SOURCE_DERIVED = "derived"
 REASON_SOURCE_GENERATED = "generated"
 
 _GENERATED_BUY_TEMPLATE = (
@@ -144,11 +145,20 @@ def build_generated_reason(direction: str) -> str:
     return f"策略触发交易信号({direction})，按模拟盘撮合规则成交；该理由由系统生成，非策略显式说明。"
 
 
-def resolve_reason(direction: str, raw_reason: Any) -> Dict[str, str]:
-    """返回 ``{'reason': str, 'reason_source': 'strategy'|'generated'}``。"""
+def resolve_reason(direction: str, raw_reason: Any, *, derived_reason: Any = None) -> Dict[str, str]:
+    """返回 ``{'reason': str, 'reason_source': 'strategy'|'derived'|'generated'}``。
+
+    - ``raw_reason`` 由策略显式提供时优先使用，标记 ``strategy``。
+    - 否则若 ``derived_reason`` 提供（系统从策略 log/order 参数派生的真实决策上下文），
+      使用并标记 ``derived`` —— 文案不再含 "非策略显式说明" 的兜底措辞。
+    - 两者都缺失才回落到固定模板，标记 ``generated``。
+    """
     text = _ensure_str(raw_reason, 4000).strip()
     if text:
         return {"reason": text, "reason_source": REASON_SOURCE_STRATEGY}
+    derived = _ensure_str(derived_reason, 4000).strip()
+    if derived:
+        return {"reason": derived, "reason_source": REASON_SOURCE_DERIVED}
     return {"reason": build_generated_reason(direction), "reason_source": REASON_SOURCE_GENERATED}
 
 

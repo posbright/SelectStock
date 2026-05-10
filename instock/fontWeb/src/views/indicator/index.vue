@@ -50,6 +50,9 @@ const klineDates = computed<string[]>(() => klineData.value?.dates || [])
 const codeStr = computed(() => code.value || '')
 const ciOverlay = useCustomIndicatorOverlay(codeStr, currentPeriod, klineDates)
 
+// 容器高度根据是否有 CI 自定义指标副图自适应（和 renderChart 中 grid 计算保持一致）
+const chartHeight = computed(() => (ciOverlay.extension.value?.subPanel ? 780 : 680))
+
 // Load K-line data
 const loadKlineData = async () => {
   if (!code.value) return
@@ -152,13 +155,45 @@ const renderChart = () => {
     }
   }))
 
-  // === Grid layout (avoid overlap between K-line and volume) ===
-  const grids: any[] = [
-    { left: '8%', right: '3%', top: 48, bottom: hasSub ? '38%' : '24%' },
-    { left: '8%', right: '3%', height: '8%', bottom: hasSub ? '28%' : '12%' },
-  ]
+  // === 布局：使用绝对像素的 grid + title 标签，避免百分比导致的副图重叠 ===
+  // 三段独立 grid，子图之间留 ≥30px 间距给标题，再用 graphic 画虚线分隔条
+  // 容器高 680px：预留上 60（图例 + 主标题）、下 30（dataZoom slider）
+  const stockLabel = (stockName.value ? `${code.value} ${stockName.value}` : code.value || '') + ` · ${currentPeriod.value}`
+  const subLabelMap: Record<string, string> = {
+    MACD: 'MACD (12,26,9)', KDJ: 'KDJ (9,3,3)', RSI: 'RSI (14)',
+    WR: 'WR (10/6)', '多空趋势': '多空趋势 (BBI/MABB)',
+  }
+  const subLabel = subLabelMap[subInd] || subInd
+
+  const grids: any[] = []
+  const titleItems: any[] = []
+  const dividers: number[] = []  // y-像素位置，稍后渲染为分割线
+  const titleStyle = { fontSize: 12, color: '#303133', fontWeight: 'bold' as const }
+  const subTitleStyle = { fontSize: 10, color: '#909399' }
   if (hasSub) {
-    grids.push({ left: '8%', right: '3%', height: '16%', bottom: '6%' })
+    // 主图 60-320  分割线 340  成交量 380-450  分割线 470  副图 510-610  slider 644-662
+    grids.push(
+      { left: 60, right: 24, top: 60, height: 260 },
+      { left: 60, right: 24, top: 380, height: 70 },
+      { left: 60, right: 24, top: 510, height: 100 },
+    )
+    titleItems.push(
+      { text: `K线主图 · ${stockLabel}`, subtext: showMA && showBollOnMain ? 'MA + BOLL' : showMA ? 'MA 均线' : showBollOnMain ? 'BOLL 布林带' : '蜡烛图', left: 60, top: 36, textStyle: titleStyle, subtextStyle: subTitleStyle },
+      { text: '成交量', subtext: '红涨绿跌·按当日K线方向上色', left: 60, top: 358, textStyle: titleStyle, subtextStyle: subTitleStyle },
+      { text: subLabel, subtext: '副图指标', left: 60, top: 488, textStyle: titleStyle, subtextStyle: subTitleStyle },
+    )
+    dividers.push(340, 470)
+  } else {
+    // 主图 60-400  分割线 420  成交量 460-600  slider 644-662
+    grids.push(
+      { left: 60, right: 24, top: 60, height: 340 },
+      { left: 60, right: 24, top: 460, height: 140 },
+    )
+    titleItems.push(
+      { text: `K线主图 · ${stockLabel}`, subtext: showMA && showBollOnMain ? 'MA + BOLL' : showMA ? 'MA 均线' : showBollOnMain ? 'BOLL 布林带' : '蜡烛图', left: 60, top: 36, textStyle: titleStyle, subtextStyle: subTitleStyle },
+      { text: '成交量', subtext: '红涨绿跌·按当日K线方向上色', left: 60, top: 438, textStyle: titleStyle, subtextStyle: subTitleStyle },
+    )
+    dividers.push(420)
   }
 
   // === X/Y axes ===
@@ -371,17 +406,14 @@ const renderChart = () => {
     legendData.push(ext.mainSignalSeries.name)
   }
   if (ext.subPanel) {
-    // 当 CI 副图与内置副图同存时，重新分配竖向空间（主图压缩、内置副图上推）
-    if (hasSub) {
-      grids[0] = { ...grids[0], bottom: '54%' }
-      grids[1] = { ...grids[1], bottom: '44%' }
-      grids[2] = { ...grids[2], bottom: '24%' }
-    } else {
-      grids[0] = { ...grids[0], bottom: '38%' }
-      grids[1] = { ...grids[1], bottom: '28%' }
-    }
+    // 启用 CI 自定义指标副图：在已有布局尾部追加一段，并在其上方画分割线
+    // 整体容器高度通过 chartHeight 计算属性自动增高（详见 <template>）
+    const ciTopActual = 644
+    const ciDividerY = ciTopActual - 22
     const ciIdx = grids.length
-    grids.push({ ...ext.subPanel.grid, bottom: '6%', height: '14%' })
+    grids.push({ left: 60, right: 24, top: ciTopActual, height: 90 })
+    titleItems.push({ text: '自定义指标', subtext: 'CI 叠加（快慢线 EMA / 策略买卖点）', left: 60, top: ciTopActual - 24, textStyle: titleStyle, subtextStyle: subTitleStyle })
+    dividers.push(ciDividerY - 12)
     xAxes.push({ ...ext.subPanel.xAxis, gridIndex: ciIdx })
     yAxes.push({ ...ext.subPanel.yAxis, gridIndex: ciIdx })
     for (const s of ext.subPanel.series) {
@@ -391,8 +423,22 @@ const renderChart = () => {
     zoomXIndices.push(ciIdx)
   }
 
+  // 分割线 graphic：每条 dashed 横线横跨整个绘图区
+  const graphicElements: any[] = dividers.map(y => ({
+    type: 'line' as const,
+    left: 60,
+    right: 24,
+    top: y,
+    silent: true,
+    z: 1,
+    shape: { x1: 0, y1: 0, x2: 9999, y2: 0 },
+    style: { stroke: '#dcdfe6', lineWidth: 1, lineDash: [4, 4] },
+  }))
+
   const option: echarts.EChartsOption = {
     animation: false,
+    title: titleItems,
+    graphic: graphicElements,
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'cross' },
@@ -402,7 +448,7 @@ const renderChart = () => {
     },
     legend: {
       data: legendData,
-      top: 4, left: '8%',
+      top: 4, left: 220,
       textStyle: { fontSize: 11 },
       itemWidth: 14, itemHeight: 10,
     },
@@ -413,7 +459,7 @@ const renderChart = () => {
       { type: 'inside', xAxisIndex: zoomXIndices, start: zoomStart, end: 100 },
       {
         show: true, xAxisIndex: zoomXIndices, type: 'slider',
-        bottom: 4, height: 20, start: zoomStart, end: 100,
+        bottom: 6, height: 18, start: zoomStart, end: 100,
         borderColor: '#ddd', fillerColor: 'rgba(64,158,255,0.15)',
         handleStyle: { color: '#409eff' },
       },
@@ -434,7 +480,7 @@ const switchPeriod = (p: string) => {
 watch([currentSubIndicator, mainOverlays], () => { renderChart() }, { deep: true })
 
 // PR-5: 自定义指标叠加变化时重渲
-watch(() => ciOverlay.extension.value, () => { renderChart() }, { deep: true })
+watch(() => ciOverlay.extension.value, async () => { await nextTick(); renderChart() }, { deep: true })
 
 // Navigate to backtest
 const goBacktest = () => {
@@ -516,7 +562,7 @@ onUnmounted(() => {
 
     <!-- Chart area -->
     <div class="chart-wrapper" v-loading="loading">
-      <div ref="klineChartRef" class="chart-main"></div>
+      <div ref="klineChartRef" class="chart-main" :style="{ height: chartHeight + 'px' }"></div>
       <!-- Sub indicator tab bar (East Money style) -->
       <div class="sub-indicator-bar">
         <span
@@ -580,7 +626,7 @@ onUnmounted(() => {
   position: relative;
 }
 .chart-main {
-  height: 640px;
+  height: 680px; /* 默认值，动态由 :style="{height}" 覆盖 */
 }
 
 /* Sub indicator tab bar */

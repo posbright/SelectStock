@@ -94,6 +94,7 @@ def _ttl_seconds() -> int:
 
 def list_operators(channel: Optional[str] = None) -> List[Dict[str, Any]]:
     ensure_im_tables()
+    _ensure_modified_by_column()
     import instock.lib.database as mdb
     where = "1=1"
     params: Tuple[Any, ...] = ()
@@ -101,7 +102,7 @@ def list_operators(channel: Optional[str] = None) -> List[Dict[str, Any]]:
         where = "channel=%s"
         params = (channel,)
     rows = mdb.executeSqlFetch(
-        f"SELECT id, channel, operator_id, operator_name, enabled, note, "
+        f"SELECT id, channel, operator_id, operator_name, enabled, note, modified_by, "
         f"created_at, updated_at FROM `{OPERATOR_WHITELIST_TABLE}` "
         f"WHERE {where} ORDER BY id DESC",
         params,
@@ -115,14 +116,38 @@ def list_operators(channel: Optional[str] = None) -> List[Dict[str, Any]]:
             "operator_name": r[3],
             "enabled": bool(r[4]),
             "note": r[5],
-            "created_at": r[6].strftime("%Y-%m-%d %H:%M:%S") if r[6] else None,
-            "updated_at": r[7].strftime("%Y-%m-%d %H:%M:%S") if r[7] else None,
+            "modified_by": r[6] or None,
+            "created_at": r[7].strftime("%Y-%m-%d %H:%M:%S") if r[7] else None,
+            "updated_at": r[8].strftime("%Y-%m-%d %H:%M:%S") if r[8] else None,
         })
     return out
 
 
+def _ensure_modified_by_column():
+    """如旧库无 modified_by 列则补齐。Phase 8 鉴权上线前默认写入 'system'。失败仅 warning。"""
+    try:
+        import instock.lib.database as mdb
+    except Exception:
+        return
+    try:
+        rows = mdb.executeSqlFetch(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema=DATABASE() AND table_name=%s AND column_name='modified_by' LIMIT 1",
+            (OPERATOR_WHITELIST_TABLE,),
+        ) or []
+        if not rows:
+            mdb.executeSql(
+                f"ALTER TABLE `{OPERATOR_WHITELIST_TABLE}` "
+                "ADD COLUMN `modified_by` VARCHAR(64) NULL DEFAULT NULL AFTER `note`"
+            )
+    except Exception as exc:
+        import logging
+        logging.debug("[im.service] 检查/添加 modified_by 列失败: %s", exc)
+
+
 def save_operator(payload: Dict[str, Any]) -> Dict[str, Any]:
     ensure_im_tables()
+    _ensure_modified_by_column()
     import instock.lib.database as mdb
     channel = (payload.get("channel") or "dingtalk").strip().lower()
     op_id = (payload.get("operator_id") or "").strip()
@@ -133,25 +158,27 @@ def save_operator(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("operator_id 不能为空")
     if "/" in op_id or " " in op_id:
         raise ValueError("operator_id 含非法字符")
+    # Phase 8 鉴权上线前，所有修改记录为 'system'。
+    modified_by = (payload.get("modified_by") or "system").strip()[:64] or "system"
     cid = _to_int(payload.get("id"), 0)
     if cid:
         mdb.executeSql(
             f"UPDATE `{OPERATOR_WHITELIST_TABLE}` SET channel=%s, operator_id=%s, "
-            f"operator_name=%s, enabled=%s, note=%s WHERE id=%s",
-            (channel, op_id, op_name, enabled, note, cid),
+            f"operator_name=%s, enabled=%s, note=%s, modified_by=%s WHERE id=%s",
+            (channel, op_id, op_name, enabled, note, modified_by, cid),
         )
     else:
         # ON DUPLICATE KEY UPDATE 处理 (channel, operator_id) 已存在的情况
         mdb.executeSql(
             f"INSERT INTO `{OPERATOR_WHITELIST_TABLE}` "
-            f"(channel, operator_id, operator_name, enabled, note) "
-            f"VALUES (%s,%s,%s,%s,%s) "
+            f"(channel, operator_id, operator_name, enabled, note, modified_by) "
+            f"VALUES (%s,%s,%s,%s,%s,%s) "
             f"ON DUPLICATE KEY UPDATE operator_name=VALUES(operator_name), "
-            f"enabled=VALUES(enabled), note=VALUES(note)",
-            (channel, op_id, op_name, enabled, note),
+            f"enabled=VALUES(enabled), note=VALUES(note), modified_by=VALUES(modified_by)",
+            (channel, op_id, op_name, enabled, note, modified_by),
         )
     rows = mdb.executeSqlFetch(
-        f"SELECT id, channel, operator_id, operator_name, enabled, note, "
+        f"SELECT id, channel, operator_id, operator_name, enabled, note, modified_by, "
         f"created_at, updated_at FROM `{OPERATOR_WHITELIST_TABLE}` "
         f"WHERE channel=%s AND operator_id=%s LIMIT 1",
         (channel, op_id),
@@ -162,8 +189,9 @@ def save_operator(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "id": int(r[0]), "channel": r[1], "operator_id": r[2],
         "operator_name": r[3], "enabled": bool(r[4]), "note": r[5],
-        "created_at": r[6].strftime("%Y-%m-%d %H:%M:%S") if r[6] else None,
-        "updated_at": r[7].strftime("%Y-%m-%d %H:%M:%S") if r[7] else None,
+        "modified_by": r[6] or None,
+        "created_at": r[7].strftime("%Y-%m-%d %H:%M:%S") if r[7] else None,
+        "updated_at": r[8].strftime("%Y-%m-%d %H:%M:%S") if r[8] else None,
     }
 
 

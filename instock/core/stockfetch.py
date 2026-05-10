@@ -818,6 +818,52 @@ def fetch_stock_chip_race_end(date):
         logging.warning(f"stockfetch.fetch_stock_chip_race_end处理异常: {e}")
     return None
 
+def _normalize_volume_to_shares(data):
+    """将 K 线 DataFrame 的 volume 列规范化为"股"。
+
+    历史背景（修复 000001 等老股票 2026-02 起 K 线成交量 100× 偏差问题）：
+    - 早期 akshare 数据源返回 volume 单位为 "股"
+    - 2026 年初起，akshare 切换为返回 "手"（1 手 = 100 股）
+    - 既有缓存里两段并存：旧段是股、新段是手
+    - 旧代码统一 ``volume * 100``，导致旧段 100× 偏大，新段正确
+      表现为 K 线成交量副图中 2026-02 之后柱状几乎贴底"消失"
+
+    本函数按行检测 ``amount / (close * volume)`` 比值：
+    - ≈1   → 已是股，保持不变
+    - ≈100 → 是手，乘以 100 转换为股
+    - 缺失 amount/close → 回退为 ×100（兼容旧逻辑）
+    返回修改后的 DataFrame（就地修改并返回，便于链式调用）。
+    """
+    if data is None or 'volume' not in data.columns or len(data) == 0:
+        return data
+    try:
+        import numpy as np
+        volume = pd.to_numeric(data['volume'], errors='coerce').astype('float64')
+        if 'amount' in data.columns and 'close' in data.columns:
+            amount = pd.to_numeric(data['amount'], errors='coerce').astype('float64')
+            close = pd.to_numeric(data['close'], errors='coerce').astype('float64')
+            denom = volume * close
+            with np.errstate(divide='ignore', invalid='ignore'):
+                ratio = np.where((denom > 0) & (amount > 0), amount / denom, np.nan)
+            # 阈值 30：远大于股价波动（<2），远小于 100；可靠区分两种单位
+            is_lot = pd.Series(ratio, index=data.index) > 30
+            no_info = pd.Series(ratio, index=data.index).isna()
+            new_vol = volume.copy()
+            new_vol.loc[is_lot] = volume.loc[is_lot] * 100
+            # 缺失 amount 时回退到 ×100（保留旧行为，避免回测路径出现新偏差）
+            new_vol.loc[no_info] = volume.loc[no_info] * 100
+            data['volume'] = new_vol
+        else:
+            data['volume'] = volume * 100
+    except Exception:
+        # 兜底：异常时退回旧逻辑
+        try:
+            data['volume'] = data['volume'].astype('double') * 100
+        except Exception:
+            pass
+    return data
+
+
 # 读取涨停原因
 def fetch_stock_limitup_reason(date):
 
@@ -860,7 +906,8 @@ def fetch_etf_hist(data_base, date_start=None, date_end=None, adjust='qfq'):
             data = data.copy()
             data['p_change'] = tl.ROC(data['close'].values, 1)
             data['p_change'] = data['p_change'].fillna(0.0)
-            data['volume'] = data['volume'].astype('double') * 100  # 成交量单位从手变成股。
+            # 成交量自适应规范化为"股"（兼容历史 "股" 段 + 新 "手" 段混存的缓存）
+            data = _normalize_volume_to_shares(data)
         return data
     except Exception as e:
         logging.error(f"stockfetch.fetch_etf_hist处理异常: {code}", exc_info=True)
@@ -901,7 +948,8 @@ def fetch_stock_hist(data_base, date_start=None, date_end=None, is_cache=True, y
             data = data.copy()
             data['p_change'] = tl.ROC(data['close'].values, 1)
             data['p_change'] = data['p_change'].fillna(0.0)
-            data['volume'] = data['volume'].astype('double') * 100  # 成交量单位从手变成股。
+            # 成交量自适应规范化为"股"（兼容历史 "股" 段 + 新 "手" 段混存的缓存）
+            data = _normalize_volume_to_shares(data)
         return data
     except Exception as e:
         logging.error(f"stockfetch.fetch_stock_hist处理异常", exc_info=True)
@@ -2374,10 +2422,11 @@ def read_stock_hist_from_cache(code, date_start, date_end):
         except Exception as e:
             logging.debug(f"DB回填异常（不影响已有数据）：{code} - {e}")
         
-        # 添加 p_change 列和 volume 单位转换
+        # 添加 p_change 列
         data['p_change'] = tl.ROC(data['close'].values, 1)
         data['p_change'] = data['p_change'].fillna(0.0)
-        data['volume'] = data['volume'].astype('double') * 100
+        # 成交量自适应规范化为"股"（兼容历史 "股" 段 + 新 "手" 段混存的缓存）
+        data = _normalize_volume_to_shares(data)
         return data
     except Exception as e:
         logging.error(f"read_stock_hist_from_cache处理异常：{code} -", exc_info=True)

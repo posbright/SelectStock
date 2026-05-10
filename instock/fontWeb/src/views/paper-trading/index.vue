@@ -373,6 +373,30 @@
                     <el-table-column v-if="showTradeCol('status')" label="状态" width="80" align="center">
                       <template #default><el-tag size="small" type="success">全部成交</el-tag></template>
                     </el-table-column>
+                    <el-table-column v-if="showTradeCol('reason')" label="交易原因" min-width="200" show-overflow-tooltip>
+                      <template #default="{ row }">
+                        <span v-if="row.reason">{{ row.reason }}</span>
+                        <span v-else style="color:#c0c4cc;">--</span>
+                        <el-tag v-if="row.reason_source === 'generated'" size="small" type="warning"
+                                effect="plain" style="margin-left:6px;">系统兜底</el-tag>
+                        <el-tag v-else-if="row.reason_source === 'derived'" size="small" type="info"
+                                effect="plain" style="margin-left:6px;">系统派生</el-tag>
+                        <el-tag v-else-if="row.reason_source === 'strategy'" size="small" type="success"
+                                effect="plain" style="margin-left:6px;">策略提供</el-tag>
+                        <el-tag v-if="row.ai_action" size="small"
+                                :type="row.ai_gate_result === 'reject' ? 'danger' : 'info'"
+                                effect="plain" style="margin-left:6px;">
+                          AI {{ row.ai_action }}{{ row.ai_score != null ? ' ' + Number(row.ai_score).toFixed(1) : '' }}
+                        </el-tag>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="决策依据" width="90" align="center">
+                      <template #default="{ row }">
+                        <el-button v-if="row.signal_id" link type="primary" size="small"
+                                   @click.stop="openTradeDecision(row)">查看</el-button>
+                        <span v-else style="color:#c0c4cc;">--</span>
+                      </template>
+                    </el-table-column>
                   </el-table>
                 </div>
               </el-tab-pane>
@@ -645,6 +669,86 @@
         <el-button type="primary" @click="doCreate" :loading="creating">确定</el-button>
       </template>
     </el-dialog>
+
+    <!-- ═══════════ 交易决策依据弹窗 (Phase 3) ═══════════ -->
+    <el-dialog v-model="tradeDecisionVisible" title="交易决策依据" width="720px" top="6vh" destroy-on-close>
+      <div v-loading="tradeDecisionLoading" class="trade-decision-dialog">
+        <div v-if="tradeDecisionRow" class="td-summary">
+          <div class="td-row">
+            <span>日期</span><b>{{ tradeDecisionRow.date }}</b>
+            <span>方向</span>
+            <b :style="{ color: tradeDecisionRow.direction === 'buy' ? '#f56c6c' : '#67c23a' }">
+              {{ tradeDecisionRow.direction === 'buy' ? '买入' : '卖出' }}
+            </b>
+            <span>标的</span><b>{{ tradeDecisionRow.code }} {{ tradeDecisionRow.name || '' }}</b>
+          </div>
+          <div class="td-row">
+            <span>成交价</span><b>{{ Number(tradeDecisionRow.price ?? 0).toFixed(2) }}</b>
+            <span>成交量</span><b>{{ Number(tradeDecisionRow.amount ?? 0).toLocaleString() }}</b>
+            <span>成交额</span><b>{{ formatMoneyFull(tradeDecisionRow.value) }}</b>
+          </div>
+          <div class="td-reason">
+            <span>策略理由</span>
+            <b>{{ tradeDecisionRow.reason || '--' }}</b>
+            <el-tag v-if="tradeDecisionRow.reason_source === 'generated'" size="small" type="warning"
+                    effect="plain" style="margin-left:6px;">系统兜底说明（非策略显式提供）</el-tag>
+            <el-tag v-else-if="tradeDecisionRow.reason_source === 'derived'" size="small" type="info"
+                    effect="plain" style="margin-left:6px;">系统派生（来自策略日志/订单参数）</el-tag>
+            <el-tag v-else-if="tradeDecisionRow.reason_source === 'strategy'" size="small" type="success"
+                    effect="plain" style="margin-left:6px;">策略真实理由</el-tag>
+            <el-tag v-else-if="tradeDecisionRow.reason_source" size="small" type="info" effect="plain"
+                    style="margin-left:6px;">来源：{{ tradeDecisionRow.reason_source }}</el-tag>
+          </div>
+        </div>
+        <div v-if="tradeDecisionAi" class="td-ai">
+          <span class="td-block-title">AI 综合评分</span>
+          <el-tag :type="tradeDecisionAi.gate === 'reject' ? 'danger' : 'success'" effect="plain" size="small">
+            {{ tradeDecisionAi.action || '--' }}
+            <span v-if="tradeDecisionAi.score != null"> · {{ Number(tradeDecisionAi.score).toFixed(2) }}</span>
+            <span v-if="tradeDecisionAi.gate"> · gate: {{ tradeDecisionAi.gate }}</span>
+          </el-tag>
+        </div>
+        <div class="td-block">
+          <span class="td-block-title">决策规则对比</span>
+          <el-table :data="tradeDecisionRules" size="small" border empty-text="该信号未提供决策规则数据"
+                    class="td-rules-table">
+            <el-table-column prop="name" label="指标/规则" min-width="160" show-overflow-tooltip />
+            <el-table-column prop="threshold" label="阈值/判定" min-width="160" show-overflow-tooltip />
+            <el-table-column prop="actual" label="实际数据" min-width="160" show-overflow-tooltip />
+            <el-table-column label="结果" width="70" align="center">
+              <template #default="{ row }">
+                <el-tag :type="row.pass ? 'success' : 'warning'" size="small" effect="plain">
+                  {{ row.pass ? '通过' : '未通过' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="weight" label="权重" width="70" align="right">
+              <template #default="{ row }">{{ row.weight != null ? Number(row.weight).toFixed(2) : '--' }}</template>
+            </el-table-column>
+          </el-table>
+        </div>
+        <div v-if="tradeDecisionDetail?.indicators?.length" class="td-block">
+          <span class="td-block-title">指标快照</span>
+          <el-table :data="tradeDecisionDetail.indicators" size="small" border max-height="220">
+            <el-table-column prop="trade_date" label="日期" width="100" />
+            <el-table-column prop="open_price" label="开" width="70" align="right" />
+            <el-table-column prop="close_price" label="收" width="70" align="right" />
+            <el-table-column prop="low_price" label="低" width="70" align="right" />
+            <el-table-column prop="high_price" label="高" width="70" align="right" />
+            <el-table-column prop="volume" label="成交量" min-width="100" align="right" />
+            <el-table-column prop="ma" label="MA" min-width="120" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.ma ? JSON.stringify(row.ma) : '--' }}</template>
+            </el-table-column>
+            <el-table-column prop="boll" label="BOLL" min-width="120" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.boll ? JSON.stringify(row.boll) : '--' }}</template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="tradeDecisionVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -794,8 +898,52 @@ const tradeColumnDefs = [
   { key: 'value', label: '成交额' },
   { key: 'commission', label: '手续费' },
   { key: 'status', label: '状态' },
+  { key: 'reason', label: '交易原因' },
 ]
-const tradeVisibleCols = ref(['direction', 'amount', 'price', 'value', 'commission'])
+const tradeVisibleCols = ref(['direction', 'amount', 'price', 'value', 'commission', 'reason'])
+
+// ── Phase 3 交易决策依据弹窗 ──
+const tradeDecisionVisible = ref(false)
+const tradeDecisionLoading = ref(false)
+const tradeDecisionRow = ref<any>(null)
+const tradeDecisionDetail = ref<any>(null)
+async function openTradeDecision(row: any) {
+  tradeDecisionRow.value = row
+  tradeDecisionDetail.value = null
+  tradeDecisionVisible.value = true
+  if (!row?.signal_id) return
+  tradeDecisionLoading.value = true
+  try {
+    const r: any = await request.get('/instock/api/trade/signal/detail', { params: { signal_id: row.signal_id } })
+    if (r && r.code === 0) tradeDecisionDetail.value = r.data
+    else ElMessage.warning(r?.msg || '决策详情加载失败')
+  } catch (e: any) {
+    ElMessage.error(e?.message || '决策详情加载失败')
+  } finally {
+    tradeDecisionLoading.value = false
+  }
+}
+const tradeDecisionRules = computed(() => {
+  const d = tradeDecisionDetail.value
+  if (!d || !Array.isArray(d.decision)) return []
+  return d.decision.map((r: any) => ({
+    name: r.rule_name || r.name || '--',
+    threshold: r.rule_threshold ?? r.threshold ?? '--',
+    actual: r.actual_value ?? r.actual ?? '--',
+    pass: r.passed === 1 || r.passed === true,
+    weight: r.weight ?? null,
+  }))
+})
+const tradeDecisionAi = computed(() => {
+  const s = tradeDecisionDetail.value?.signal
+  if (!s) return null
+  if (s.ai_score == null && !s.ai_action && !s.ai_gate_result) return null
+  return {
+    score: s.ai_score,
+    action: s.ai_action || '',
+    gate: s.ai_gate_result || '',
+  }
+})
 
 function showPosCol(key: string) { return posVisibleCols.value.includes(key) }
 function showTradeCol(key: string) { return tradeVisibleCols.value.includes(key) }
@@ -1564,9 +1712,23 @@ async function doCreate() {
 }
 
 // ── 路由变化时加载详情 ──
+// 支持深链 ?signal_id=<id>：详情加载完成后自动定位到该交易并打开决策详情弹窗，
+// 用于通知（钉钉等）中点击"信号详情"后跳过列表直接展示决策依据。
 watch(detailId, async (newId) => {
   if (newId) {
     await loadDetailData(newId)
+    const sigQ = route.query.signal_id
+    const sigId = sigQ ? Number(Array.isArray(sigQ) ? sigQ[0] : sigQ) : null
+    if (sigId && Number.isFinite(sigId)) {
+      await nextTick()
+      const trades = detailData.value?.trades || []
+      const row = trades.find((t: any) => Number(t?.signal_id) === sigId)
+      if (row) {
+        openTradeDecision(row)
+      } else {
+        ElMessage.warning(`未在该模拟盘中找到信号 #${sigId}，可能该交易已被归档`)
+      }
+    }
   } else {
     detailData.value = null
   }
@@ -1596,6 +1758,20 @@ onUnmounted(() => {
 
 <style scoped>
 .paper-trading { padding: 16px 20px; }
+
+/* ── Phase 3 交易决策依据弹窗 ── */
+.trade-decision-dialog { display: flex; flex-direction: column; gap: 12px; }
+.trade-decision-dialog .td-summary { background: #f7f8fa; padding: 10px 12px; border-radius: 4px; }
+.trade-decision-dialog .td-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-bottom: 4px; font-size: 12px; }
+.trade-decision-dialog .td-row > span { color: #909399; }
+.trade-decision-dialog .td-row > b { color: #303133; font-weight: 600; margin-right: 12px; }
+.trade-decision-dialog .td-reason { font-size: 12px; margin-top: 4px; }
+.trade-decision-dialog .td-reason > span { color: #909399; margin-right: 8px; }
+.trade-decision-dialog .td-reason > b { color: #303133; }
+.trade-decision-dialog .td-block { display: flex; flex-direction: column; gap: 6px; }
+.trade-decision-dialog .td-block-title { font-size: 13px; font-weight: 600; color: #303133; }
+.trade-decision-dialog .td-rules-table { font-size: 12px; }
+.trade-decision-dialog .td-ai { display: flex; align-items: center; gap: 10px; }
 
 /* ── 页面头部 ── */
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }

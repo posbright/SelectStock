@@ -1582,7 +1582,8 @@ class TestPortfolioEngineEdgeCases(unittest.TestCase):
         engine = PortfolioBacktestEngine()
         engine._stock_names = {}
         # mock _query_stock_name to avoid DB access
-        original = PortfolioBacktestEngine._query_stock_name
+        # Note: read from __dict__ to preserve staticmethod descriptor on restore
+        original = PortfolioBacktestEngine.__dict__['_query_stock_name']
         PortfolioBacktestEngine._query_stock_name = staticmethod(lambda code: '')
         try:
             name = engine._resolve_stock_name('999999')
@@ -1766,7 +1767,8 @@ class TestTradeRecordPnlInEngine(unittest.TestCase):
         })
 
         # mock _query_stock_name to avoid DB
-        original = PortfolioBacktestEngine._query_stock_name
+        # Note: read from __dict__ to preserve staticmethod descriptor on restore
+        original = PortfolioBacktestEngine.__dict__['_query_stock_name']
         PortfolioBacktestEngine._query_stock_name = staticmethod(lambda code: '')
         try:
             engine._execute_single_order(
