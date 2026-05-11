@@ -304,14 +304,26 @@ onMounted(async () => {
 })
 
 /** M4：从 sessionStorage 读取回测详情页跳转过来的 AI 修复代码并应用 */
+const AI_REPAIR_TTL_MS = 60 * 60 * 1000  // P2-A：1 小时 TTL，避免应用过期 payload
 function applyPendingAiRepair() {
   try {
     const raw = sessionStorage.getItem('ai-repair-pending')
     if (!raw) return
     const payload = JSON.parse(raw)
-    if (!payload || !payload.code) return
-    // 校验 strategy_id 匹配，避免错配到其他策略
-    if (payload.strategy_id && Number(payload.strategy_id) !== strategyId.value) return
+    if (!payload || !payload.code) {
+      sessionStorage.removeItem('ai-repair-pending')
+      return
+    }
+    // P2-A：TTL 校验
+    if (payload.ts && (Date.now() - Number(payload.ts)) > AI_REPAIR_TTL_MS) {
+      sessionStorage.removeItem('ai-repair-pending')
+      return
+    }
+    // P1-A：strategy_id 不匹配时也必须清掉 key，避免下次错配
+    if (payload.strategy_id && Number(payload.strategy_id) !== strategyId.value) {
+      // 不删除：用户可能正路由切回正确策略；但限制只在 TTL 内重试
+      return
+    }
     sessionStorage.removeItem('ai-repair-pending')
     strategy.value.code = payload.code
     if (payload.meta) {
@@ -578,6 +590,8 @@ watch(() => route.params.id, async (newId) => {
       showResults.value = false
       btResult.value = null
       dirty.value = false
+      // P1-B：路由切换到 payload 目标策略时也尝试应用
+      applyPendingAiRepair()
     }
   }
 })

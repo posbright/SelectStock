@@ -118,6 +118,7 @@ const props = defineProps<{
   modelValue: boolean
   currentCode?: string
   strategyId?: number | string
+  defaultMode?: 'generate' | 'refine' | 'repair'
 }>()
 
 const emit = defineEmits<{
@@ -130,7 +131,18 @@ const visible = computed({
   set: (v: boolean) => emit('update:modelValue', v),
 })
 
-const mode = ref<'generate' | 'refine' | 'repair'>('generate')
+const mode = ref<'generate' | 'refine' | 'repair'>(props.defaultMode || 'generate')
+
+// 抽屉打开时若指定了 defaultMode，则按指定模式重置（避免用户上次切换的 mode 残留）
+watch(() => props.modelValue, (v) => {
+  if (v) {
+    if (props.defaultMode) {
+      mode.value = props.defaultMode
+    }
+    // 抽屉打开时清空旧错误（保留 lastCode 便于再次"采用"）
+    errorMsg.value = ''
+  }
+})
 const prompt = ref('')
 const loading = ref(false)
 const lastCode = ref('')
@@ -152,13 +164,6 @@ const canRun = computed(() => {
   if (loading.value) return false
   if (mode.value === 'repair') return !!props.strategyId
   return prompt.value.trim().length > 0
-})
-
-watch(() => props.modelValue, (v) => {
-  if (v) {
-    // 抽屉打开时清空旧错误（保留 lastCode 便于再次"采用"）
-    errorMsg.value = ''
-  }
 })
 
 function _resetState() {

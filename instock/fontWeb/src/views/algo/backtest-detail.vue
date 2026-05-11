@@ -37,6 +37,7 @@
       v-model="aiDrawerOpen"
       :strategy-id="info?.strategy_id"
       :current-code="info?.strategy_code || ''"
+      default-mode="repair"
       @apply="onAiRepairApply"
     />
 
@@ -399,25 +400,27 @@ function openAiRepair() {
   aiDrawerOpen.value = true
 }
 function onAiRepairApply(code: string, meta: AiApplyMeta) {
-  if (!info.value?.strategy_id) {
-    ElMessage.warning('该回测无关联策略，无法应用修复结果')
-    return
-  }
+  const sid = info.value?.strategy_id
+  // P1-C：先写 sessionStorage 兜底（drawer 已 emit→close，避免代码丢失）
   const payload = {
-    strategy_id: info.value.strategy_id,
+    strategy_id: sid || null,
     code,
     meta,
-    backtest_id: info.value.id,
+    backtest_id: info.value?.id,
     ts: Date.now(),
   }
   try {
     sessionStorage.setItem('ai-repair-pending', JSON.stringify(payload))
   } catch (e) {
-    ElMessage.warning('存储修复结果失败：' + (e as Error).message)
+    ElMessage.error('存储修复结果失败：' + (e as Error).message)
+    return
+  }
+  if (!sid) {
+    ElMessage.warning('该回测无关联策略 ID，已暂存修复代码到本地，请手动在目标策略编辑页应用')
     return
   }
   ElMessage.success('已生成修复代码，跳转到编辑器')
-  router.push('/algo/edit/' + info.value.strategy_id)
+  router.push('/algo/edit/' + sid)
 }
 
 const chartEl = ref<HTMLElement>()
