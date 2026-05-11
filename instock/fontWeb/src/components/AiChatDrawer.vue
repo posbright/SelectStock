@@ -101,6 +101,7 @@ export type AiApplyMeta = {
   source: 'ai'
   ai_prompt: string
   ai_agent: string  // 'strategy_coder' / 'strategy_repairer'
+  ai_model?: string
 }
 
 const props = defineProps<{
@@ -127,6 +128,7 @@ const validated = ref(false)
 const validationError = ref('')
 const errorMsg = ref('')
 const failureInfo = ref<FailureInfo | null>(null)
+const lastModel = ref('')
 
 const placeholder = computed(() => {
   if (mode.value === 'generate') {
@@ -179,6 +181,7 @@ async function run() {
       validated.value = !!resp.data?.validated
       validationError.value = resp.data?.validation_error || ''
       failureInfo.value = resp.data?.failure || null
+      lastModel.value = resp.data?.model || ''
       if (resp.code === -2) {
         // 仍展示代码，但提示需要修复
         ElMessage.warning('AI 生成的代码未通过沙箱校验，请人工检查或重试')
@@ -204,6 +207,7 @@ function apply() {
     source: 'ai',
     ai_prompt: prompt.value || (mode.value === 'repair' ? '[repair from last failure]' : ''),
     ai_agent: agent,
+    ai_model: lastModel.value || undefined,
   })
   ElMessage.success('已应用到编辑器')
   visible.value = false

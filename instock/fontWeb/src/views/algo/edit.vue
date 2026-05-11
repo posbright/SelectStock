@@ -564,8 +564,8 @@ watch(activeTab, async (tab) => {
 window.addEventListener('resize', () => chart?.resize())
 
 // AI 助手：把生成代码灌入编辑器
-const aiMeta = ref<{ source: 'ai'; ai_prompt: string; ai_agent: string } | null>(null)
-function onAiApply(newCode: string, meta: { source: 'ai'; ai_prompt: string; ai_agent: string }) {
+const aiMeta = ref<{ source: 'ai'; ai_prompt: string; ai_agent: string; ai_model?: string } | null>(null)
+function onAiApply(newCode: string, meta: { source: 'ai'; ai_prompt: string; ai_agent: string; ai_model?: string }) {
   strategy.value.code = newCode
   aiMeta.value = meta
   dirty.value = true

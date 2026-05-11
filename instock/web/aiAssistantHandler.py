@@ -76,12 +76,19 @@ def _write_error(handler, code: int, msg: str, **extra):
 
 
 def _call_ai_blocking(prompt: str, system: str, scene: str, agent: str, user_id: str,
-                      overrides: Optional[dict] = None) -> str:
-    """在线程池中执行的同步 AI 调用，返回模型纯文本。"""
-    return run_chat(
+                      overrides: Optional[dict] = None):
+    """在线程池中执行的同步 AI 调用。
+
+    返回 (content, resolved_model) —— 让上层把实际使用的模型回传给前端，
+    便于 SaveStrategyCodeHandler 落库 ai_model 字段（N1 修正）。
+    """
+    from instock.lib.ai.config import load_config as _load_cfg
+    cfg = _load_cfg(overrides)
+    content = run_chat(
         prompt, scene=scene, system=system, agent=agent,
         user_id=user_id, overrides=overrides,
     )
+    return content, cfg.model
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -111,7 +118,7 @@ class GenerateStrategyHandler(webBase.BaseHandler, ABC):
         overrides = _build_overrides(body)
         system = prompt_loader.load('strategy_coder')
         try:
-            raw = yield IOLoop.current().run_in_executor(
+            raw, resolved_model = yield IOLoop.current().run_in_executor(
                 _get_executor(),
                 _call_ai_blocking,
                 user_prompt, system, 'strategy_gen', 'strategy_coder',
@@ -138,6 +145,7 @@ class GenerateStrategyHandler(webBase.BaseHandler, ABC):
                 'raw': raw,
                 'validated': ok,
                 'validation_error': err,
+                'model': resolved_model,
             },
         }
         self.set_header('Content-Type', 'application/json')
@@ -175,7 +183,7 @@ class RefineStrategyHandler(webBase.BaseHandler, ABC):
             f"用户的修改需求：{user_prompt}"
         )
         try:
-            raw = yield IOLoop.current().run_in_executor(
+            raw, resolved_model = yield IOLoop.current().run_in_executor(
                 _get_executor(),
                 _call_ai_blocking,
                 composed, system, 'strategy_refine', 'strategy_coder',
@@ -198,7 +206,8 @@ class RefineStrategyHandler(webBase.BaseHandler, ABC):
         self.write(json.dumps({
             'code': 0 if ok else -2,
             'msg': '' if ok else f'代码沙箱校验失败: {err}',
-            'data': {'code': code, 'raw': raw, 'validated': ok, 'validation_error': err},
+            'data': {'code': code, 'raw': raw, 'validated': ok,
+                     'validation_error': err, 'model': resolved_model},
         }, ensure_ascii=False))
 
 
@@ -260,7 +269,7 @@ class RepairStrategyHandler(webBase.BaseHandler, ABC):
         overrides = _build_overrides(body)
         system = prompt_loader.load('strategy_repairer')
         try:
-            raw = yield IOLoop.current().run_in_executor(
+            raw, resolved_model = yield IOLoop.current().run_in_executor(
                 _get_executor(),
                 _call_ai_blocking,
                 composed, system, 'strategy_repair', 'strategy_repairer',
@@ -286,6 +295,7 @@ class RepairStrategyHandler(webBase.BaseHandler, ABC):
             'data': {
                 'code': code, 'raw': raw,
                 'validated': ok, 'validation_error': err,
+                'model': resolved_model,
                 'failure': {
                     'error_message': error_text,
                     'started_at': str(last.get('started_at') or ''),
@@ -319,7 +329,7 @@ class ChatHandler(webBase.BaseHandler, ABC):
         agent = body.get('agent') or None
         overrides = _build_overrides(body)
         try:
-            raw = yield IOLoop.current().run_in_executor(
+            raw, resolved_model = yield IOLoop.current().run_in_executor(
                 _get_executor(),
                 _call_ai_blocking,
                 user_prompt, system, scene, agent,
@@ -337,7 +347,9 @@ class ChatHandler(webBase.BaseHandler, ABC):
             return
 
         self.set_header('Content-Type', 'application/json')
-        self.write(json.dumps({'code': 0, 'data': {'content': raw}}, ensure_ascii=False))
+        self.write(json.dumps({'code': 0,
+                               'data': {'content': raw, 'model': resolved_model}},
+                              ensure_ascii=False))
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -383,6 +395,9 @@ class GenerateStrategyStreamHandler(webBase.BaseHandler, ABC):
         overrides = _build_overrides(body)
         system = prompt_loader.load('strategy_coder')
         user_id = _client_ip(self)
+        # 提前解析模型名（与 stream_chat 内部使用同一份合并配置）以回传前端
+        from instock.lib.ai.config import load_config as _load_cfg
+        resolved_model = _load_cfg(overrides).model
 
         # SSE 响应头
         self.set_header('Content-Type', 'text/event-stream; charset=utf-8')
@@ -441,5 +456,6 @@ class GenerateStrategyStreamHandler(webBase.BaseHandler, ABC):
             'raw': full,
             'validated': ok,
             'validation_error': err,
+            'model': resolved_model,
         }, ensure_ascii=False) + '\n\n')
         yield self.flush()

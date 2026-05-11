@@ -47,7 +47,7 @@ class GenerateHandlerTests(AsyncHTTPTestCase):
 
     def test_generate_success(self):
         with mock.patch('instock.web.aiAssistantHandler._call_ai_blocking',
-                        return_value=_VALID_CODE):
+                        return_value=(_VALID_CODE, 'gpt-4o-mini')):
             resp = self.fetch('/instock/api/ai/strategy/generate', method='POST',
                               body=json.dumps({'prompt': '生成一个简单策略'}))
         self.assertEqual(resp.code, 200)
@@ -55,11 +55,12 @@ class GenerateHandlerTests(AsyncHTTPTestCase):
         self.assertEqual(body['code'], 0, body)
         self.assertTrue(body['data']['validated'])
         self.assertIn('def initialize', body['data']['code'])
+        self.assertEqual(body['data']['model'], 'gpt-4o-mini')
 
     def test_generate_strips_code_fence(self):
         fenced = f"```python\n{_VALID_CODE}```"
         with mock.patch('instock.web.aiAssistantHandler._call_ai_blocking',
-                        return_value=fenced):
+                        return_value=(fenced, 'm1')):
             resp = self.fetch('/instock/api/ai/strategy/generate', method='POST',
                               body=json.dumps({'prompt': 'x'}))
         body = json.loads(resp.body)
@@ -69,7 +70,7 @@ class GenerateHandlerTests(AsyncHTTPTestCase):
     def test_generate_unsafe_code_fails_validation(self):
         unsafe = "import os\n" + _VALID_CODE
         with mock.patch('instock.web.aiAssistantHandler._call_ai_blocking',
-                        return_value=unsafe):
+                        return_value=(unsafe, 'm1')):
             resp = self.fetch('/instock/api/ai/strategy/generate', method='POST',
                               body=json.dumps({'prompt': 'x'}))
         body = json.loads(resp.body)
@@ -99,7 +100,7 @@ class RefineHandlerTests(AsyncHTTPTestCase):
 
     def test_refine_success(self):
         with mock.patch('instock.web.aiAssistantHandler._call_ai_blocking',
-                        return_value=_VALID_CODE) as m:
+                        return_value=(_VALID_CODE, 'm1')) as m:
             resp = self.fetch('/instock/api/ai/strategy/refine', method='POST',
                               body=json.dumps({
                                   'prompt': '改成持仓 10 只',
@@ -137,7 +138,7 @@ class RepairHandlerTests(AsyncHTTPTestCase):
         with mock.patch('instock.core.backtest.task_recorder.fetch_last_failure',
                         return_value=last), \
              mock.patch('instock.web.aiAssistantHandler._call_ai_blocking',
-                        return_value=_VALID_CODE) as m:
+                        return_value=(_VALID_CODE, 'm1')) as m:
             resp = self.fetch('/instock/api/ai/strategy/repair', method='POST',
                               body=json.dumps({'strategy_id': 7, 'code': _VALID_CODE}))
         body = json.loads(resp.body)
@@ -153,12 +154,21 @@ class ChatHandlerTests(AsyncHTTPTestCase):
 
     def test_chat_returns_raw_content(self):
         with mock.patch('instock.web.aiAssistantHandler._call_ai_blocking',
-                        return_value='hello world'):
+                        return_value=('hello world', 'm1')):
             resp = self.fetch('/instock/api/ai/chat', method='POST',
                               body=json.dumps({'prompt': 'hi'}))
         body = json.loads(resp.body)
         self.assertEqual(body['code'], 0)
         self.assertEqual(body['data']['content'], 'hello world')
+
+    def test_chat_rate_limit_status_429(self):
+        from instock.lib.ai import RateLimitError
+        with mock.patch('instock.web.aiAssistantHandler._call_ai_blocking',
+                        side_effect=RateLimitError('429')):
+            resp = self.fetch('/instock/api/ai/chat', method='POST',
+                              body=json.dumps({'prompt': 'hi'}))
+        self.assertEqual(resp.code, 429)
+        self.assertEqual(json.loads(resp.body)['code'], 429)
 
 
 class StripFenceTests(unittest.TestCase):
@@ -173,6 +183,101 @@ class StripFenceTests(unittest.TestCase):
 
     def test_empty(self):
         self.assertEqual(ai_h._strip_code_fence(''), '')
+
+
+# ─── B1：SSE 流式生成 ──────────────────────────────────────────
+def _sse_app() -> Application:
+    return Application([
+        (r"/instock/api/ai/strategy/generate/stream",
+         ai_h.GenerateStrategyStreamHandler),
+    ])
+
+
+def _parse_sse(body: bytes):
+    """把 SSE 响应体按 data: 拆为事件 dict 列表。"""
+    out = []
+    for chunk in body.split(b'\n\n'):
+        s = chunk.strip()
+        if not s.startswith(b'data:'):
+            continue
+        try:
+            out.append(json.loads(s[5:].strip()))
+        except Exception:
+            continue
+    return out
+
+
+class GenerateStreamHandlerTests(AsyncHTTPTestCase):
+    def get_app(self):
+        return _sse_app()
+
+    def test_stream_empty_prompt(self):
+        resp = self.fetch('/instock/api/ai/strategy/generate/stream',
+                          method='POST', body=json.dumps({'prompt': ''}))
+        # _write_error 路径走普通 JSON
+        body = json.loads(resp.body)
+        self.assertEqual(body['code'], -1)
+
+    def test_stream_yields_chunks_then_done(self):
+        chunks = ['def initi', 'alize(context):\n    ', "context.security = '000001'\n",
+                  '\ndef handle_data(context, data):\n    pass\n']
+
+        def _fake(*args, **kwargs):
+            yield from chunks
+
+        with mock.patch('instock.web.aiAssistantHandler.stream_chat',
+                        side_effect=_fake):
+            resp = self.fetch('/instock/api/ai/strategy/generate/stream',
+                              method='POST', body=json.dumps({'prompt': 'x'}))
+        self.assertEqual(resp.code, 200)
+        events = _parse_sse(resp.body)
+        types = [e.get('type') for e in events]
+        self.assertEqual(types.count('chunk'), len(chunks))
+        self.assertEqual(types[-1], 'done')
+        done = events[-1]
+        self.assertTrue(done['validated'], done)
+        self.assertIn('def initialize', done['code'])
+        self.assertIn('model', done)
+
+    def test_stream_rate_limit_emits_error(self):
+        from instock.lib.ai import RateLimitError
+
+        def _boom(*args, **kwargs):
+            raise RateLimitError('429')
+            yield  # pragma: no cover
+
+        with mock.patch('instock.web.aiAssistantHandler.stream_chat',
+                        side_effect=_boom):
+            resp = self.fetch('/instock/api/ai/strategy/generate/stream',
+                              method='POST', body=json.dumps({'prompt': 'x'}))
+        events = _parse_sse(resp.body)
+        self.assertTrue(any(e.get('type') == 'error' and e.get('code') == 429
+                            for e in events), events)
+
+
+# ─── B3：refine / repair 也应返回 HTTP 429 ──────────────────────
+class RateLimitStatusTests(AsyncHTTPTestCase):
+    def get_app(self):
+        return _make_app()
+
+    def test_refine_rate_limit_status_429(self):
+        from instock.lib.ai import RateLimitError
+        with mock.patch('instock.web.aiAssistantHandler._call_ai_blocking',
+                        side_effect=RateLimitError('429')):
+            resp = self.fetch('/instock/api/ai/strategy/refine', method='POST',
+                              body=json.dumps({'prompt': 'x', 'code': _VALID_CODE}))
+        self.assertEqual(resp.code, 429)
+
+    def test_repair_rate_limit_status_429(self):
+        from instock.lib.ai import RateLimitError
+        last = {'id': 1, 'started_at': '2026-05-11', 'error_message': 'boom'}
+        with mock.patch('instock.core.backtest.task_recorder.fetch_last_failure',
+                        return_value=last), \
+             mock.patch('instock.web.aiAssistantHandler._call_ai_blocking',
+                        side_effect=RateLimitError('429')):
+            resp = self.fetch('/instock/api/ai/strategy/repair', method='POST',
+                              body=json.dumps({'strategy_id': 1, 'code': _VALID_CODE}))
+        self.assertEqual(resp.code, 429)
 
 
 if __name__ == '__main__':
