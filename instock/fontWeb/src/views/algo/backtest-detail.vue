@@ -12,6 +12,34 @@
       </span>
     </div>
 
+    <!-- ── M4：失败回测 → AI 修复入口 ── -->
+    <el-alert
+      v-if="info?.status === 'failed'"
+      type="error"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 12px;"
+    >
+      <template #title>
+        <div class="failed-banner">
+          <span>回测失败：{{ info.error_message || '(无错误信息)' }}</span>
+          <el-button
+            v-if="info.strategy_id"
+            type="primary"
+            size="small"
+            @click="openAiRepair"
+          >AI 一键修复</el-button>
+        </div>
+      </template>
+    </el-alert>
+
+    <AiChatDrawer
+      v-model="aiDrawerOpen"
+      :strategy-id="info?.strategy_id"
+      :current-code="info?.strategy_code || ''"
+      @apply="onAiRepairApply"
+    />
+
     <!-- ═══════════  收益概述（聚宽双列表格风格）═══════════ -->
     <div class="jq-summary" v-if="info?.metrics">
       <table class="jq-table">
@@ -346,20 +374,51 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, onActivated, nextTick, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { getKlineData, getPortfolioBacktestDetail } from '@/api/stock'
 import * as echarts from 'echarts'
 import { useCustomIndicatorOverlay } from '@/composables/useCustomIndicatorOverlay'
 import CustomIndicatorOverlayBar from '@/components/CustomIndicatorOverlayBar.vue'
+import AiChatDrawer, { type AiApplyMeta } from '@/components/AiChatDrawer.vue'
 
 const route = useRoute()
+const router = useRouter()
+
 const btId = computed(() => Number(route.params.id))
 const info = ref<any>(null)
 const loading = ref(false)
 const activeTab = ref('overview')
 const selectedPosDate = ref('')
 let lastLoadedId = 0   // 记录上次加载的回测ID，用于 keep-alive 激活时判断是否需要重新加载
+
+// M4：AI 修复抽屉
+const aiDrawerOpen = ref(false)
+function openAiRepair() {
+  aiDrawerOpen.value = true
+}
+function onAiRepairApply(code: string, meta: AiApplyMeta) {
+  if (!info.value?.strategy_id) {
+    ElMessage.warning('该回测无关联策略，无法应用修复结果')
+    return
+  }
+  const payload = {
+    strategy_id: info.value.strategy_id,
+    code,
+    meta,
+    backtest_id: info.value.id,
+    ts: Date.now(),
+  }
+  try {
+    sessionStorage.setItem('ai-repair-pending', JSON.stringify(payload))
+  } catch (e) {
+    ElMessage.warning('存储修复结果失败：' + (e as Error).message)
+    return
+  }
+  ElMessage.success('已生成修复代码，跳转到编辑器')
+  router.push('/algo/edit/' + info.value.strategy_id)
+}
 
 const chartEl = ref<HTMLElement>()
 const pnlChartEl = ref<HTMLElement>()
@@ -1355,6 +1414,7 @@ function indicatorSnapshot(period: string, trade: any) {
 .detail-header { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
 .detail-header h3 { margin: 0; font-size: 16px; }
 .header-sub { color: #909399; font-size: 13px; }
+.failed-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 
 /* ── 聚宽风格收益概述表格 ── */
 .jq-summary {

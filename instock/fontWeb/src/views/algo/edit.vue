@@ -299,7 +299,35 @@ onMounted(async () => {
       ElMessage.error('加载策略失败')
     }
   }
+  // M4：检查回测详情页是否传来"AI 修复结果"
+  applyPendingAiRepair()
 })
+
+/** M4：从 sessionStorage 读取回测详情页跳转过来的 AI 修复代码并应用 */
+function applyPendingAiRepair() {
+  try {
+    const raw = sessionStorage.getItem('ai-repair-pending')
+    if (!raw) return
+    const payload = JSON.parse(raw)
+    if (!payload || !payload.code) return
+    // 校验 strategy_id 匹配，避免错配到其他策略
+    if (payload.strategy_id && Number(payload.strategy_id) !== strategyId.value) return
+    sessionStorage.removeItem('ai-repair-pending')
+    strategy.value.code = payload.code
+    if (payload.meta) {
+      aiMeta.value = payload.meta
+      aiAppliedSnapshot.value = payload.code
+    }
+    dirty.value = true
+    ElMessage.success(
+      payload.backtest_id
+        ? `已加载来自回测 #${payload.backtest_id} 的 AI 修复代码，请审阅后保存`
+        : '已加载 AI 修复代码，请审阅后保存'
+    )
+  } catch (e) {
+    console.warn('[edit.vue] applyPendingAiRepair 失败', e)
+  }
+}
 
 async function doSave() {
   if (!strategy.value.code?.trim()) { ElMessage.warning('代码为空'); return }

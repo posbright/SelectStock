@@ -2416,7 +2416,8 @@ class GetPortfolioBacktestDetailHandler(webBase.BaseHandler, ABC):
                 'SELECT bp.id, bp.strategy_id, COALESCE(bp.strategy_name, sc.name), bp.start_date, bp.end_date, '
                 'bp.initial_cash, bp.status, bp.total_return, bp.annual_return, '
                 'bp.max_drawdown, bp.sharpe_ratio, bp.alpha, bp.beta, bp.win_rate, '
-                'bp.trade_count, bp.completed_at, bp.result_json, bp.benchmark '
+                'bp.trade_count, bp.completed_at, bp.result_json, bp.benchmark, '
+                'bp.error_message '
                 'FROM cn_stock_backtest_portfolio bp '
                 'LEFT JOIN cn_stock_strategy_code sc ON bp.strategy_id = sc.id '
                 'WHERE bp.id = %s', (bt_id,))
@@ -2444,6 +2445,7 @@ class GetPortfolioBacktestDetailHandler(webBase.BaseHandler, ABC):
                     'trade_count': r[14] or 0,
                 },
                 'completed_at': r[15].strftime('%Y-%m-%d %H:%M:%S') if r[15] else '',
+                'error_message': r[18] or '',
             }
 
             # 尝试从 result_json 恢复完整数据（净值/交易/持仓）
