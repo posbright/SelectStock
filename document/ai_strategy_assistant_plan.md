@@ -1061,6 +1061,19 @@ export const AI_ERROR_CODES = {
 
 每种码前端有对应 UI 行为（弹框 / toast / 重试按钮）。
 
+### 16.11 运行时环境变量（M1～M3 实施期落地）
+
+| 变量 | 默认值 | 含义 | 引入提交 |
+| --- | --- | --- | --- |
+| `INSTOCK_AI_REPAIR_MAX_ATTEMPTS` | `3` | strict 校验失败时自动修复重试上限。设为 `0` 可关闭自动修复。每次 HTTP 请求时动态读取。 | 87069bd / 9370abb |
+| `INSTOCK_AI_MAX_GENERATED_CHARS` | `262144`（256 KB） | `/instock/api/ai/strategy/generate/stream` 单次响应的字符上限；超出即停止读取并以 `done.truncated=true` 收尾，前端可拿到部分代码做人工复核。 | 9370abb |
+| `INSTOCK_AI_AUDIT_MAX_BYTES` | `131072`（128 KB） | `cn_stock_ai_call_log` 中 prompt / response 字段写入前的字节级截断阈值（UTF-8 安全）。防止超过 MySQL `max_allowed_packet`。 | 9370abb |
+| `INSTOCK_AI_<KEY>` / `INSTOCK_AI_DEFAULT_<KEY>` | — | 标准前缀 → 默认前缀的回退链；详见 §4.2 / §16.4。 | aab3b47 |
+
+**SSE 修复回路状态字段**：所有 4 个 handler（generate / refine / repair / SSE done）的响应中均包含
+`repair_status ∈ { success, unrepaired, max_attempts, no_progress, rate_limited, provider_error }`，
+便于前端区分 "重试到上限" / "LLM 返回相同错误已无收敛可能" / "中途触发限流" 等失败语义。
+
 ---
 
 ## 17. 可扩展性自评（按 ISO/IEC 25010）

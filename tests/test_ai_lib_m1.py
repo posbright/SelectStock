@@ -176,6 +176,48 @@ class TestProviderSecretScrub(unittest.TestCase):
         out = _scrub(s)
         self.assertNotIn('1234567890abcdef', out)
 
+    def test_scrub_url_query_param(self):
+        from instock.lib.ai.providers.openai_compat import _scrub
+        s = "https://api.example.com/v1/chat?key=abcdef1234567890 timeout"
+        out = _scrub(s)
+        self.assertNotIn('abcdef1234567890', out)
+
+    def test_scrub_x_api_key_header(self):
+        from instock.lib.ai.providers.openai_compat import _scrub
+        s = "request failed: x-api-key: secrettoken12345 invalid"
+        out = _scrub(s)
+        self.assertNotIn('secrettoken12345', out)
+
+
+class TestStreamErrorScrub(unittest.TestCase):
+    """P0-E2：流式迭代异常需脱敏后再外抛。"""
+
+    @patch('instock.lib.ai.config._load_from_env', return_value={'api_key': 'k', 'api_base': 'http://x'})
+    @patch('instock.lib.ai.config._load_from_db', return_value={})
+    def test_iter_lines_exception_is_scrubbed(self, *_):
+        import requests as _req
+        from instock.lib.ai.providers.openai_compat import OpenAICompatProvider
+        from instock.lib.ai import AIConfig, ProviderError, ChatMessage
+
+        cfg = AIConfig(provider='openai_compat', model='m', api_key='k', api_base='http://x')
+        provider = OpenAICompatProvider(cfg)
+
+        fake_resp = MagicMock()
+        fake_resp.status_code = 200
+
+        def _raise(*a, **kw):
+            raise _req.ConnectionError('Connection refused: Bearer sk-leaktoken1234567890')
+
+        fake_resp.iter_lines = _raise
+        fake_resp.close = lambda: None
+
+        with patch('instock.lib.ai.providers.openai_compat.requests.post',
+                   return_value=fake_resp):
+            with self.assertRaises(ProviderError) as ctx:
+                list(provider.stream([ChatMessage(role='user', content='hi')]))
+        self.assertNotIn('sk-leaktoken1234567890', str(ctx.exception))
+        self.assertIn('[REDACTED]', str(ctx.exception))
+
 
 class TestRunChatAuditFailure(unittest.TestCase):
     """J1：DB 不可达时 run_chat 仍应正常返回内容。"""

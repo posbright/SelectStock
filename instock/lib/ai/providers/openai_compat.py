@@ -19,8 +19,12 @@ __author__ = 'InStock'
 __date__ = '2026/05/11'
 
 # C2：异常消息中可能回显请求头/凭证 → 在外抛前做正则脱敏
+# 覆盖：Bearer xxx / sk-xxx / api_key=xxx / x-api-key: xxx / ?key=xxx
 _SECRET_RE = re.compile(
-    r'(Bearer\s+[A-Za-z0-9._\-]{8,}|sk-[A-Za-z0-9._\-]{8,}|api[_-]?key["\']?\s*[:=]\s*["\']?[A-Za-z0-9._\-]{8,})',
+    r'(Bearer\s+[A-Za-z0-9._\-]{8,}'
+    r'|sk-[A-Za-z0-9._\-]{8,}'
+    r'|(?:x-)?api[_-]?key["\']?\s*[:=]\s*["\']?[A-Za-z0-9._\-]{8,}'
+    r'|[?&]key=[A-Za-z0-9._\-]{8,})',
     re.IGNORECASE,
 )
 
@@ -144,6 +148,9 @@ class OpenAICompatProvider(Provider):
                 except Exception as exc:
                     logging.debug(f"[ai.openai_compat] 流式解析失败: {exc}")
                     continue
+        except requests.RequestException as exc:
+            # P0-E2：迭代过程中网络异常也需脱敏后再外抛
+            raise ProviderError(f'流式读取失败: {_scrub(str(exc))}') from exc
         finally:
             # 无论正常 break / 早退 / 异常，都关闭底层连接
             try:

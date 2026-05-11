@@ -254,6 +254,49 @@ class GenerateStreamHandlerTests(AsyncHTTPTestCase):
         self.assertTrue(any(e.get('type') == 'error' and e.get('code') == 429
                             for e in events), events)
 
+    def test_stream_truncation_emits_done_with_flag(self):
+        """L2：超过上限应正常发出 done + truncated=true，而非致命 error。"""
+        import instock.web.aiAssistantHandler as ai_h
+        big_chunk = 'x' * 1024  # 1KB per chunk
+
+        def _fake(*args, **kwargs):
+            for _ in range(50):
+                yield big_chunk
+
+        original = ai_h._MAX_GENERATED_CHARS
+        ai_h._MAX_GENERATED_CHARS = 4 * 1024  # 4KB → 截断
+        try:
+            with mock.patch('instock.web.aiAssistantHandler.stream_chat',
+                            side_effect=_fake):
+                resp = self.fetch('/instock/api/ai/strategy/generate/stream',
+                                  method='POST', body=json.dumps({'prompt': 'x'}))
+        finally:
+            ai_h._MAX_GENERATED_CHARS = original
+        events = _parse_sse(resp.body)
+        types = [e.get('type') for e in events]
+        # 应以 done 收尾且 truncated=True
+        self.assertEqual(types[-1], 'done')
+        self.assertTrue(events[-1].get('truncated'), events[-1])
+        # 不应当出现致命 error
+        self.assertFalse(any(e.get('type') == 'error' for e in events), events)
+
+    def test_stream_sentinel_when_queue_full(self):
+        """K2：生产端被快速塞满后，sentinel 仍能被消费端接收（不会卡死）。"""
+        many_pieces = [f'p{i}' for i in range(200)]
+
+        def _fake(*args, **kwargs):
+            for p in many_pieces:
+                yield p
+
+        with mock.patch('instock.web.aiAssistantHandler.stream_chat',
+                        side_effect=_fake):
+            resp = self.fetch('/instock/api/ai/strategy/generate/stream',
+                              method='POST', body=json.dumps({'prompt': 'x'}))
+        # 关键：响应正常返回（未死锁），且最后一个事件为 done
+        self.assertEqual(resp.code, 200)
+        events = _parse_sse(resp.body)
+        self.assertEqual(events[-1].get('type'), 'done')
+
 
 # ─── B3：refine / repair 也应返回 HTTP 429 ──────────────────────
 class RateLimitStatusTests(AsyncHTTPTestCase):

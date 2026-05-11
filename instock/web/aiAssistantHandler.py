@@ -573,10 +573,18 @@ class GenerateStrategyStreamHandler(webBase.BaseHandler, ABC):
                 logging.exception('GenerateStrategyStreamHandler producer 异常')
                 q.put(('error', {'code': -1, 'msg': f'内部错误: {exc}'}))
             finally:
-                try:
-                    q.put((_STREAM_SENTINEL, None), timeout=1.0)
-                except queue.Full:
-                    pass
+                # P0-K2：sentinel 必须送达消费端，否则消费端 q.get 会无限等待。
+                # 队列若已满，先丢弃旧 chunk 释放空间再放入 sentinel。
+                while True:
+                    try:
+                        q.put((_STREAM_SENTINEL, None), timeout=0.5)
+                        break
+                    except queue.Full:
+                        try:
+                            q.get_nowait()
+                        except queue.Empty:
+                            # 极端情况：消费者瞬间清空，下一轮 put 即可成功
+                            continue
 
         threading.Thread(target=_producer, name='ai-stream-producer', daemon=True).start()
 
@@ -594,18 +602,19 @@ class GenerateStrategyStreamHandler(webBase.BaseHandler, ABC):
                 if kind == 'chunk':
                     pieces.append(payload)
                     total_chars += len(payload)
-                    # L2：单次生成上限
+                    # L2：单次生成上限 → 标记 truncated 后停止读取，但走正常 done 路径
+                    # 让前端能拿到部分代码（用户可手动审阅 / 保存）。
                     if total_chars > _MAX_GENERATED_CHARS:
                         truncated = True
                         cancel_event.set()
-                        self.write('data: ' + json.dumps(
-                            {'type': 'error', 'code': -1,
-                             'msg': f'生成内容超过上限 {_MAX_GENERATED_CHARS} 字符，已截断'},
-                            ensure_ascii=False) + '\n\n')
+                        # 仍写出最后一个 chunk 以便部分内容渲染
                         try:
+                            self.write('data: ' + json.dumps(
+                                {'type': 'chunk', 'text': payload}, ensure_ascii=False) + '\n\n')
                             yield self.flush()
                         except Exception:
-                            pass
+                            return
+                        # 排空队列、跳出 while 进入 done 流程
                         break
                     try:
                         self.write('data: ' + json.dumps(
