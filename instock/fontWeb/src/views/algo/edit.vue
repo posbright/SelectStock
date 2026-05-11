@@ -311,11 +311,13 @@ async function doSave() {
       code: strategy.value.code,
       description: strategy.value.description || '',
       initial_cash: btCash.value,
+      ...(aiMeta.value ? aiMeta.value : {}),
     }) as any
     const { ok, data, msg } = unwrap(res)
     if (ok) {
       if (!strategy.value.id && data?.id) strategy.value.id = data.id
       dirty.value = false
+      aiMeta.value = null  // 已落库，下次保存默认按手工
       ElMessage.success('已保存')
     } else {
       ElMessage.error(msg)
@@ -562,8 +564,10 @@ watch(activeTab, async (tab) => {
 window.addEventListener('resize', () => chart?.resize())
 
 // AI 助手：把生成代码灌入编辑器
-function onAiApply(newCode: string) {
+const aiMeta = ref<{ source: 'ai'; ai_prompt: string; ai_agent: string } | null>(null)
+function onAiApply(newCode: string, meta: { source: 'ai'; ai_prompt: string; ai_agent: string }) {
   strategy.value.code = newCode
+  aiMeta.value = meta
   dirty.value = true
 }
 </script>

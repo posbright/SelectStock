@@ -147,6 +147,7 @@ class Application(tornado.web.Application):
             (r"/instock/api/ai/config/delete", aiDecisionConfigHandler.DeleteAIDecisionConfigHandler),
             # M2: AI 策略生成助手（lib/ai 统一服务层）
             (r"/instock/api/ai/strategy/generate", aiAssistantHandler.GenerateStrategyHandler),
+            (r"/instock/api/ai/strategy/generate/stream", aiAssistantHandler.GenerateStrategyStreamHandler),
             (r"/instock/api/ai/strategy/refine", aiAssistantHandler.RefineStrategyHandler),
             (r"/instock/api/ai/strategy/repair", aiAssistantHandler.RepairStrategyHandler),
             (r"/instock/api/ai/chat", aiAssistantHandler.ChatHandler),

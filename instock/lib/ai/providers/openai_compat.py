@@ -95,6 +95,7 @@ class OpenAICompatProvider(Provider):
         payload = self._build_payload(messages, **kwargs)
         payload['stream'] = True
         try:
+            # 使用 with 确保消费者中途异常 / GeneratorExit 时连接被释放（B4）
             resp = requests.post(
                 url, headers=self._headers(), json=payload, stream=True,
                 timeout=kwargs.get('timeout', self.config.timeout),
@@ -102,30 +103,37 @@ class OpenAICompatProvider(Provider):
         except requests.RequestException as exc:
             raise ProviderError(f'网络错误: {exc}') from exc
 
-        if resp.status_code == 429:
-            raise RateLimitError(f'上游 429: {resp.text[:200]}')
-        if resp.status_code >= 400:
-            raise ProviderError(
-                f'HTTP {resp.status_code}',
-                status_code=resp.status_code,
-                body=resp.text[:500],
-            )
+        try:
+            if resp.status_code == 429:
+                raise RateLimitError(f'上游 429: {resp.text[:200]}')
+            if resp.status_code >= 400:
+                raise ProviderError(
+                    f'HTTP {resp.status_code}',
+                    status_code=resp.status_code,
+                    body=resp.text[:500],
+                )
 
-        for raw_line in resp.iter_lines(decode_unicode=True):
-            if not raw_line:
-                continue
-            line = raw_line.strip()
-            if not line.startswith('data:'):
-                continue
-            payload_str = line[5:].strip()
-            if payload_str == '[DONE]':
-                break
+            for raw_line in resp.iter_lines(decode_unicode=True):
+                if not raw_line:
+                    continue
+                line = raw_line.strip()
+                if not line.startswith('data:'):
+                    continue
+                payload_str = line[5:].strip()
+                if payload_str == '[DONE]':
+                    break
+                try:
+                    chunk = json.loads(payload_str)
+                    delta = (chunk.get('choices', [{}])[0].get('delta') or {})
+                    piece = delta.get('content')
+                    if piece:
+                        yield piece
+                except Exception as exc:
+                    logging.debug(f"[ai.openai_compat] 流式解析失败: {exc}")
+                    continue
+        finally:
+            # 无论正常 break / 早退 / 异常，都关闭底层连接
             try:
-                chunk = json.loads(payload_str)
-                delta = (chunk.get('choices', [{}])[0].get('delta') or {})
-                piece = delta.get('content')
-                if piece:
-                    yield piece
-            except Exception as exc:
-                logging.debug(f"[ai.openai_compat] 流式解析失败: {exc}")
-                continue
+                resp.close()
+            except Exception:
+                pass

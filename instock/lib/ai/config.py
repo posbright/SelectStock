@@ -46,27 +46,40 @@ class AIConfig:
 
 
 def _load_from_env() -> Dict[str, Any]:
-    """从环境变量读取（最低优先级层之一）。"""
+    """从环境变量读取（最低优先级层之一）。
+
+    G1：兼容文档 §4.2 的 `INSTOCK_AI_DEFAULT_*` 命名；优先取
+    `INSTOCK_AI_*`，回退到 `INSTOCK_AI_DEFAULT_*`。
+    """
+    def _str(name: str) -> str:
+        v = _cfg.get_str(name, '')
+        if v:
+            return v
+        return _cfg.get_str(name.replace('INSTOCK_AI_', 'INSTOCK_AI_DEFAULT_', 1), '')
+
     out: Dict[str, Any] = {}
-    provider = _cfg.get_str('INSTOCK_AI_PROVIDER', '')
+    provider = _str('INSTOCK_AI_PROVIDER')
     if provider:
         out['provider'] = provider
-    api_base = _cfg.get_str('INSTOCK_AI_API_BASE', '')
+    api_base = _str('INSTOCK_AI_API_BASE')
     if api_base:
         out['api_base'] = api_base
-    api_key = _cfg.get_str('INSTOCK_AI_API_KEY', '')
+    api_key = _str('INSTOCK_AI_API_KEY')
     if api_key:
         out['api_key'] = api_key
-    model = _cfg.get_str('INSTOCK_AI_MODEL', '')
+    model = _str('INSTOCK_AI_MODEL')
     if model:
         out['model'] = model
-    # 仅当显式设置时才覆盖
-    if 'INSTOCK_AI_TEMPERATURE' in _envkeys():
-        out['temperature'] = _cfg.get_float('INSTOCK_AI_TEMPERATURE', _DEFAULT_TEMPERATURE)
-    if 'INSTOCK_AI_MAX_TOKENS' in _envkeys():
-        out['max_tokens'] = _cfg.get_int('INSTOCK_AI_MAX_TOKENS', _DEFAULT_MAX_TOKENS)
-    if 'INSTOCK_AI_TIMEOUT' in _envkeys():
-        out['timeout'] = _cfg.get_int('INSTOCK_AI_TIMEOUT', _DEFAULT_TIMEOUT)
+    env = _envkeys()
+    if 'INSTOCK_AI_TEMPERATURE' in env or 'INSTOCK_AI_DEFAULT_TEMPERATURE' in env:
+        key = 'INSTOCK_AI_TEMPERATURE' if 'INSTOCK_AI_TEMPERATURE' in env else 'INSTOCK_AI_DEFAULT_TEMPERATURE'
+        out['temperature'] = _cfg.get_float(key, _DEFAULT_TEMPERATURE)
+    if 'INSTOCK_AI_MAX_TOKENS' in env or 'INSTOCK_AI_DEFAULT_MAX_TOKENS' in env:
+        key = 'INSTOCK_AI_MAX_TOKENS' if 'INSTOCK_AI_MAX_TOKENS' in env else 'INSTOCK_AI_DEFAULT_MAX_TOKENS'
+        out['max_tokens'] = _cfg.get_int(key, _DEFAULT_MAX_TOKENS)
+    if 'INSTOCK_AI_TIMEOUT' in env or 'INSTOCK_AI_DEFAULT_TIMEOUT' in env:
+        key = 'INSTOCK_AI_TIMEOUT' if 'INSTOCK_AI_TIMEOUT' in env else 'INSTOCK_AI_DEFAULT_TIMEOUT'
+        out['timeout'] = _cfg.get_int(key, _DEFAULT_TIMEOUT)
     return out
 
 

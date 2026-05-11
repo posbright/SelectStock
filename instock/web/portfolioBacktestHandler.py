@@ -1767,6 +1767,17 @@ class SaveStrategyCodeHandler(webBase.BaseHandler, ABC):
             commission = body.get('commission_rate', 0.0003)
             tax = body.get('stamp_tax_rate', 0.001)
             slippage = body.get('slippage', 0.0005)
+            # AI 元数据（由 AiChatDrawer 提交时携带；手工编辑则为 None / 'manual'）
+            source = (body.get('source') or 'manual')
+            if source not in ('manual', 'template', 'ai'):
+                source = 'manual'
+            ai_prompt = body.get('ai_prompt')
+            ai_model = body.get('ai_model')
+            ai_agent = body.get('ai_agent')
+            try:
+                ai_repair_count = int(body.get('ai_repair_count') or 0)
+            except (TypeError, ValueError):
+                ai_repair_count = 0
 
             if not name:
                 self.write(json.dumps({'code': -1, 'msg': '策略名称不能为空'}))
@@ -1791,10 +1802,12 @@ class SaveStrategyCodeHandler(webBase.BaseHandler, ABC):
                     'UPDATE cn_stock_strategy_code SET name=%s, code=%s, description=%s, '
                     'category=%s, initial_cash=%s, benchmark=%s, commission_rate=%s, '
                     'stamp_tax_rate=%s, slippage=%s, status=%s, '
-                    'user_modified=%s '
+                    'user_modified=%s, source=%s, ai_prompt=%s, ai_model=%s, '
+                    'ai_agent=%s, ai_repair_count=%s '
                     'WHERE id=%s',
                     (name, code, description, category, initial_cash, benchmark,
-                     commission, tax, slippage, 'active', user_modified, strategy_id))
+                     commission, tax, slippage, 'active', user_modified,
+                     source, ai_prompt, ai_model, ai_agent, ai_repair_count, strategy_id))
                 result_id = strategy_id
             else:
                 # 新增 —— 同名且未归档的策略视为重复，直接返回已有记录
@@ -1808,10 +1821,12 @@ class SaveStrategyCodeHandler(webBase.BaseHandler, ABC):
                 result_id = _insert_and_get_id(
                     'INSERT INTO cn_stock_strategy_code '
                     '(name, code, description, category, folder_id, initial_cash, '
-                    'benchmark, commission_rate, stamp_tax_rate, slippage, status) '
-                    'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                    'benchmark, commission_rate, stamp_tax_rate, slippage, status, '
+                    'source, ai_prompt, ai_model, ai_agent, ai_repair_count) '
+                    'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
                     (name, code, description, category, folder_id, initial_cash,
-                     benchmark, commission, tax, slippage, 'active'))
+                     benchmark, commission, tax, slippage, 'active',
+                     source, ai_prompt, ai_model, ai_agent, ai_repair_count))
 
             self.write(json.dumps({'code': 0, 'data': {'id': result_id}}, ensure_ascii=False))
         except Exception as e:
@@ -2826,6 +2841,11 @@ def _ensure_strategy_table():
                 `template_id` VARCHAR(100) DEFAULT NULL COMMENT '内置模板ID',
                 `template_hash` CHAR(32) DEFAULT NULL COMMENT '内置模板代码哈希',
                 `user_modified` TINYINT DEFAULT 0 COMMENT '是否由用户修改过内置模板',
+                `source` ENUM('manual','template','ai') NOT NULL DEFAULT 'manual' COMMENT '代码来源',
+                `ai_prompt` TEXT NULL COMMENT '最近一次 AI 生成/修改使用的 prompt',
+                `ai_model` VARCHAR(64) NULL,
+                `ai_agent` VARCHAR(64) NULL COMMENT '使用的 agent 名',
+                `ai_repair_count` INT NOT NULL DEFAULT 0 COMMENT '自动修复次数',
                 `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
                 `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 `status` ENUM('draft','active','archived') DEFAULT 'draft'
@@ -2867,6 +2887,17 @@ def _ensure_strategy_table():
         _add_col_safe('cn_stock_strategy_code', 'template_id', '`template_id` VARCHAR(100) DEFAULT NULL AFTER `backtest_count`')
         _add_col_safe('cn_stock_strategy_code', 'template_hash', '`template_hash` CHAR(32) DEFAULT NULL AFTER `template_id`')
         _add_col_safe('cn_stock_strategy_code', 'user_modified', '`user_modified` TINYINT DEFAULT 0 AFTER `template_hash`')
+        # AI 来源元数据（§3.1 / M2 一并完成）
+        _add_col_safe('cn_stock_strategy_code', 'source',
+                      "`source` ENUM('manual','template','ai') NOT NULL DEFAULT 'manual' AFTER `user_modified`")
+        _add_col_safe('cn_stock_strategy_code', 'ai_prompt',
+                      "`ai_prompt` TEXT NULL COMMENT '最近一次 AI 生成/修改使用的 prompt' AFTER `source`")
+        _add_col_safe('cn_stock_strategy_code', 'ai_model',
+                      "`ai_model` VARCHAR(64) NULL AFTER `ai_prompt`")
+        _add_col_safe('cn_stock_strategy_code', 'ai_agent',
+                      "`ai_agent` VARCHAR(64) NULL COMMENT '使用的 agent 名' AFTER `ai_model`")
+        _add_col_safe('cn_stock_strategy_code', 'ai_repair_count',
+                      "`ai_repair_count` INT NOT NULL DEFAULT 0 COMMENT '自动修复次数' AFTER `ai_agent`")
 
     # 确保文件夹表存在
     if not mdb.checkTableIsExist('cn_stock_strategy_folder'):

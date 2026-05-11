@@ -97,6 +97,12 @@ type FailureInfo = {
   backtest_id: number
 }
 
+export type AiApplyMeta = {
+  source: 'ai'
+  ai_prompt: string
+  ai_agent: string  // 'strategy_coder' / 'strategy_repairer'
+}
+
 const props = defineProps<{
   modelValue: boolean
   currentCode?: string
@@ -105,7 +111,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:modelValue', v: boolean): void
-  (e: 'apply', code: string): void
+  (e: 'apply', code: string, meta: AiApplyMeta): void
 }>()
 
 const visible = computed({
@@ -193,7 +199,12 @@ async function run() {
 
 function apply() {
   if (!lastCode.value) return
-  emit('apply', lastCode.value)
+  const agent = mode.value === 'repair' ? 'strategy_repairer' : 'strategy_coder'
+  emit('apply', lastCode.value, {
+    source: 'ai',
+    ai_prompt: prompt.value || (mode.value === 'repair' ? '[repair from last failure]' : ''),
+    ai_agent: agent,
+  })
   ElMessage.success('已应用到编辑器')
   visible.value = false
 }

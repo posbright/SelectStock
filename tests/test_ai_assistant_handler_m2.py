@@ -82,6 +82,7 @@ class GenerateHandlerTests(AsyncHTTPTestCase):
                         side_effect=RateLimitError('429')):
             resp = self.fetch('/instock/api/ai/strategy/generate', method='POST',
                               body=json.dumps({'prompt': 'x'}))
+        self.assertEqual(resp.code, 429)
         body = json.loads(resp.body)
         self.assertEqual(body['code'], 429)
 

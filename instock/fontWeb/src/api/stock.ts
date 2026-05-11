@@ -226,6 +226,12 @@ export function saveStrategyCode(data: {
   commission_rate?: number
   stamp_tax_rate?: number
   slippage?: number
+  // M2 §3.1：AI 来源元数据
+  source?: 'manual' | 'template' | 'ai'
+  ai_prompt?: string
+  ai_model?: string
+  ai_agent?: string
+  ai_repair_count?: number
 }) {
   return request({ url: '/api/strategy/code', method: 'post', data })
 }

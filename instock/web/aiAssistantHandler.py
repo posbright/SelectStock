@@ -15,6 +15,8 @@ M2 提供：
 import json
 import logging
 import re
+import queue
+import threading
 from abc import ABC
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Tuple
@@ -24,7 +26,7 @@ from tornado.ioloop import IOLoop
 
 import instock.web.base as webBase
 from instock.core.backtest.strategy_sandbox import validate_code_strict
-from instock.lib.ai import RateLimitError, ProviderError, AIError, run_chat
+from instock.lib.ai import RateLimitError, ProviderError, AIError, run_chat, stream_chat
 from instock.lib.ai import prompt_loader
 
 __author__ = 'InStock'
@@ -67,6 +69,9 @@ def _write_error(handler, code: int, msg: str, **extra):
     body = {'code': code, 'msg': msg}
     body.update(extra)
     handler.set_header('Content-Type', 'application/json')
+    # HTTP 状态码语义对齐（前端 axios 拦截器可按 status 区分限流）
+    if code == 429:
+        handler.set_status(429)
     handler.write(json.dumps(body, ensure_ascii=False))
 
 
@@ -346,3 +351,95 @@ def _build_overrides(body: dict) -> dict:
         if k in body and body[k] not in (None, ''):
             out[k] = body[k]
     return out
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 5) 策略生成（流式 SSE）  —— 文档 §4.1 / B1
+#    POST /instock/api/ai/strategy/generate/stream
+#    Content-Type: text/event-stream
+#    事件:  data: {"type":"chunk","text":"..."}\n\n
+#           data: {"type":"done","code":"...","validated":true,"validation_error":""}\n\n
+#           data: {"type":"error","code":429|-1,"msg":"..."}\n\n
+# ──────────────────────────────────────────────────────────────────────
+_STREAM_SENTINEL = object()
+
+
+class GenerateStrategyStreamHandler(webBase.BaseHandler, ABC):
+    """流式生成。后台线程消费 stream_chat()，IOLoop 协程从队列取出并 flush。"""
+
+    @gen.coroutine
+    def post(self):
+        try:
+            body = json.loads(self.request.body or b'{}')
+        except Exception as exc:
+            _write_error(self, -1, f'请求体解析失败: {exc}')
+            return
+
+        user_prompt = (body.get('prompt') or '').strip()
+        if not user_prompt:
+            _write_error(self, -1, 'prompt 不能为空')
+            return
+
+        overrides = _build_overrides(body)
+        system = prompt_loader.load('strategy_coder')
+        user_id = _client_ip(self)
+
+        # SSE 响应头
+        self.set_header('Content-Type', 'text/event-stream; charset=utf-8')
+        self.set_header('Cache-Control', 'no-cache')
+        self.set_header('X-Accel-Buffering', 'no')
+
+        q: 'queue.Queue' = queue.Queue(maxsize=64)
+
+        def _producer():
+            try:
+                for piece in stream_chat(
+                    user_prompt, scene='strategy_gen_stream', system=system,
+                    agent='strategy_coder', user_id=user_id, overrides=overrides,
+                ):
+                    q.put(('chunk', piece))
+            except RateLimitError as exc:
+                q.put(('error', {'code': 429, 'msg': f'触发限流: {exc}'}))
+            except (ProviderError, AIError) as exc:
+                q.put(('error', {'code': -1, 'msg': f'AI 调用失败: {exc}'}))
+            except Exception as exc:
+                logging.exception('GenerateStrategyStreamHandler producer 异常')
+                q.put(('error', {'code': -1, 'msg': f'内部错误: {exc}'}))
+            finally:
+                q.put((_STREAM_SENTINEL, None))
+
+        threading.Thread(target=_producer, name='ai-stream-producer', daemon=True).start()
+
+        pieces = []
+        loop = IOLoop.current()
+        try:
+            while True:
+                item = yield loop.run_in_executor(None, q.get)
+                kind, payload = item
+                if kind is _STREAM_SENTINEL:
+                    break
+                if kind == 'chunk':
+                    pieces.append(payload)
+                    self.write('data: ' + json.dumps(
+                        {'type': 'chunk', 'text': payload}, ensure_ascii=False) + '\n\n')
+                    yield self.flush()
+                elif kind == 'error':
+                    self.write('data: ' + json.dumps(
+                        {'type': 'error', **payload}, ensure_ascii=False) + '\n\n')
+                    yield self.flush()
+                    return
+        except Exception:
+            logging.exception('GenerateStrategyStreamHandler 写出异常')
+            return
+
+        full = ''.join(pieces)
+        code = _strip_code_fence(full)
+        ok, err = _validate_or_msg(code)
+        self.write('data: ' + json.dumps({
+            'type': 'done',
+            'code': code,
+            'raw': full,
+            'validated': ok,
+            'validation_error': err,
+        }, ensure_ascii=False) + '\n\n')
+        yield self.flush()
