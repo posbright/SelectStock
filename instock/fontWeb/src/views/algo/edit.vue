@@ -319,8 +319,14 @@ function applyPendingAiRepair() {
       sessionStorage.removeItem('ai-repair-pending')
       return
     }
+    // P1-6a（七轮）：payload 缺失 strategy_id 不应静默应用，以免误被另一个
+    // 策略页面误使用（该分支依然会清理 sessionStorage，由 P0-2 以后的设计决定）
+    if (!payload.strategy_id) {
+      sessionStorage.removeItem('ai-repair-pending')
+      return
+    }
     // P1-A：strategy_id 不匹配时也必须清掉 key，避免下次错配
-    if (payload.strategy_id && Number(payload.strategy_id) !== strategyId.value) {
+    if (Number(payload.strategy_id) !== strategyId.value) {
       // 不删除：用户可能正路由切回正确策略；但限制只在 TTL 内重试
       return
     }
@@ -337,6 +343,8 @@ function applyPendingAiRepair() {
         : '已加载 AI 修复代码，请审阅后保存'
     )
   } catch (e) {
+    // P2-6b（七轮）：JSON 解析失败时清理损坏 payload，避免重复报错
+    sessionStorage.removeItem('ai-repair-pending')
     console.warn('[edit.vue] applyPendingAiRepair 失败', e)
   }
 }

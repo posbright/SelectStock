@@ -26,16 +26,15 @@ def _make_app() -> Application:
 
 class ProviderProfileTests(unittest.TestCase):
     def setUp(self):
-        # 备份并清理相关 env
+        # 备份并清理所有 INSTOCK_AI_* env，避免测试间互相污染
         self._saved = {k: v for k, v in os.environ.items()
-                       if k.startswith('INSTOCK_AI_PROVIDER_')
-                       or k == 'INSTOCK_AI_DEFAULT_PROVIDER'}
+                       if k.startswith('INSTOCK_AI_')}
         for k in list(self._saved.keys()):
             del os.environ[k]
 
     def tearDown(self):
         for k in list(os.environ.keys()):
-            if k.startswith('INSTOCK_AI_PROVIDER_'):
+            if k.startswith('INSTOCK_AI_') and k not in self._saved:
                 del os.environ[k]
         for k, v in self._saved.items():
             os.environ[k] = v
@@ -98,6 +97,31 @@ class ProviderProfileTests(unittest.TestCase):
         self.assertEqual(names[0], 'default')
         rest = names[1:]
         self.assertEqual(rest, sorted(rest))
+
+    def test_provider_override_loads_namespaced_credentials(self):
+        # P0-10b（七轮）：overrides.provider 切换到 namespaced provider 时
+        # 应该自动从该 namespace 加载 api_key/api_base，避免用 default 的密钥
+        # 调用错误的 endpoint。
+        os.environ['INSTOCK_AI_API_BASE'] = 'https://default.example/v1'
+        os.environ['INSTOCK_AI_API_KEY'] = 'sk-default'
+        os.environ['INSTOCK_AI_PROVIDER_QWEN_API_BASE'] = 'https://qwen.example/v1'
+        os.environ['INSTOCK_AI_PROVIDER_QWEN_API_KEY'] = 'sk-qwen'
+        os.environ['INSTOCK_AI_PROVIDER_QWEN_DEFAULT_MODEL'] = 'qwen-max'
+        cfg = ai_config.load_config({'provider': 'qwen'})
+        self.assertEqual(cfg.api_base, 'https://qwen.example/v1')
+        self.assertEqual(cfg.api_key, 'sk-qwen')
+        self.assertEqual(cfg.model, 'qwen-max')
+
+    def test_provider_override_explicit_api_base_wins(self):
+        # 显式 overrides.api_base 优先于 namespaced env
+        os.environ['INSTOCK_AI_PROVIDER_QWEN_API_BASE'] = 'https://qwen.example/v1'
+        os.environ['INSTOCK_AI_PROVIDER_QWEN_API_KEY'] = 'sk-qwen'
+        cfg = ai_config.load_config({
+            'provider': 'qwen',
+            'api_base': 'https://custom.example/v1',
+        })
+        self.assertEqual(cfg.api_base, 'https://custom.example/v1')
+        self.assertEqual(cfg.api_key, 'sk-qwen')  # 未指定 -> 仍从 namespace 拉取
 
 
 class PromptLoaderAgentsTests(unittest.TestCase):

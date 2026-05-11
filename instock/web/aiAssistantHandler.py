@@ -524,7 +524,7 @@ class ListAiAgentsHandler(webBase.BaseHandler, ABC):
 
     def get(self):
         try:
-            include_prompt = self.get_argument('include_prompt', '0') in ('1', 'true', 'yes')
+            include_prompt = self.get_argument('include_prompt', '0').lower() in ('1', 'true', 'yes')
             agents = prompt_loader.list_agents()
             if not include_prompt:
                 agents = [{k: v for k, v in a.items() if k != 'system_prompt'} for a in agents]

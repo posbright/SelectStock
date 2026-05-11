@@ -126,6 +126,29 @@ def _load_from_db() -> Dict[str, Any]:
     return out
 
 
+def _load_namespaced_provider(name: str) -> Dict[str, Any]:
+    """P0-10b（七轮）：读取 INSTOCK_AI_PROVIDER_<NAME>_* 对应的 api_base / api_key /
+    default_model，供该 provider 成为 overrides.provider 时覆盖 default 填衡。
+    返回空 dict 表示未配置（调用者应保留 default 值）。
+    """
+    if not name:
+        return {}
+    import os
+    env = os.environ
+    upper = name.upper()
+    out: Dict[str, Any] = {}
+    base = env.get(f'INSTOCK_AI_PROVIDER_{upper}_API_BASE')
+    if base:
+        out['api_base'] = base
+    key = env.get(f'INSTOCK_AI_PROVIDER_{upper}_API_KEY')
+    if key:
+        out['api_key'] = key
+    model = env.get(f'INSTOCK_AI_PROVIDER_{upper}_DEFAULT_MODEL')
+    if model:
+        out['model'] = model
+    return out
+
+
 def load_config(overrides: Optional[Dict[str, Any]] = None) -> AIConfig:
     """三层合并生成 AIConfig。"""
     merged: Dict[str, Any] = {}
@@ -133,6 +156,14 @@ def load_config(overrides: Optional[Dict[str, Any]] = None) -> AIConfig:
     merged.update(_load_from_db())
     if overrides:
         merged.update({k: v for k, v in overrides.items() if v is not None})
+    # P0-10b（七轮）：若 overrides.provider 指名了 namespaced provider（如 azure_openai）
+    # 且 caller 未显式指定 api_base/api_key，则从该 namespace 中加载，避免用
+    # default provider 的密钥调用另一个服务商 endpoint 导致 401。
+    if overrides and overrides.get('provider'):
+        ns = _load_namespaced_provider(str(overrides['provider']))
+        for k in ('api_base', 'api_key', 'model'):
+            if k in ns and (overrides.get(k) in (None, '')):
+                merged[k] = ns[k]
     valid_keys = {'provider', 'api_base', 'api_key', 'model',
                   'temperature', 'max_tokens', 'timeout', 'extra'}
     extra = {k: v for k, v in merged.items() if k not in valid_keys}
