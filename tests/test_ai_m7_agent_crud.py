@@ -244,5 +244,59 @@ class PromptLoaderMergeTests(unittest.TestCase):
             self.assertIn('strategy_coder', names)
 
 
+class HandlerProtectionTests(unittest.TestCase):
+    """M7 一轮审计 P1 修复：内置 agent enabled 字段不可被修改 + 工具白名单。"""
+
+    def setUp(self):
+        self.fake = _FakeDB()
+        agent_store._reset_for_test()
+
+    def test_unknown_tool_in_allowed_tools_rejected(self):
+        # P2 修复（一轮审计）：工具名必须在 ToolRegistry 中注册
+        with _patch_db(self.fake):
+            with self.assertRaises(AgentStoreError):
+                agent_store.upsert_agent({
+                    'name': 'x', 'system_prompt': 'p',
+                    'allowed_tools': ['totally_unknown_tool_xyz'],
+                })
+
+    def test_handler_post_protects_builtin_enabled(self):
+        # P1 修复（一轮审计）：handler 端编辑 builtin agent 时
+        # enabled 字段必须保持原值，不能被禁用。
+        with _patch_db(self.fake):
+            agent_store.upsert_agent({'name': 'sys_a', 'system_prompt': 'p'},
+                                     is_builtin=True)
+            existing = agent_store.get_agent('sys_a')
+            self.assertTrue(existing['enabled'])
+
+            # 模拟 handler.post 的保护逻辑（与代码一致的检查路径）
+            body = {'name': 'sys_a', 'enabled': False,
+                    'description': '想偷偷禁用'}
+            body.pop('is_builtin', None)
+            if existing and existing.get('is_builtin'):
+                for k in ('system_prompt', 'allowed_tools', 'name'):
+                    body.pop(k, None)
+                body['name'] = existing['name']
+                body['system_prompt'] = existing.get('system_prompt') or ''
+                body['enabled'] = bool(existing.get('enabled', True))
+
+            saved = agent_store.upsert_agent(
+                body, is_builtin=bool(existing and existing.get('is_builtin')))
+            self.assertTrue(saved['is_builtin'])
+            # enabled 应保持为 True（不被恶意禁用）
+            self.assertTrue(saved['enabled'])
+            # 但允许字段（description）应已写入
+            self.assertEqual(saved['description'], '想偷偷禁用')
+
+    def test_user_agent_can_still_be_disabled(self):
+        # 防回归：保护逻辑不影响 user agent 的正常禁用
+        with _patch_db(self.fake):
+            agent_store.upsert_agent({'name': 'user_b', 'system_prompt': 'p'})
+            saved = agent_store.upsert_agent({
+                'name': 'user_b', 'system_prompt': 'p', 'enabled': False,
+            })
+            self.assertFalse(saved['enabled'])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -89,7 +89,8 @@
           <el-input-number v-model="form.max_tokens" :min="1" :max="65536" :step="256" />
         </el-form-item>
         <el-form-item label="启用">
-          <el-switch v-model="form.enabled" />
+          <el-switch v-model="form.enabled" :disabled="form.is_builtin" />
+          <span v-if="form.is_builtin" class="hint" style="margin-left:8px">内置 agent 不可禁用</span>
         </el-form-item>
       </el-form>
       <template #footer>

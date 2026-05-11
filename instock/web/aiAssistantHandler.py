@@ -590,6 +590,9 @@ class AiAgentsManageHandler(webBase.BaseHandler, ABC):
                 # 把保护字段补回去以通过 _validate 的必填校验
                 body['name'] = existing['name']
                 body['system_prompt'] = existing.get('system_prompt') or ''
+                # P1（一轮审计）：内置 agent 的 enabled 状态不可被修改，
+                # 否则可能被用户禁用后从 chat / config 中消失，破坏 M2/M3/M5 功能。
+                body['enabled'] = bool(existing.get('enabled', True))
             saved = agent_store.upsert_agent(body, is_builtin=bool(existing and existing.get('is_builtin')))
             # 写入后清缓存：prompt_loader 下次重新读取
             try:

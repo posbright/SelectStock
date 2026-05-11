@@ -155,11 +155,20 @@ def _validate(meta: Dict[str, Any], *, partial: bool = False) -> Dict[str, Any]:
         if v is None:
             out['allowed_tools'] = None
         elif isinstance(v, list):
+            # P2（一轮审计）：校验工具名是否在 ToolRegistry 中注册。
+            # 避免用户保存拼错名后调用该 agent 时遇到 unknown tool 报错。
+            try:
+                from instock.lib.ai.tools import get_registry
+                registered = set(get_registry().list_names())
+            except Exception:
+                registered = set()
             for item in v:
                 if not isinstance(item, str):
                     raise AgentStoreError('allowed_tools 元素必须是字符串')
                 if len(item) > 64:
                     raise AgentStoreError('allowed_tools 元素长度超限')
+                if registered and item not in registered:
+                    raise AgentStoreError(f'未知工具名: {item}（已注册: {sorted(registered)}）')
             out['allowed_tools'] = v
         else:
             raise AgentStoreError('allowed_tools 必须是字符串数组或 null')
