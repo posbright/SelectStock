@@ -91,6 +91,23 @@ def _call_ai_blocking(prompt: str, system: str, scene: str, agent: str, user_id:
     return content, cfg.model
 
 
+# M3：strict 校验失败自动重试上限。设计为环境可调，方便测试。
+import os as _os
+_MAX_REPAIR_ATTEMPTS = max(0, int(_os.environ.get('INSTOCK_AI_REPAIR_MAX_ATTEMPTS', '3')))
+
+
+def _build_repair_prompt(prev_code: str, err: str, original_intent: str) -> str:
+    """生成"修复 prompt"：携带上一次代码 + strict 错误 + 用户原始意图。"""
+    return (
+        f"你上一轮生成的策略代码未通过沙箱安全校验。\n\n"
+        f"用户原始需求：\n{original_intent}\n\n"
+        f"上一轮代码：\n{prev_code}\n\n"
+        f"沙箱校验错误：\n{err}\n\n"
+        f"请输出修复后的完整 Python 代码（不要解释、不要 Markdown 围栏），"
+        f"要求保留原意图、移除所有 import os/sys/subprocess 等违禁项。"
+    )
+
+
 # ──────────────────────────────────────────────────────────────────────
 # 1) 策略生成
 # ──────────────────────────────────────────────────────────────────────
@@ -137,6 +154,32 @@ class GenerateStrategyHandler(webBase.BaseHandler, ABC):
 
         code = _strip_code_fence(raw)
         ok, err = _validate_or_msg(code)
+        attempts = 0
+        # M3：strict 校验失败自动重试 ≤ N 轮
+        if not ok and _MAX_REPAIR_ATTEMPTS > 0:
+            repairer_sys = prompt_loader.load('strategy_repairer')
+            for _ in range(_MAX_REPAIR_ATTEMPTS):
+                attempts += 1
+                fix_prompt = _build_repair_prompt(code, err, user_prompt)
+                try:
+                    raw, resolved_model = yield IOLoop.current().run_in_executor(
+                        _get_executor(),
+                        _call_ai_blocking,
+                        fix_prompt, repairer_sys,
+                        'strategy_gen_repair', 'strategy_repairer',
+                        _client_ip(self), overrides,
+                    )
+                except RateLimitError as exc:
+                    # 重试中触发限流：返回最近一次失败结果（已包含 raw/error）
+                    logging.warning(f'生成自动修复阶段触发限流: {exc}')
+                    break
+                except (ProviderError, AIError) as exc:
+                    logging.warning(f'生成自动修复阶段 AI 调用失败: {exc}')
+                    break
+                code = _strip_code_fence(raw)
+                ok, err = _validate_or_msg(code)
+                if ok:
+                    break
         payload = {
             'code': 0 if ok else -2,
             'msg': '' if ok else f'代码沙箱校验失败: {err}',
@@ -146,6 +189,7 @@ class GenerateStrategyHandler(webBase.BaseHandler, ABC):
                 'validated': ok,
                 'validation_error': err,
                 'model': resolved_model,
+                'repair_attempts': attempts,
             },
         }
         self.set_header('Content-Type', 'application/json')
@@ -202,12 +246,37 @@ class RefineStrategyHandler(webBase.BaseHandler, ABC):
 
         code = _strip_code_fence(raw)
         ok, err = _validate_or_msg(code)
+        attempts = 0
+        if not ok and _MAX_REPAIR_ATTEMPTS > 0:
+            repairer_sys = prompt_loader.load('strategy_repairer')
+            for _ in range(_MAX_REPAIR_ATTEMPTS):
+                attempts += 1
+                fix_prompt = _build_repair_prompt(code, err, user_prompt)
+                try:
+                    raw, resolved_model = yield IOLoop.current().run_in_executor(
+                        _get_executor(),
+                        _call_ai_blocking,
+                        fix_prompt, repairer_sys,
+                        'strategy_refine_repair', 'strategy_repairer',
+                        _client_ip(self), overrides,
+                    )
+                except RateLimitError as exc:
+                    logging.warning(f'修改自动修复阶段触发限流: {exc}')
+                    break
+                except (ProviderError, AIError) as exc:
+                    logging.warning(f'修改自动修复阶段 AI 调用失败: {exc}')
+                    break
+                code = _strip_code_fence(raw)
+                ok, err = _validate_or_msg(code)
+                if ok:
+                    break
         self.set_header('Content-Type', 'application/json')
         self.write(json.dumps({
             'code': 0 if ok else -2,
             'msg': '' if ok else f'代码沙箱校验失败: {err}',
             'data': {'code': code, 'raw': raw, 'validated': ok,
-                     'validation_error': err, 'model': resolved_model},
+                     'validation_error': err, 'model': resolved_model,
+                     'repair_attempts': attempts},
         }, ensure_ascii=False))
 
 
@@ -288,6 +357,30 @@ class RepairStrategyHandler(webBase.BaseHandler, ABC):
 
         code = _strip_code_fence(raw)
         ok, err = _validate_or_msg(code)
+        attempts = 0
+        if not ok and _MAX_REPAIR_ATTEMPTS > 0:
+            repairer_sys = prompt_loader.load('strategy_repairer')
+            for _ in range(_MAX_REPAIR_ATTEMPTS):
+                attempts += 1
+                fix_prompt = _build_repair_prompt(code, err, error_text or '原始代码有安全问题')
+                try:
+                    raw, resolved_model = yield IOLoop.current().run_in_executor(
+                        _get_executor(),
+                        _call_ai_blocking,
+                        fix_prompt, repairer_sys,
+                        'strategy_repair_retry', 'strategy_repairer',
+                        _client_ip(self), overrides,
+                    )
+                except RateLimitError as exc:
+                    logging.warning(f'修复重试触发限流: {exc}')
+                    break
+                except (ProviderError, AIError) as exc:
+                    logging.warning(f'修复重试 AI 调用失败: {exc}')
+                    break
+                code = _strip_code_fence(raw)
+                ok, err = _validate_or_msg(code)
+                if ok:
+                    break
         self.set_header('Content-Type', 'application/json')
         self.write(json.dumps({
             'code': 0 if ok else -2,
@@ -296,6 +389,7 @@ class RepairStrategyHandler(webBase.BaseHandler, ABC):
                 'code': code, 'raw': raw,
                 'validated': ok, 'validation_error': err,
                 'model': resolved_model,
+                'repair_attempts': attempts,
                 'failure': {
                     'error_message': error_text,
                     'started_at': str(last.get('started_at') or ''),
@@ -450,6 +544,31 @@ class GenerateStrategyStreamHandler(webBase.BaseHandler, ABC):
         full = ''.join(pieces)
         code = _strip_code_fence(full)
         ok, err = _validate_or_msg(code)
+        attempts = 0
+        # M3：流式生成完成后，如沙箱校验失败，串行做最多 N 次修复
+        if not ok and _MAX_REPAIR_ATTEMPTS > 0:
+            repairer_sys = prompt_loader.load('strategy_repairer')
+            for _ in range(_MAX_REPAIR_ATTEMPTS):
+                attempts += 1
+                fix_prompt = _build_repair_prompt(code, err, user_prompt)
+                try:
+                    raw, _model = yield IOLoop.current().run_in_executor(
+                        _get_executor(),
+                        _call_ai_blocking,
+                        fix_prompt, repairer_sys,
+                        'strategy_gen_stream_repair', 'strategy_repairer',
+                        _client_ip(self), overrides,
+                    )
+                except (RateLimitError, ProviderError, AIError) as exc:
+                    logging.warning(f'SSE 修复阶段异常: {exc}')
+                    break
+                self.write('data: ' + json.dumps(
+                    {'type': 'repair', 'attempt': attempts}, ensure_ascii=False) + '\n\n')
+                yield self.flush()
+                code = _strip_code_fence(raw)
+                ok, err = _validate_or_msg(code)
+                if ok:
+                    break
         self.write('data: ' + json.dumps({
             'type': 'done',
             'code': code,
@@ -457,5 +576,6 @@ class GenerateStrategyStreamHandler(webBase.BaseHandler, ABC):
             'validated': ok,
             'validation_error': err,
             'model': resolved_model,
+            'repair_attempts': attempts,
         }, ensure_ascii=False) + '\n\n')
         yield self.flush()

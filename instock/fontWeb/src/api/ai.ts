@@ -40,6 +40,7 @@ export interface StrategyAiResponse {
     validated: boolean
     validation_error?: string
     model?: string
+    repair_attempts?: number
     failure?: {
       error_message: string
       started_at: string
@@ -67,7 +68,8 @@ export function aiChat(data: ChatRequest) {
 // SSE 事件类型（B1）
 export type AiStreamEvent =
   | { type: 'chunk'; text: string }
-  | { type: 'done'; code: string; raw: string; validated: boolean; validation_error?: string; model?: string }
+  | { type: 'repair'; attempt: number }
+  | { type: 'done'; code: string; raw: string; validated: boolean; validation_error?: string; model?: string; repair_attempts?: number }
   | { type: 'error'; code: number; msg: string }
 
 /**

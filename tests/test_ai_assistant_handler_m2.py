@@ -280,5 +280,50 @@ class RateLimitStatusTests(AsyncHTTPTestCase):
         self.assertEqual(resp.code, 429)
 
 
+# ─── M3：strict 校验失败自动重试 ≤3 轮 ──────────────────────────
+_UNSAFE_CODE = "import os\n" + _VALID_CODE
+
+
+class M3RetryTests(AsyncHTTPTestCase):
+    def get_app(self):
+        return _make_app()
+
+    def test_generate_unsafe_then_repaired_by_retry(self):
+        """首轮返回 import os（不安全），重试第 1 轮返回安全代码 → 验收通过。"""
+        seq = [(_UNSAFE_CODE, 'm1'), (_VALID_CODE, 'm1')]
+        with mock.patch('instock.web.aiAssistantHandler._call_ai_blocking',
+                        side_effect=seq):
+            resp = self.fetch('/instock/api/ai/strategy/generate', method='POST',
+                              body=json.dumps({'prompt': 'x'}))
+        body = json.loads(resp.body)
+        self.assertEqual(body['code'], 0, body)
+        self.assertTrue(body['data']['validated'])
+        self.assertEqual(body['data']['repair_attempts'], 1)
+        self.assertNotIn('import os', body['data']['code'])
+
+    def test_generate_all_attempts_fail_returns_minus2(self):
+        """3 次重试都返回不安全代码 → 应返回 code=-2 + repair_attempts=3。"""
+        bad = [(_UNSAFE_CODE, 'm1')] * 4  # 1 次首轮 + 3 次重试
+        with mock.patch('instock.web.aiAssistantHandler._call_ai_blocking',
+                        side_effect=bad):
+            resp = self.fetch('/instock/api/ai/strategy/generate', method='POST',
+                              body=json.dumps({'prompt': 'x'}))
+        body = json.loads(resp.body)
+        self.assertEqual(body['code'], -2)
+        self.assertFalse(body['data']['validated'])
+        self.assertEqual(body['data']['repair_attempts'], 3)
+
+    def test_refine_repair_attempts_succeed_on_2nd(self):
+        """refine 首轮失败、第 2 轮成功 → repair_attempts=2。"""
+        seq = [(_UNSAFE_CODE, 'm1'), (_UNSAFE_CODE, 'm1'), (_VALID_CODE, 'm1')]
+        with mock.patch('instock.web.aiAssistantHandler._call_ai_blocking',
+                        side_effect=seq):
+            resp = self.fetch('/instock/api/ai/strategy/refine', method='POST',
+                              body=json.dumps({'prompt': 'x', 'code': _VALID_CODE}))
+        body = json.loads(resp.body)
+        self.assertEqual(body['code'], 0, body)
+        self.assertEqual(body['data']['repair_attempts'], 2)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -52,11 +52,21 @@
       />
       <el-alert
         v-else-if="lastCode && validated"
-        title="代码已通过沙箱校验"
+        :title="repairAttempts > 0
+          ? `代码已通过沙箱校验（自动修复 ${repairAttempts} 轮后通过）`
+          : '代码已通过沙箱校验'"
         type="success"
         show-icon
         :closable="false"
         style="margin-top: 12px;"
+      />
+      <el-alert
+        v-if="!validated && lastCode && repairAttempts > 0"
+        :title="`已自动尝试修复 ${repairAttempts} 轮仍未通过校验，请人工检查后采用。`"
+        type="info"
+        show-icon
+        :closable="false"
+        style="margin-top: 8px;"
       />
       <el-alert
         v-if="errorMsg"
@@ -129,6 +139,7 @@ const validationError = ref('')
 const errorMsg = ref('')
 const failureInfo = ref<FailureInfo | null>(null)
 const lastModel = ref('')
+const repairAttempts = ref(0)
 
 const placeholder = computed(() => {
   if (mode.value === 'generate') {
@@ -155,6 +166,7 @@ function _resetState() {
   validationError.value = ''
   validated.value = false
   failureInfo.value = null
+  repairAttempts.value = 0
 }
 
 async function run() {
@@ -182,9 +194,12 @@ async function run() {
       validationError.value = resp.data?.validation_error || ''
       failureInfo.value = resp.data?.failure || null
       lastModel.value = resp.data?.model || ''
+      repairAttempts.value = resp.data?.repair_attempts || 0
       if (resp.code === -2) {
         // 仍展示代码，但提示需要修复
         ElMessage.warning('AI 生成的代码未通过沙箱校验，请人工检查或重试')
+      } else if (repairAttempts.value > 0) {
+        ElMessage.success(`生成成功（自动修复 ${repairAttempts.value} 轮）`)
       } else {
         ElMessage.success('生成成功')
       }
