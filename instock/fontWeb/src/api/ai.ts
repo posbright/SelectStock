@@ -109,6 +109,55 @@ export function aiListAgents(includePrompt = false) {
   })
 }
 
+// ── M7: 自定义 Agent 管理 ───────────────────────────────────────
+export interface AiAgentRecord {
+  name: string
+  display_name?: string
+  description?: string
+  system_prompt?: string
+  default_provider?: string
+  default_model?: string
+  allowed_tools?: string[] | null
+  temperature?: number
+  max_tokens?: number
+  is_builtin?: boolean
+  enabled?: boolean
+  created_at?: string
+  updated_at?: string
+}
+
+export function aiListManagedAgents(includePrompt = false) {
+  return request({
+    url: '/api/ai/agents/manage',
+    method: 'get',
+    params: includePrompt ? { include_prompt: 1 } : undefined,
+  })
+}
+
+export function aiGetAgentDetail(name: string) {
+  return request({
+    url: '/api/ai/agents/detail',
+    method: 'get',
+    params: { name },
+  })
+}
+
+export function aiSaveAgent(data: Partial<AiAgentRecord>) {
+  return request({
+    url: '/api/ai/agents/manage',
+    method: 'post',
+    data,
+  })
+}
+
+export function aiDeleteAgent(name: string) {
+  return request({
+    url: '/api/ai/agents/manage',
+    method: 'delete',
+    params: { name },
+  })
+}
+
 // SSE 事件类型（B1）
 export type AiStreamEvent =
   | { type: 'chunk'; text: string }

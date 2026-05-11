@@ -334,6 +334,12 @@ const routes: RouteRecordRaw[] = [
         name: 'PaperTrading',
         component: () => import('@/views/paper-trading/index.vue'),
         meta: { title: '模拟交易' }
+      },
+      {
+        path: 'agent-manager',
+        name: 'AiAgentManager',
+        component: () => import('@/views/algo/agent-manager.vue'),
+        meta: { title: 'AI Agent 管理' }
       }
     ]
   },

@@ -154,6 +154,8 @@ class Application(tornado.web.Application):
             # M5: provider/model/agent 元数据（前端 picker 使用）
             (r"/instock/api/ai/config", aiAssistantHandler.GetAiConfigHandler),
             (r"/instock/api/ai/agents", aiAssistantHandler.ListAiAgentsHandler),
+            (r"/instock/api/ai/agents/manage", aiAssistantHandler.AiAgentsManageHandler),
+            (r"/instock/api/ai/agents/detail", aiAssistantHandler.AiAgentDetailHandler),
             # Phase 6: IM 指令确认（默认关闭，由 INSTOCK_IM_COMMAND_ENABLED=1 启用；仅落库 trade_command，不直接调券商）
             (r"/instock/api/im/status", imCommandHandler.IMStatusHandler),
             (r"/instock/api/im/dingtalk/callback", imCommandHandler.DingtalkCallbackHandler),

@@ -52,7 +52,43 @@ _BUILTIN_AGENTS = [
 
 
 def list_agents():
-    """返回所有可用 agent 元数据列表（仅内置；自定义留给 M7）。"""
+    """返回所有可用 agent 元数据列表。
+
+    M7：DB 优先（cn_stock_ai_agent），文件兜底（内置 agent prompt 来自 prompt/*.md）。
+    流程：
+      1) 启动时 upsert_builtin_agents（懒触发，仅一次）保证内置记录存在
+      2) 从 DB 读取所有 enabled agent
+      3) 若 DB 不可用，回退到旧的纯文件列表（M5 行为）
+    """
+    _bootstrap_builtins()
+    try:
+        from instock.lib.ai import agent_store
+        rows = agent_store.list_agents(enabled_only=True)
+    except Exception:
+        rows = []
+    if rows:
+        out = []
+        for r in rows:
+            sp = r.get('system_prompt') or ''
+            # 内置 agent 若 DB 中 system_prompt 被清空，则回退到文件
+            if r.get('is_builtin') and not sp.strip():
+                sp = load(r['name'])
+            out.append({
+                'name': r['name'],
+                'display_name': r.get('display_name') or r['name'],
+                'description': r.get('description') or '',
+                'is_builtin': bool(r.get('is_builtin')),
+                'system_prompt': sp,
+                'has_prompt': bool(sp),
+                'default_provider': r.get('default_provider'),
+                'default_model': r.get('default_model'),
+                'allowed_tools': r.get('allowed_tools'),
+                'temperature': r.get('temperature'),
+                'max_tokens': r.get('max_tokens'),
+                'enabled': bool(r.get('enabled', True)),
+            })
+        return out
+    # DB 不可用 / 空表：兜底文件
     out = []
     for meta in _BUILTIN_AGENTS:
         prompt_text = load(meta['name'])
@@ -62,3 +98,44 @@ def list_agents():
             'has_prompt': bool(prompt_text),
         })
     return out
+
+
+_bootstrap_done = False
+_bootstrap_lock = threading.Lock()
+
+
+def _bootstrap_builtins():
+    """首次访问时把内置 agent upsert 进 DB（is_builtin=1）。"""
+    global _bootstrap_done
+    if _bootstrap_done:
+        return
+    with _bootstrap_lock:
+        if _bootstrap_done:
+            return
+        try:
+            from instock.lib.ai import agent_store
+            payloads = []
+            for meta in _BUILTIN_AGENTS:
+                prompt_text = load(meta['name'])
+                if not prompt_text:
+                    continue
+                payloads.append({
+                    'name': meta['name'],
+                    'display_name': meta.get('display_name'),
+                    'description': meta.get('description'),
+                    'system_prompt': prompt_text,
+                })
+            if payloads:
+                agent_store.upsert_builtin_agents(payloads)
+        except Exception:
+            # 失败不影响业务，list_agents 会走文件兜底
+            pass
+        finally:
+            _bootstrap_done = True
+
+
+def _reset_bootstrap_for_test():
+    """仅供测试用：强制下次 list_agents 重新 bootstrap。"""
+    global _bootstrap_done
+    with _bootstrap_lock:
+        _bootstrap_done = False

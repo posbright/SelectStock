@@ -537,6 +537,119 @@ class ListAiAgentsHandler(webBase.BaseHandler, ABC):
 
 
 # ──────────────────────────────────────────────────────────────────────
+# 6) M7：自定义 Agent CRUD（写入 cn_stock_ai_agent）
+#    GET    /instock/api/ai/agents/manage           列出全部（含 disabled / 内置）
+#    POST   /instock/api/ai/agents/manage           upsert（用户传入 is_builtin 强制忽略）
+#    DELETE /instock/api/ai/agents/manage?name=xxx  删除（内置拒绝）
+# ──────────────────────────────────────────────────────────────────────
+class AiAgentsManageHandler(webBase.BaseHandler, ABC):
+    """自定义 agent 管理。GET 列表，POST 新建/更新，DELETE 删除。"""
+
+    def get(self):
+        try:
+            from instock.lib.ai import agent_store
+            from instock.lib.ai import prompt_loader as _pl
+            # 触发一次内置 bootstrap 保证内置 agent 在 DB 中可见
+            try:
+                _pl._bootstrap_builtins()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            agents = agent_store.list_agents(enabled_only=False)
+            include_prompt = self.get_argument('include_prompt', '0').lower() in ('1', 'true', 'yes')
+            if not include_prompt:
+                agents = [{k: v for k, v in a.items() if k != 'system_prompt'} for a in agents]
+            self.set_header('Content-Type', 'application/json')
+            self.write(json.dumps({'code': 0, 'data': {'agents': agents}},
+                                  ensure_ascii=False))
+        except Exception as exc:
+            logging.exception('AiAgentsManageHandler.get 异常')
+            _write_error(self, -1, f'读取 agent 失败: {exc}')
+
+    def post(self):
+        try:
+            body = json.loads(self.request.body or b'{}')
+        except Exception as exc:
+            _write_error(self, -1, f'请求体解析失败: {exc}')
+            return
+        if not isinstance(body, dict):
+            _write_error(self, -1, '请求体必须是对象')
+            return
+        # 用户接口禁止把 is_builtin 抬升为内置（避免越权）
+        body.pop('is_builtin', None)
+        try:
+            from instock.lib.ai import agent_store
+            existing = agent_store.get_agent(body.get('name') or '')
+            # 若已存在且为内置：仅允许修改非关键字段（display_name/description/
+            # default_provider/default_model/temperature/max_tokens/enabled），
+            # system_prompt 与 allowed_tools 保持原值，避免误改内置行为。
+            if existing and existing.get('is_builtin'):
+                protected = ('system_prompt', 'allowed_tools', 'name')
+                for k in protected:
+                    if k in body:
+                        body.pop(k, None)
+                # 把保护字段补回去以通过 _validate 的必填校验
+                body['name'] = existing['name']
+                body['system_prompt'] = existing.get('system_prompt') or ''
+            saved = agent_store.upsert_agent(body, is_builtin=bool(existing and existing.get('is_builtin')))
+            # 写入后清缓存：prompt_loader 下次重新读取
+            try:
+                prompt_loader.clear_cache()
+            except Exception:
+                pass
+            # 不返回 system_prompt（前端按需再 GET）
+            saved_brief = {k: v for k, v in saved.items() if k != 'system_prompt'}
+            self.set_header('Content-Type', 'application/json')
+            self.write(json.dumps({'code': 0, 'data': saved_brief}, ensure_ascii=False))
+        except Exception as exc:
+            from instock.lib.ai.agent_store import AgentStoreError
+            if isinstance(exc, AgentStoreError):
+                _write_error(self, -1, str(exc))
+                return
+            logging.exception('AiAgentsManageHandler.post 异常')
+            _write_error(self, -1, f'保存 agent 失败: {exc}')
+
+    def delete(self):
+        name = (self.get_argument('name', '') or '').strip()
+        if not name:
+            _write_error(self, -1, 'name 不能为空')
+            return
+        try:
+            from instock.lib.ai import agent_store
+            agent_store.delete_agent(name)
+            self.set_header('Content-Type', 'application/json')
+            self.write(json.dumps({'code': 0, 'data': {'name': name}},
+                                  ensure_ascii=False))
+        except Exception as exc:
+            from instock.lib.ai.agent_store import AgentStoreError
+            if isinstance(exc, AgentStoreError):
+                _write_error(self, -1, str(exc))
+                return
+            logging.exception('AiAgentsManageHandler.delete 异常')
+            _write_error(self, -1, f'删除 agent 失败: {exc}')
+
+
+class AiAgentDetailHandler(webBase.BaseHandler, ABC):
+    """单个 agent 详情（含 system_prompt）。GET /instock/api/ai/agents/detail?name=xxx"""
+
+    def get(self):
+        name = (self.get_argument('name', '') or '').strip()
+        if not name:
+            _write_error(self, -1, 'name 不能为空')
+            return
+        try:
+            from instock.lib.ai import agent_store
+            agent = agent_store.get_agent(name)
+            if not agent:
+                _write_error(self, -1, f'agent 不存在: {name}')
+                return
+            self.set_header('Content-Type', 'application/json')
+            self.write(json.dumps({'code': 0, 'data': agent}, ensure_ascii=False))
+        except Exception as exc:
+            logging.exception('AiAgentDetailHandler 异常')
+            _write_error(self, -1, f'读取失败: {exc}')
+
+
+# ──────────────────────────────────────────────────────────────────────
 # helpers
 # ──────────────────────────────────────────────────────────────────────
 def _build_overrides(body: dict) -> dict:
