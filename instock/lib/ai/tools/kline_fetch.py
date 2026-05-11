@@ -4,6 +4,8 @@
 
 from typing import Any, Dict, List
 
+import math
+
 from instock.lib.ai.tools import Tool, ToolError
 
 __author__ = 'InStock'
@@ -64,12 +66,32 @@ class KlineFetchTool(Tool):
         df = df.tail(limit)
         bars: List[Dict[str, Any]] = []
         for _, row in df.iterrows():
-            bar = {}
+            bar: Dict[str, Any] = {}
             for k in ('date', 'open', 'high', 'low', 'close', 'volume', 'amount'):
-                if k in row:
-                    v = row[k]
-                    bar[k] = str(v) if hasattr(v, 'isoformat') else (
-                        float(v) if k in ('open', 'high', 'low', 'close')
-                        else (int(v) if k in ('volume',) and v is not None else v))
+                if k not in row:
+                    continue
+                v = row[k]
+                # P1-3（一轮审计）：NaN 不是 None，需显式跳过
+                if v is None:
+                    continue
+                if isinstance(v, float) and math.isnan(v):
+                    continue
+                if hasattr(v, 'isoformat'):
+                    bar[k] = str(v)
+                elif k in ('open', 'high', 'low', 'close'):
+                    try:
+                        bar[k] = float(v)
+                    except (TypeError, ValueError):
+                        continue
+                elif k in ('volume',):
+                    try:
+                        bar[k] = int(v)
+                    except (TypeError, ValueError):
+                        try:
+                            bar[k] = int(float(v))
+                        except (TypeError, ValueError):
+                            continue
+                else:
+                    bar[k] = v
             bars.append(bar)
         return {'code': code, 'bar_count': len(bars), 'bars': bars}

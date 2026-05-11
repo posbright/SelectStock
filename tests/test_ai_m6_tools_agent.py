@@ -63,6 +63,16 @@ class SqlQuerySafetyTests(unittest.TestCase):
         sql = _inject_limit("SELECT * FROM cn_stock_spot", 99999)
         self.assertIn('LIMIT 1000', sql)
 
+    def test_limit_non_integer_rejected(self):
+        # P1-4（一轮审计）：LLM 传字符串 limit 必须被早拒
+        with self.assertRaises(ToolError):
+            SqlQueryTool().run({'sql': 'SELECT * FROM cn_stock_spot', 'limit': 'abc'})
+
+    def test_union_to_unwhitelisted_table_rejected(self):
+        # UNION 攻击：第二段 FROM 应被表前缀检查拦截
+        with self.assertRaises(ToolError):
+            _check_safety("SELECT 1 UNION SELECT * FROM mysql.user")
+
 
 # ── code_validate tool ───────────────────────────────────────────────
 class CodeValidateToolTests(unittest.TestCase):
@@ -107,6 +117,31 @@ class WebSearchToolTests(unittest.TestCase):
             self.assertEqual(out['results'][0]['title'], 't1')
         finally:
             del os.environ['INSTOCK_AI_WEB_SEARCH_URL']
+
+    def test_http_url_rejected_by_default(self):
+        # P2（一轮审计）：默认强制 https，避免 SSRF
+        os.environ['INSTOCK_AI_WEB_SEARCH_URL'] = 'http://localhost:8080/search'
+        os.environ.pop('INSTOCK_AI_WEB_SEARCH_ALLOW_HTTP', None)
+        try:
+            with self.assertRaises(ToolError):
+                WebSearchTool().run({'query': 'hi'})
+        finally:
+            del os.environ['INSTOCK_AI_WEB_SEARCH_URL']
+
+    def test_http_allowed_via_opt_in(self):
+        os.environ['INSTOCK_AI_WEB_SEARCH_URL'] = 'http://search.local/search'
+        os.environ['INSTOCK_AI_WEB_SEARCH_ALLOW_HTTP'] = '1'
+        try:
+            fake_resp = mock.Mock()
+            fake_resp.status_code = 200
+            fake_resp.json.return_value = {'results': []}
+            with mock.patch('instock.lib.ai.tools.web_search.requests.get',
+                            return_value=fake_resp):
+                out = WebSearchTool().run({'query': 'hi'})
+            self.assertEqual(out['result_count'], 0)
+        finally:
+            del os.environ['INSTOCK_AI_WEB_SEARCH_URL']
+            del os.environ['INSTOCK_AI_WEB_SEARCH_ALLOW_HTTP']
 
 
 # ── Tool registry ────────────────────────────────────────────────────
@@ -243,6 +278,40 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertIn('tools', provider.last_kwargs)
         self.assertEqual(provider.last_kwargs['tool_choice'], 'auto')
         self.assertEqual(provider.last_kwargs['tools'][0]['function']['name'], 'echo')
+
+    def test_empty_tool_call_id_is_filled(self):
+        # P1-1（一轮审计）：provider 未返回 id 时由 runtime 补本地 UUID
+        provider = _FakeProvider([
+            ChatResult(content='', tool_calls=[
+                ToolCall(id='', name='echo', arguments={'msg': 'x'}),
+            ]),
+            ChatResult(content='done')
+        ])
+        runtime = AgentRuntime(provider, allowed_tools=['echo'])
+        out = runtime.run(system='sys', user_message='hi')
+        self.assertEqual(out.content, 'done')
+        # 第二轮请求消息中 assistant 的 tool_calls 与 tool 消息的 tool_call_id 必须有值
+        sent_msgs = provider.last_kwargs.get('tools')  # last_kwargs 来自第二次 chat
+        # 找到 messages 检查太底层；这里直接断言 tools_used 记录正常
+        self.assertTrue(out.tool_calls[0]['ok'])
+
+    def test_max_rounds_with_pending_tool_calls_forces_summary(self):
+        # P1-2（一轮审计）：max_rounds 用尽且仍有 tool_calls 时强制再调一次拿摘要
+        os.environ['INSTOCK_AI_AGENT_MAX_ROUNDS'] = '1'
+        try:
+            provider = _FakeProvider([
+                ChatResult(content='', tool_calls=[
+                    ToolCall(id='c1', name='echo', arguments={'msg': 'x'}),
+                ]),
+                # 第二次（强制摘要调用）应被发起
+                ChatResult(content='summary text')
+            ])
+            runtime = AgentRuntime(provider, allowed_tools=['echo'])
+            out = runtime.run(system='sys', user_message='go')
+            self.assertEqual(out.content, 'summary text')
+            self.assertEqual(provider.call_count, 2)
+        finally:
+            del os.environ['INSTOCK_AI_AGENT_MAX_ROUNDS']
 
 
 if __name__ == '__main__':

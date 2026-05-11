@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from typing import Any, Dict, Iterable, List, Optional
 
 from instock.lib.ai import audit
@@ -132,6 +133,11 @@ class AgentRuntime:
             last_result = self.provider.chat(messages, **kwargs)
             if not last_result.tool_calls:
                 break
+            # P1-1（一轮审计）：某些 provider 可能不返回 tool_call.id，
+            # 补上本地 UUID 避免后续请求中 tool_call_id 为空导致 400。
+            for tc in last_result.tool_calls:
+                if not tc.id:
+                    tc.id = f'call_{uuid.uuid4().hex[:12]}'
             # 把 assistant 的 tool_calls 回放
             assistant_tool_calls = [
                 {
@@ -161,6 +167,18 @@ class AgentRuntime:
                 ))
         if last_result is None:
             raise AIError('agent loop produced no result')
+
+        # P1-2（一轮审计）：若 max_rounds 耗尽但最后一轮仍是 tool_calls，
+        # 强制再调一次 chat（不带 tools）拿到最终文本回答，避免返回空 content。
+        if last_result.tool_calls and rounds >= max_rounds:
+            try:
+                kwargs2 = dict(chat_kwargs)
+                kwargs2.pop('tools', None)
+                kwargs2.pop('tool_choice', None)
+                final = self.provider.chat(messages, **kwargs2)
+                last_result = final
+            except Exception as exc:
+                logging.warning(f'[ai.agent] 最终总结调用失败（保留原始空 content）: {exc}')
 
         return AgentRunResult(
             content=last_result.content or '',

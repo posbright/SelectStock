@@ -56,6 +56,15 @@ class WebSearchTool(Tool):
         url = (os.environ.get('INSTOCK_AI_WEB_SEARCH_URL') or '').strip()
         if not url:
             raise ToolError('未配置 INSTOCK_AI_WEB_SEARCH_URL，web_search 不可用')
+        # P2（一轮审计）：SSRF 防护 - 强制 https 协议，避免 file:// 或
+        # http:// 指向内网服务。调试下可以设 INSTOCK_AI_WEB_SEARCH_ALLOW_HTTP=1 放行。
+        allow_http = os.environ.get('INSTOCK_AI_WEB_SEARCH_ALLOW_HTTP', '0').lower() in ('1', 'true', 'yes')
+        if allow_http:
+            if not (url.startswith('https://') or url.startswith('http://')):
+                raise ToolError('INSTOCK_AI_WEB_SEARCH_URL 必须是 http(s) 协议')
+        else:
+            if not url.startswith('https://'):
+                raise ToolError('INSTOCK_AI_WEB_SEARCH_URL 必须是 https（设 INSTOCK_AI_WEB_SEARCH_ALLOW_HTTP=1 放行 http）')
         query = (args.get('query') or '').strip()
         if not query:
             raise ToolError('query 不能为空')

@@ -117,7 +117,17 @@ class SqlQueryTool(Tool):
             raise ToolError('sql 必须是字符串')
         sql = _normalize_sql(sql_in)
         _check_safety(sql)
-        sql = _inject_limit(sql, args.get('limit') or _DEFAULT_LIMIT)
+        # P1-4（一轮审计）：LLM 可能传不合法的 limit 类型，需提前报错避免
+        # _inject_limit 内部 int(...) 报未捕获异常。
+        raw_limit = args.get('limit')
+        if raw_limit in (None, ''):
+            limit_val = _DEFAULT_LIMIT
+        else:
+            try:
+                limit_val = int(raw_limit)
+            except (TypeError, ValueError):
+                raise ToolError(f'limit 必须是整数，收到: {raw_limit!r}')
+        sql = _inject_limit(sql, limit_val)
         try:
             rows = mdb.executeSqlFetch(sql)
         except Exception as exc:
