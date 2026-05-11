@@ -45,6 +45,7 @@ import instock.web.tradeSignalHandler as tradeSignalHandler
 import instock.web.notificationAdminHandler as notificationAdminHandler
 import instock.web.notificationConfigHandler as notificationConfigHandler
 import instock.web.aiDecisionConfigHandler as aiDecisionConfigHandler
+import instock.web.aiAssistantHandler as aiAssistantHandler
 import instock.web.imCommandHandler as imCommandHandler
 import instock.web.liveTradingHandler as liveTradingHandler
 import instock.web.customIndicatorHandler as customIndicatorHandler
@@ -144,6 +145,11 @@ class Application(tornado.web.Application):
             (r"/instock/api/ai/config/detail", aiDecisionConfigHandler.GetAIDecisionConfigDetailHandler),
             (r"/instock/api/ai/config/save", aiDecisionConfigHandler.SaveAIDecisionConfigHandler),
             (r"/instock/api/ai/config/delete", aiDecisionConfigHandler.DeleteAIDecisionConfigHandler),
+            # M2: AI 策略生成助手（lib/ai 统一服务层）
+            (r"/instock/api/ai/strategy/generate", aiAssistantHandler.GenerateStrategyHandler),
+            (r"/instock/api/ai/strategy/refine", aiAssistantHandler.RefineStrategyHandler),
+            (r"/instock/api/ai/strategy/repair", aiAssistantHandler.RepairStrategyHandler),
+            (r"/instock/api/ai/chat", aiAssistantHandler.ChatHandler),
             # Phase 6: IM 指令确认（默认关闭，由 INSTOCK_IM_COMMAND_ENABLED=1 启用；仅落库 trade_command，不直接调券商）
             (r"/instock/api/im/status", imCommandHandler.IMStatusHandler),
             (r"/instock/api/im/dingtalk/callback", imCommandHandler.DingtalkCallbackHandler),

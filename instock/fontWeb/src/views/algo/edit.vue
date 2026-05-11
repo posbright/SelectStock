@@ -12,6 +12,8 @@
                   @blur="editingName = false; doSave()" @keyup.enter="editingName = false; doSave()" />
       </div>
       <div class="toolbar-right">
+        <el-button @click="aiDrawerVisible = true" :icon="MagicStick" type="success" plain>AI 助手</el-button>
+        <el-divider direction="vertical" />
         <el-button @click="doSave" :icon="DocumentChecked" :loading="saving">
           {{ dirty ? '保存 *' : '已保存' }}
         </el-button>
@@ -139,6 +141,14 @@
         </div>
       </div>
     </div>
+
+    <!-- AI 助手抽屉（M2 最小版） -->
+    <AiChatDrawer
+      v-model="aiDrawerVisible"
+      :current-code="strategy.code"
+      :strategy-id="strategy.id || undefined"
+      @apply="onAiApply"
+    />
   </div>
 </template>
 
@@ -146,8 +156,9 @@
 import { ref, computed, onMounted, nextTick, watch, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, ArrowDown, DocumentChecked, CaretRight, Monitor, DataLine } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowDown, DocumentChecked, CaretRight, Monitor, DataLine, MagicStick } from '@element-plus/icons-vue'
 import { getStrategyCodeDetail, saveStrategyCode, startPortfolioBacktest, getBacktestTaskResult, createPaperTrading } from '@/api/stock'
+import AiChatDrawer from '@/components/AiChatDrawer.vue'
 import * as echarts from 'echarts'
 
 interface LogLine { type: 'log' | 'error' | 'warn'; msg: string }
@@ -215,6 +226,7 @@ const saving = ref(false)
 const dirty = ref(false)
 const editingName = ref(false)
 const activeTab = ref('overview')
+const aiDrawerVisible = ref(false)
 const chartEl = ref<HTMLElement>()
 const btBacktestId = ref<number | null>(null)
 const logLines = ref<LogLine[]>([])
@@ -548,6 +560,12 @@ watch(activeTab, async (tab) => {
 })
 
 window.addEventListener('resize', () => chart?.resize())
+
+// AI 助手：把生成代码灌入编辑器
+function onAiApply(newCode: string) {
+  strategy.value.code = newCode
+  dirty.value = true
+}
 </script>
 
 <style scoped>

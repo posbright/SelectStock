@@ -1,0 +1,348 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""AI 助手 HTTP 接口 — 路由前缀 /instock/api/ai/*。
+
+M2 提供：
+  POST /instock/api/ai/strategy/generate  生成策略代码
+  POST /instock/api/ai/strategy/refine    在已有代码上做局部修改
+  POST /instock/api/ai/strategy/repair    根据失败信息修复代码
+  POST /instock/api/ai/chat               通用聊天（无 strict 校验）
+
+所有调用均通过 instock.lib.ai.run_chat → audit 落库 → strict 校验。
+长耗时任务在共享 ThreadPoolExecutor 中执行，避免阻塞 IOLoop。
+"""
+
+import json
+import logging
+import re
+from abc import ABC
+from concurrent.futures import ThreadPoolExecutor
+from typing import Optional, Tuple
+
+from tornado import gen
+from tornado.ioloop import IOLoop
+
+import instock.web.base as webBase
+from instock.core.backtest.strategy_sandbox import validate_code_strict
+from instock.lib.ai import RateLimitError, ProviderError, AIError, run_chat
+from instock.lib.ai import prompt_loader
+
+__author__ = 'InStock'
+__date__ = '2026/05/11'
+
+# ── 共享线程池：所有 AI 调用 handler 共用，限制并发避免上游限流 ──
+_AI_EXECUTOR: Optional[ThreadPoolExecutor] = None
+
+
+def _get_executor() -> ThreadPoolExecutor:
+    global _AI_EXECUTOR
+    if _AI_EXECUTOR is None:
+        _AI_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix='ai-call')
+    return _AI_EXECUTOR
+
+
+_FENCE_RE = re.compile(r'^\s*```(?:python|py)?\s*\n(.*?)\n```\s*$', re.DOTALL | re.IGNORECASE)
+
+
+def _strip_code_fence(text: str) -> str:
+    """如果模型返回了 Markdown 代码围栏，剥离掉只保留代码体。"""
+    if not text:
+        return ''
+    m = _FENCE_RE.match(text.strip())
+    if m:
+        return m.group(1).strip()
+    return text.strip()
+
+
+def _client_ip(handler) -> str:
+    return handler.request.remote_ip or ''
+
+
+def _validate_or_msg(code: str) -> Tuple[bool, str]:
+    ok, err = validate_code_strict(code)
+    return ok, err if not ok else ''
+
+
+def _write_error(handler, code: int, msg: str, **extra):
+    body = {'code': code, 'msg': msg}
+    body.update(extra)
+    handler.set_header('Content-Type', 'application/json')
+    handler.write(json.dumps(body, ensure_ascii=False))
+
+
+def _call_ai_blocking(prompt: str, system: str, scene: str, agent: str, user_id: str,
+                      overrides: Optional[dict] = None) -> str:
+    """在线程池中执行的同步 AI 调用，返回模型纯文本。"""
+    return run_chat(
+        prompt, scene=scene, system=system, agent=agent,
+        user_id=user_id, overrides=overrides,
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 1) 策略生成
+# ──────────────────────────────────────────────────────────────────────
+class GenerateStrategyHandler(webBase.BaseHandler, ABC):
+    """根据自然语言 prompt 生成策略代码。
+
+    请求体: {"prompt": "...", "model": "...", "api_key": "...", "api_base": "..."}
+    响应:   {"code":0, "data": {"code": "...", "validated": true}} 或
+            {"code":-1, "msg": "...", "data": {"raw": "...", "code": "..."}}
+    """
+
+    @gen.coroutine
+    def post(self):
+        try:
+            body = json.loads(self.request.body or b'{}')
+        except Exception as exc:
+            _write_error(self, -1, f'请求体解析失败: {exc}')
+            return
+
+        user_prompt = (body.get('prompt') or '').strip()
+        if not user_prompt:
+            _write_error(self, -1, 'prompt 不能为空')
+            return
+
+        overrides = _build_overrides(body)
+        system = prompt_loader.load('strategy_coder')
+        try:
+            raw = yield IOLoop.current().run_in_executor(
+                _get_executor(),
+                _call_ai_blocking,
+                user_prompt, system, 'strategy_gen', 'strategy_coder',
+                _client_ip(self), overrides,
+            )
+        except RateLimitError as exc:
+            _write_error(self, 429, f'触发限流: {exc}')
+            return
+        except (ProviderError, AIError) as exc:
+            _write_error(self, -1, f'AI 调用失败: {exc}')
+            return
+        except Exception as exc:
+            logging.exception('GenerateStrategyHandler 未知异常')
+            _write_error(self, -1, f'内部错误: {exc}')
+            return
+
+        code = _strip_code_fence(raw)
+        ok, err = _validate_or_msg(code)
+        payload = {
+            'code': 0 if ok else -2,
+            'msg': '' if ok else f'代码沙箱校验失败: {err}',
+            'data': {
+                'code': code,
+                'raw': raw,
+                'validated': ok,
+                'validation_error': err,
+            },
+        }
+        self.set_header('Content-Type', 'application/json')
+        self.write(json.dumps(payload, ensure_ascii=False))
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 2) 策略局部修改 (refine)
+# ──────────────────────────────────────────────────────────────────────
+class RefineStrategyHandler(webBase.BaseHandler, ABC):
+    """在已有代码上做局部修改。
+
+    请求体: {"prompt": "把持仓从5只改成10只", "code": "...原代码..."}
+    """
+
+    @gen.coroutine
+    def post(self):
+        try:
+            body = json.loads(self.request.body or b'{}')
+        except Exception as exc:
+            _write_error(self, -1, f'请求体解析失败: {exc}')
+            return
+
+        user_prompt = (body.get('prompt') or '').strip()
+        original_code = (body.get('code') or '').strip()
+        if not user_prompt or not original_code:
+            _write_error(self, -1, 'prompt 与 code 均不能为空')
+            return
+
+        overrides = _build_overrides(body)
+        system = prompt_loader.load('strategy_coder')
+        composed = (
+            f"以下是用户当前的策略代码（保持整体结构，按需求局部修改）：\n\n"
+            f"{original_code}\n\n"
+            f"用户的修改需求：{user_prompt}"
+        )
+        try:
+            raw = yield IOLoop.current().run_in_executor(
+                _get_executor(),
+                _call_ai_blocking,
+                composed, system, 'strategy_refine', 'strategy_coder',
+                _client_ip(self), overrides,
+            )
+        except RateLimitError as exc:
+            _write_error(self, 429, f'触发限流: {exc}')
+            return
+        except (ProviderError, AIError) as exc:
+            _write_error(self, -1, f'AI 调用失败: {exc}')
+            return
+        except Exception as exc:
+            logging.exception('RefineStrategyHandler 未知异常')
+            _write_error(self, -1, f'内部错误: {exc}')
+            return
+
+        code = _strip_code_fence(raw)
+        ok, err = _validate_or_msg(code)
+        self.set_header('Content-Type', 'application/json')
+        self.write(json.dumps({
+            'code': 0 if ok else -2,
+            'msg': '' if ok else f'代码沙箱校验失败: {err}',
+            'data': {'code': code, 'raw': raw, 'validated': ok, 'validation_error': err},
+        }, ensure_ascii=False))
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 3) 策略修复 (repair) — 基于 task_recorder 的失败信息
+# ──────────────────────────────────────────────────────────────────────
+class RepairStrategyHandler(webBase.BaseHandler, ABC):
+    """根据上一次失败的 backtest 结果（task_recorder.fetch_last_failure）修复代码。
+
+    请求体: {"strategy_id": 123, "code": "...当前代码（可选，为空则从 DB 取）..."}
+    """
+
+    @gen.coroutine
+    def post(self):
+        try:
+            body = json.loads(self.request.body or b'{}')
+        except Exception as exc:
+            _write_error(self, -1, f'请求体解析失败: {exc}')
+            return
+
+        strategy_id = body.get('strategy_id')
+        if not strategy_id:
+            _write_error(self, -1, 'strategy_id 不能为空')
+            return
+
+        # 获取失败信息
+        from instock.core.backtest.task_recorder import fetch_last_failure
+        try:
+            last = fetch_last_failure(int(strategy_id))
+        except Exception as exc:
+            _write_error(self, -1, f'读取失败信息异常: {exc}')
+            return
+        if not last:
+            _write_error(self, -1, '未找到该策略的失败回测记录')
+            return
+
+        # 取代码（请求体优先；否则从 DB 当前 cn_stock_strategy_code 取）
+        original_code = (body.get('code') or '').strip()
+        if not original_code:
+            try:
+                import instock.lib.database as mdb
+                rows = mdb.executeSqlFetch(
+                    'SELECT code FROM cn_stock_strategy_code WHERE id=%s', (int(strategy_id),))
+                if rows and rows[0]:
+                    original_code = rows[0][0] if isinstance(rows[0], (list, tuple)) else rows[0].get('code', '')
+            except Exception as exc:
+                logging.warning(f'读取策略代码失败: {exc}')
+        if not original_code:
+            _write_error(self, -1, '无法获取策略代码（请在请求体中提供 code 字段）')
+            return
+
+        error_text = (last.get('error_message') or '').strip()
+        composed = (
+            f"以下是当前策略代码：\n\n{original_code}\n\n"
+            f"该代码在最近一次回测中失败，错误信息：\n{error_text or '(无)'}\n\n"
+            f"请输出修复后的完整代码。"
+        )
+
+        overrides = _build_overrides(body)
+        system = prompt_loader.load('strategy_repairer')
+        try:
+            raw = yield IOLoop.current().run_in_executor(
+                _get_executor(),
+                _call_ai_blocking,
+                composed, system, 'strategy_repair', 'strategy_repairer',
+                _client_ip(self), overrides,
+            )
+        except RateLimitError as exc:
+            _write_error(self, 429, f'触发限流: {exc}')
+            return
+        except (ProviderError, AIError) as exc:
+            _write_error(self, -1, f'AI 调用失败: {exc}')
+            return
+        except Exception as exc:
+            logging.exception('RepairStrategyHandler 未知异常')
+            _write_error(self, -1, f'内部错误: {exc}')
+            return
+
+        code = _strip_code_fence(raw)
+        ok, err = _validate_or_msg(code)
+        self.set_header('Content-Type', 'application/json')
+        self.write(json.dumps({
+            'code': 0 if ok else -2,
+            'msg': '' if ok else f'代码沙箱校验失败: {err}',
+            'data': {
+                'code': code, 'raw': raw,
+                'validated': ok, 'validation_error': err,
+                'failure': {
+                    'error_message': error_text,
+                    'started_at': str(last.get('started_at') or ''),
+                    'backtest_id': last.get('id'),
+                },
+            },
+        }, ensure_ascii=False))
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 4) 通用聊天 — 不做 strict 校验（用于"AI 解释"等场景）
+# ──────────────────────────────────────────────────────────────────────
+class ChatHandler(webBase.BaseHandler, ABC):
+    """通用聊天接口。请求体: {"prompt": "...", "system": "...(可选)", "scene": "...(默认 chat)"}。"""
+
+    @gen.coroutine
+    def post(self):
+        try:
+            body = json.loads(self.request.body or b'{}')
+        except Exception as exc:
+            _write_error(self, -1, f'请求体解析失败: {exc}')
+            return
+
+        user_prompt = (body.get('prompt') or '').strip()
+        if not user_prompt:
+            _write_error(self, -1, 'prompt 不能为空')
+            return
+
+        system = body.get('system') or None
+        scene = body.get('scene') or 'chat'
+        agent = body.get('agent') or None
+        overrides = _build_overrides(body)
+        try:
+            raw = yield IOLoop.current().run_in_executor(
+                _get_executor(),
+                _call_ai_blocking,
+                user_prompt, system, scene, agent,
+                _client_ip(self), overrides,
+            )
+        except RateLimitError as exc:
+            _write_error(self, 429, f'触发限流: {exc}')
+            return
+        except (ProviderError, AIError) as exc:
+            _write_error(self, -1, f'AI 调用失败: {exc}')
+            return
+        except Exception as exc:
+            logging.exception('ChatHandler 未知异常')
+            _write_error(self, -1, f'内部错误: {exc}')
+            return
+
+        self.set_header('Content-Type', 'application/json')
+        self.write(json.dumps({'code': 0, 'data': {'content': raw}}, ensure_ascii=False))
+
+
+# ──────────────────────────────────────────────────────────────────────
+# helpers
+# ──────────────────────────────────────────────────────────────────────
+def _build_overrides(body: dict) -> dict:
+    """从请求体提取 provider/model/api_key 等覆写项。"""
+    keys = ('provider', 'api_base', 'api_key', 'model', 'temperature', 'max_tokens', 'timeout')
+    out = {}
+    for k in keys:
+        if k in body and body[k] not in (None, ''):
+            out[k] = body[k]
+    return out
