@@ -135,7 +135,7 @@ function emitChange() {
 }
 
 watch(() => props.modelValue, (v) => {
-  if (!v) return
+  if (!v || (typeof v === 'object' && Object.keys(v).length === 0)) return
   if (v.provider && v.provider !== selectedProvider.value) selectedProvider.value = v.provider
   if (v.model && v.model !== selectedModel.value) selectedModel.value = v.model
 })

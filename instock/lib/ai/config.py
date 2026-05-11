@@ -160,13 +160,21 @@ def list_provider_profiles() -> Dict[str, Any]:
     env = os.environ
     profiles: Dict[str, Dict[str, Any]] = {}
     prefix = 'INSTOCK_AI_PROVIDER_'
+    # P0-1（六轮）：provider 名可含下划线（如 AZURE_OPENAI），不能用
+    # split('_', 1) 从左切；改为后缀匹配，未识别的 attr 则跳过。
+    _SUFFIXES = ('API_BASE', 'API_KEY', 'MODELS', 'DEFAULT_MODEL')
     for k, _v in env.items():
         if not k.startswith(prefix):
             continue
         rest = k[len(prefix):]
-        if '_' not in rest:
+        attr = None
+        for s in _SUFFIXES:
+            if rest.endswith('_' + s):
+                attr = s
+                name = rest[: -(len(s) + 1)]
+                break
+        if not attr or not name:
             continue
-        name, attr = rest.split('_', 1)
         name = name.lower()
         prof = profiles.setdefault(name, {'name': name})
         if attr == 'API_BASE':
@@ -192,8 +200,13 @@ def list_provider_profiles() -> Dict[str, Any]:
     if default_name not in profiles:
         default_name = 'default'
 
+    # P1-4（六轮）：返回前稳定排序，default 置顶，其余字母序
+    sorted_profiles = sorted(
+        profiles.values(),
+        key=lambda p: (0 if p['name'] == 'default' else 1, p['name']),
+    )
     return {
-        'profiles': list(profiles.values()),
+        'profiles': sorted_profiles,
         'default': default_name,
         'default_model': cfg.model,
         'temperature': cfg.temperature,

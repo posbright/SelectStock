@@ -67,6 +67,38 @@ class ProviderProfileTests(unittest.TestCase):
         for p in data['profiles']:
             self.assertNotIn('api_key', p)
 
+    def test_provider_name_with_underscore(self):
+        # P0-1（六轮）：provider 名包含下划线（如 azure_openai）必须正确解析
+        os.environ['INSTOCK_AI_PROVIDER_AZURE_OPENAI_API_BASE'] = 'https://az.example/v1'
+        os.environ['INSTOCK_AI_PROVIDER_AZURE_OPENAI_API_KEY'] = 'sk-az'
+        os.environ['INSTOCK_AI_PROVIDER_AZURE_OPENAI_DEFAULT_MODEL'] = 'gpt-4o'
+        data = ai_config.list_provider_profiles()
+        names = {p['name'] for p in data['profiles']}
+        self.assertIn('azure_openai', names)
+        prof = next(p for p in data['profiles'] if p['name'] == 'azure_openai')
+        self.assertEqual(prof['api_base'], 'https://az.example/v1')
+        self.assertTrue(prof['has_key'])
+        self.assertEqual(prof['default_model'], 'gpt-4o')
+
+    def test_unknown_attribute_ignored(self):
+        # 未识别的 suffix（如 _FOO）不应导致解析错位
+        os.environ['INSTOCK_AI_PROVIDER_DEEPSEEK_FOO'] = 'bar'
+        os.environ['INSTOCK_AI_PROVIDER_DEEPSEEK_API_BASE'] = 'https://ds.example/v1'
+        data = ai_config.list_provider_profiles()
+        prof = next((p for p in data['profiles'] if p['name'] == 'deepseek'), None)
+        self.assertIsNotNone(prof)
+        self.assertEqual(prof['api_base'], 'https://ds.example/v1')
+
+    def test_profiles_sorted_default_first(self):
+        # P1-4（六轮）：返回顺序稳定 - default 置顶，其余字母序
+        os.environ['INSTOCK_AI_PROVIDER_ZULU_API_BASE'] = 'z'
+        os.environ['INSTOCK_AI_PROVIDER_ALPHA_API_BASE'] = 'a'
+        data = ai_config.list_provider_profiles()
+        names = [p['name'] for p in data['profiles']]
+        self.assertEqual(names[0], 'default')
+        rest = names[1:]
+        self.assertEqual(rest, sorted(rest))
+
 
 class PromptLoaderAgentsTests(unittest.TestCase):
     def test_list_agents_contains_builtins(self):

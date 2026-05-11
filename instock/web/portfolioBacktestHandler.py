@@ -2445,7 +2445,7 @@ class GetPortfolioBacktestDetailHandler(webBase.BaseHandler, ABC):
                     'trade_count': r[14] or 0,
                 },
                 'completed_at': r[15].strftime('%Y-%m-%d %H:%M:%S') if r[15] else '',
-                'error_message': r[18] or '',
+                'error_message': (r[18] or '')[:2000],
             }
 
             # 尝试从 result_json 恢复完整数据（净值/交易/持仓）
