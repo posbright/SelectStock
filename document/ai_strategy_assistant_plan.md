@@ -1,6 +1,24 @@
 # AI 辅助自定义策略生成与回测 — 可行性分析与实施方案
 
+> 文档版本：v1.1.3 ｜ 修订日期：2026-05-11 ｜ 适用分支：`backTest_dev`
+>
 > 范围：在 SelectStock 项目内，新增"用户输入提示词 → AI 生成策略代码 → 用户/AI 二次修改 → 保存 → 回测 → 报错自动修正"的闭环；同时把 AI 配置抽象为项目级统一服务，支持多模型切换、工具调用（agent）、自定义 agent。
+>
+> **阅读顺序提醒**：本文档分多轮修订，**实施时请以靠后的章节为准**：
+> - §3.1–§3.3 + 新增 **§3.4** 共同构成完整 DDL；
+> - §4.1 目录树为初稿，**最终目录请看 §10.8**；
+> - §4.3 路由表为初稿，**最终路由表请看 §10.7**；
+> - §4.6 依赖说明被 §16.6（去 pydantic）+ §16.7（httpx 改可选）共同修订；
+> - §7 实施顺序为初稿，**最终顺序请看 §18**；
+> - §9 验收清单为初稿，**最终清单请看 §13**。
+>
+> **v1.1 修订（同日）**：补齐 `cn_stock_ai_conversation` 与 `cn_stock_ai_kb` 的统一 DDL（新增 §3.4）；为限流查询加 `(user_id, created_at)` 索引；为 RAG 表加 `(source_type, source_id)` 唯一键；修正 §10.3 中关于不存在的 `created_by` 列的误导性表述；修正 §15.1 中 `__class__` 已在黑名单内的绕过示例；§3.1 提示 `SaveStrategyCodeHandler` 需要支持新增列；明确 CLI 入口需 `__main__.py`（新增 §20）；统一日期到 2026-05-11；为被后续章节替代的 §4.1 / §4.3 / §4.6 / §7 / §9 加显式 superseded 标记。
+>
+> **v1.1.1 修订（同日补漏）**：统一 CLI 命令为 `python -m instock.lib.ai`（§9 / §13 / §M1）；将 §11.2 中的 RAG 表 DDL 改为引用 §3.4（避免与 §3.4 不一致）；删除 §14 第 5 项过时的 httpx 依赖确认（§16.7 已决定零新增依赖）；统一限流配置项名称与默认值（§4.2 / §8 / §16.5 一致）；明确 §16.1 `_ALLOWED_IMPORTS` 来自 `strategy_sandbox`；§4.5 跨平台 CPU 限制改用子进程 + `Process.terminate()`；§4.5 `sql_query` 白名单放宽至所有项目表前缀；§15.2 INSERT 示例加'按实表列对齐'提示；§4.4 修复闭环加 `rate_limit_loop=True` 标志与 §16.5 协调。
+>
+> **v1.1.2 修订（同日再审）**：按当前仓库实测状态更新 §15 / §18 / §19：`validate_code_strict()`、`task_recorder.py`、失败任务落库接入与对应 pytest 已存在，M0 从“新增”改为“复核、补接入、跑测试”；修正 §10.2 / §10.6 / §15.3 / §15.4 中仍把 `httpx` 当必选的残留表述；补 §10.8 的 `__main__.py`；把 RAG 默认实现从误写的 `sqlite_vss.py（零依赖）` 改成 `mysql_fulltext.py`；统一旧 §7 / §18 的 CLI 命令；统一 429 验收为 `60 calls/hour + 200000 tokens/hour`；修正 §16.1 中“同文件 import 自己”的示例错误。
+>
+> **v1.1.3 修订（同日验证）**：修正 §1“现有可复用基础”中校验入口与错误回流入口的旧描述：AI 代码必须使用 `validate_code_strict()`，修复闭环统一通过 `task_recorder.fetch_last_failure(strategy_id)` 取失败信息；清理 §4.6 中 `httpx/pydantic` 旧依赖写法，避免读者误以为仍需修改 `requirements.txt`。
 
 ---
 
@@ -16,19 +34,19 @@
 | --- | --- | --- |
 | 策略代码存储 | `cn_stock_strategy_code` 表（`code TEXT` 列） | 直接落 AI 生成的代码 |
 | 保存接口 | `SaveStrategyCodeHandler` @ [portfolioBacktestHandler.py](instock/web/portfolioBacktestHandler.py) | AI 生成结果走同一保存通道 |
-| 代码静态校验 | `validate_code()` @ 同上 | AI 输出强制校验 |
+| 代码静态校验 | `validate_code()` / `validate_code_strict()` @ [strategy_sandbox.py](instock/core/backtest/strategy_sandbox.py) | AI 输出必须走 strict 校验 |
 | 沙箱执行 | [strategy_sandbox.py](instock/core/backtest/strategy_sandbox.py) | 白名单：`math/numpy/pandas/talib`，禁 `exec/eval/os/sys` |
 | 回测引擎 | `PortfolioBacktestEngine.run()` | 不区分代码来源 |
 | 模板 / few-shot 素材 | `STRATEGY_TEMPLATES` | 直接作为 LLM few-shot example |
 | 模板修改追踪 | `template_id / template_hash / user_modified` | 新增 `source='ai'` 即可 |
 | **已有 AI 模块** | [moat_ai_service.py](instock/core/strategy/fundamental/moat_ai_service.py) | 现存 OpenAI 兼容客户端，**收敛到统一层**（详见 §10.1） |
 | **已有 AI 配置 UI** | [strategyParamsHandler.py](instock/web/strategyParamsHandler.py) `ai_model` 组 | 复用 DB 配置作为 provider 来源（详见 §10.1） |
-| 回测错误回流 | `cn_stock_backtest_portfolio.error_message` 列已存在 | 修复闭环直接读取 |
+| 回测错误回流 | `cn_stock_backtest_portfolio.error_message` 列 + [task_recorder.py](instock/core/backtest/task_recorder.py) | 修复闭环统一走 `fetch_last_failure(strategy_id)` |
 
 ### 风险与边界
 
 - LLM 输出可能不通过沙箱 → 需 **校验失败自动重试 / 自修复闭环**（本文档第 4 节）。
-- LLM 网络延迟 / 限流 → 接口需异步 + 超时；建议加 per-user 配额。
+- LLM 网络延迟 / 限流 → 接口需线程池/异步封装 + 超时；建议按 `(client_ip, scene)` 与 token 双桶限额。
 - 回测期间运行时报错 → 需收集 traceback 喂回 LLM 修正。
 - Token 成本 → 入库审计 + 限额。
 
@@ -73,25 +91,28 @@ ALTER TABLE cn_stock_strategy_code
   ADD COLUMN ai_repair_count INT NOT NULL DEFAULT 0 COMMENT '自动修复次数';
 ```
 
+> **同步改造点**：[`SaveStrategyCodeHandler`](instock/web/portfolioBacktestHandler.py) 与对应的 INSERT / UPDATE 语句需补 `source / ai_prompt / ai_model / ai_agent / ai_repair_count` 字段；前端策略保存请求体相应扩展。M2 阶段一并完成。
+
 ### 3.2 新增 AI 调用审计表
 
 ```sql
 CREATE TABLE cn_stock_ai_call_log (
-  id BIGINT PRIMARY KEY AUTO_INCREMENT,
-  scene VARCHAR(32) NOT NULL COMMENT 'strategy_gen / strategy_repair / im_summary / ...',
-  agent VARCHAR(64) NULL,
-  provider VARCHAR(32) NOT NULL,
-  model VARCHAR(64) NOT NULL,
-  user_id VARCHAR(64) NULL,
-  prompt MEDIUMTEXT,
-  response MEDIUMTEXT,
-  tools_used JSON NULL,
-  prompt_tokens INT, completion_tokens INT, total_tokens INT,
-  latency_ms INT,
-  ok TINYINT(1) NOT NULL,
-  error VARCHAR(512) NULL,
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  INDEX idx_scene_time (scene, created_at)
+id BIGINT PRIMARY KEY AUTO_INCREMENT,
+scene VARCHAR(32) NOT NULL COMMENT 'strategy_gen / strategy_repair / im_summary / ...',
+agent VARCHAR(64) NULL,
+provider VARCHAR(32) NOT NULL,
+model VARCHAR(64) NOT NULL,
+user_id VARCHAR(64) NULL COMMENT '单部署下存 client_ip，多用户化后可存真实用户 ID',
+prompt MEDIUMTEXT,
+response MEDIUMTEXT,
+tools_used JSON NULL,
+prompt_tokens INT, completion_tokens INT, total_tokens INT,
+latency_ms INT,
+ok TINYINT(1) NOT NULL,
+error VARCHAR(512) NULL,
+created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+INDEX idx_scene_time (scene, created_at),
+INDEX idx_user_time (user_id, created_at)   -- §16.5 滑窗限流查询走此索引
 );
 ```
 
@@ -118,11 +139,50 @@ CREATE TABLE cn_stock_ai_agent (
 
 启动时自动 upsert 内置 agent（`strategy_coder` / `strategy_repairer` / `market_summarizer` / `general_assistant`）。
 
+### 3.4 多轮对话表与知识库表（v1.1 补齐）
+
+以下两张表在原稿中分散出现于 §11.2 / §16.4 / §10.8 / §13 验收，但缺少建表语句；统一在此给出，便于一次性 migrate：
+
+```sql
+-- 多轮记忆持久化（§16.4 / §M8）
+CREATE TABLE cn_stock_ai_conversation (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  conversation_id VARCHAR(64) UNIQUE NOT NULL COMMENT '前端 UUID',
+  scene VARCHAR(32) NOT NULL,
+  agent VARCHAR(64) NULL,
+  title VARCHAR(255) NULL COMMENT '会话首句摘要',
+  messages_json MEDIUMTEXT NOT NULL COMMENT '完整 messages 数组（已含自动摘要）',
+  total_tokens INT NOT NULL DEFAULT 0,
+  user_id VARCHAR(64) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_scene_updated (scene, updated_at),
+  INDEX idx_user_updated (user_id, updated_at)
+);
+
+-- RAG 知识库（§11.2 / §M9）
+CREATE TABLE cn_stock_ai_kb (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  source_type VARCHAR(32) NOT NULL COMMENT 'template / doc / strategy / backtest_failure',
+  source_id VARCHAR(64) NULL,
+  title VARCHAR(255),
+  content MEDIUMTEXT,
+  embedding BLOB NULL COMMENT '后续接 sqlite-vec 时填充',
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_source (source_type, source_id),    -- indexer upsert 走此唯一键
+  FULLTEXT KEY ftx_content (title, content)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+> M8 / M9 阶段才会真正使用，但建议 M1 一次性建表，避免后期再改 schema。
+
 ---
 
 ## 4. 后端改动
 
-### 4.1 统一 AI 服务层 `instock/lib/ai/`
+### 4.1 统一 AI 服务层 `instock/lib/ai/`（**已被 §10.8 替代**，保留作为初稿对照）
+
+> ⚠️ 此目录树为 v1.0 初稿，仅展示核心模块；最终落地结构请直接参考 **§10.8**（包含 `memory/` / `retrieval/` / `orchestrator/` / `cli.py / __main__.py` 等）。本节后续接口/关键设计仍有效。
 
 ```
 instock/lib/ai/
@@ -185,8 +245,10 @@ INSTOCK_AI_PROVIDER_QWEN_API_KEY=sk-xxx
 INSTOCK_AI_PROVIDER_OPENAI_BASE_URL=https://api.openai.com/v1
 INSTOCK_AI_PROVIDER_OPENAI_API_KEY=sk-xxx
 
-# 限流
-INSTOCK_AI_RATE_LIMIT_PER_USER_PER_HOUR=30
+# 限流（与 §16.5 双桶限流一致；原名 `..._PER_USER_PER_HOUR` 已废弃）
+INSTOCK_AI_RATE_CALLS_PER_HOUR=60
+INSTOCK_AI_RATE_TOKENS_PER_HOUR=200000
+INSTOCK_AI_RATE_REPAIR_LOOP_FREE=true
 INSTOCK_AI_MAX_TOKENS_PER_CALL=8192
 INSTOCK_AI_TIMEOUT_SECONDS=60
 
@@ -196,9 +258,13 @@ INSTOCK_AI_GLOBAL_TOOLS=sql_query,kline_fetch,code_validate,backtest_run,web_sea
 
 > **复用统一性**：项目内其他位置（IM 摘要、复盘文案等）一律走 `instock/lib/ai/run_agent()`，禁止再各自 `import openai`。
 
-### 4.3 新增 Tornado Handler（建议拆到 `instock/web/aiAssistantHandler.py`）
+### 4.3 新增 Tornado Handler（**路由命名空间已被 §10.7 替代**）
 
-| Method | Path | 用途 |
+> ⚠️ 下表中 `/instock/api/strategy/ai/*` 与 `/instock/api/ai/chat` 等是 v1.0 命名；**最终统一前缀为 `/instock/api/ai/...`**，详见 **§10.7**。本节保留作为初稿；实施时直接按 §10.7 路由写代码即可。
+
+建议拆到 `instock/web/aiAssistantHandler.py`：
+
+| Method | Path（v1.0 旧版，仅供参考） | 用途 |
 | --- | --- | --- |
 | GET | `/instock/api/ai/config` | 返回前端可见配置：可用 provider/model 列表、可用 agent 列表、当前默认 |
 | GET | `/instock/api/ai/agents` | 列出 agent（含自定义） |
@@ -239,6 +305,8 @@ def repair(code, error_log, max_retries=3):
     return {"error": "exceed_max_retries", "last_error": error_log, "last_code": code}
 ```
 
+> **限流协同**：进入 `repair()` 时给 `run_agent` 传 `rate_limit_loop=True`，`audit.py` 写日志时落 `tools_used.rate_limit_loop=true`；§16.5 的滑窗只统计 `rate_limit_loop != true` 的记录，确保多轮自修复不会把用户配额吃光。
+
 触发点：
 
 1. **保存时** `validate_code` 失败 → 提示用户"AI 自动修复"按钮。
@@ -267,21 +335,18 @@ loop:
 
 工具安全约束：
 
-- `sql_query`：只读 + 仅 `cn_stock_*` 白名单表 + LIMIT 强制注入。
+- `sql_query`：只读（拒绝 INSERT/UPDATE/DELETE/DDL）+ 仅项目自有表前缀（`cn_stock_*` / `cn_etf_*` / `instock_*` / `cn_stock_ai_*`，最终白名单以 `instock/lib/database.py` 实际表清单为准）+ LIMIT 强制注入（默认 100，最大 1000）。
 - `kline_fetch`：调用现有 K 线查询函数，不暴露 DB 连接。
-- `backtest_run`：仅在 dry-run 沙箱进程中跑，CPU 时间限制 10s。
+- `backtest_run`：仅在独立**子进程**中跑 dry-run，由父进程 `Process.terminate()` 在 10s 后强杀（**不依赖 `signal.SIGALRM`，兼容 Windows**），输出截断 8KB。
 - 任何工具调用都进 `cn_stock_ai_call_log.tools_used`。
 
-### 4.6 依赖
+### 4.6 依赖（**已被 §16.6 + §16.7 修订**）
 
-`requirements.txt` 增加（极简）：
+> ⚠️ 此节为初稿。最终方案：**零新增依赖**——同步路径用仓库已存在的 `requests`，工具 schema 用手写 dict + 已有 `jsonschema`。`httpx` 仅在未来切异步流式时按需评估。
 
-```
-httpx>=0.27          # provider HTTP
-pydantic>=2.6        # tool schema
-```
+初稿原文（仅作历史参考）：曾建议在 `requirements.txt` 增加 `httpx` 与 `pydantic`；最终方案已取消这两个必选依赖。
 
-不引入 `openai` 官方 SDK：所有兼容协议平台（DeepSeek/Qwen/Kimi/Azure/OpenAI/vLLM）都能用同一份 `httpx.Client` 实现，避免 SDK 版本锁定。
+不引入 `openai` 官方 SDK 的结论保持不变：所有兼容协议平台（DeepSeek/Qwen/Kimi/Azure/OpenAI/vLLM）都能用同一份 HTTP 客户端实现，避免 SDK 版本锁定。
 
 ---
 
@@ -327,17 +392,19 @@ pydantic>=2.6        # tool schema
 2. **prompt/响应脱敏**：入库前剔除 `INSTOCK_AI_PROVIDER_*_API_KEY`、`db_password`、`smtp_password` 等环境变量值（防用户在 prompt 里贴 .env）。
 3. **工具权限分级**：内置 agent 工具集白名单写在 system prompt + 后端 registry；自定义 agent 不能勾选超出 `INSTOCK_AI_GLOBAL_TOOLS` 的工具。
 4. **回测仍在子进程 + 超时**：复用现有回测子进程 2h 超时机制。
-5. **限流**：`per-user/hour` 由 `cn_stock_ai_call_log` 计数实现；超额返回 `429`。
+5. **限流**：按 `(client_ip, scene)` 调用次数 + token 总量双桶计数实现；超额返回 `429`。
 6. **审计可追溯**：每次调用包括工具调用细节都落 `cn_stock_ai_call_log`，前端可查。
 7. **PII / 合规**：用户 prompt 仅用于本次生成，不做任何外发训练；provider 选型时优先支持"不收集训练"开关（DeepSeek 已提供）。
 
 ---
 
-## 7. 实施顺序（推荐 MVP → 增强）
+## 7. 实施顺序（推荐 MVP → 增强）（**已被 §18 替代**）
+
+> ⚠️ 此 8 阶段表为 v1.0 初稿。最终阶段表请看 **§18**（M0 前置加固 → M10 跨场景，共 11 阶段）。本节保留供横向对照。
 
 | 阶段 | 内容 | 交付物 |
 | --- | --- | --- |
-| **M1 基础设施** | `instock/lib/ai/` provider+router+config+audit；`.env` 落配置；DB 扩列+审计表 | 命令行 `python -m instock.lib.ai.cli "你好"` 跑通 |
+| **M1 基础设施** | `instock/lib/ai/` provider+router+config+audit；`.env` 落配置；DB 扩列+审计表 | 命令行 `python -m instock.lib.ai "你好"` 跑通 |
 | **M2 策略生成** | `strategy_coder` agent + system prompt + `/strategy/ai/generate` + 前端抽屉最小版 | prompt → 代码 → 灌入编辑器 → 手动保存回测 |
 | **M3 校验闭环** | `validate_code` 失败重试；前端 toast 提示 | 生成代码必合法 |
 | **M4 修复闭环** | `strategy_repairer` agent + `/strategy/ai/repair`；回测失败接入 | 一键修复回测错误 |
@@ -358,7 +425,9 @@ INSTOCK_AI_PROVIDER_DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
 INSTOCK_AI_PROVIDER_DEEPSEEK_API_KEY=sk-***
 INSTOCK_AI_PROVIDER_QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 INSTOCK_AI_PROVIDER_QWEN_API_KEY=sk-***
-INSTOCK_AI_RATE_LIMIT_PER_USER_PER_HOUR=30
+INSTOCK_AI_RATE_CALLS_PER_HOUR=60
+INSTOCK_AI_RATE_TOKENS_PER_HOUR=200000
+INSTOCK_AI_RATE_REPAIR_LOOP_FREE=true
 INSTOCK_AI_MAX_TOKENS_PER_CALL=8192
 INSTOCK_AI_TIMEOUT_SECONDS=60
 INSTOCK_AI_GLOBAL_TOOLS=sql_query,kline_fetch,code_validate,backtest_run
@@ -366,19 +435,21 @@ INSTOCK_AI_GLOBAL_TOOLS=sql_query,kline_fetch,code_validate,backtest_run
 
 ---
 
-## 9. 验收标准
+## 9. 验收标准（**已被 §13 替代**）
 
-- [ ] `python -m instock.lib.ai.cli` 能用任一 provider 跑通对话（含工具调用）。
+> ⚠️ 此 7 项验收为 v1.0 初稿。最终 11 项验收清单请看 **§13**。本节保留作为对照。
+
+- [ ] `python -m instock.lib.ai` 能用任一 provider 跑通对话（含工具调用）。
 - [ ] 策略编辑页 prompt 生成的代码能直接保存并完成一次成功回测。
 - [ ] 故意写一段 `import os` 的 prompt，应被 `validate_code` 拒绝并提示"AI 修复"。
 - [ ] 故意触发回测除零错误，点"AI 修复"后能在 ≤3 轮内修复并跑通。
 - [ ] 在 AI 设置页新建一个自定义 agent（仅允许 `sql_query`），生成的策略调用工具次数被审计记录。
 - [ ] 切换模型 deepseek ↔ qwen 后，策略生成均成功且 `cn_stock_ai_call_log.model` 正确。
-- [ ] 单用户超过 30 次/小时返回 429。
+- [ ] 同一 IP 超过 `60 calls/hour` 或 `200000 tokens/hour` 后返回 429。
 
 ---
 
-## 10. 文档审核与修订（2026-05-06）
+## 10. 文档审核与修订（2026-05-11）
 
 二次审阅时复核了仓库实际状态，更正以下偏差并加固设计：
 
@@ -400,9 +471,9 @@ INSTOCK_AI_GLOBAL_TOOLS=sql_query,kline_fetch,code_validate,backtest_run
 
 修订：
 
-1. `instock/lib/ai/providers/openai_compat.py` 同时提供同步 `chat()` 和异步 `chat_async()`（基于 `httpx.AsyncClient`）。
-2. 所有 Tornado handler 用 `async def post()` + `await runtime.run_async(...)`；`AgentRuntime` 内 tool 调用为 CPU/DB 任务时用 `IOLoop.current().run_in_executor()`。
-3. 离线场景（`moat_ai_service.py`、定时任务、CLI）继续用同步 `chat()`。
+1. `instock/lib/ai/providers/openai_compat.py` MVP 先提供同步 `chat()`（基于现有 `requests`），避免新增依赖。
+2. 所有 Tornado handler 不直接 `requests.post()`，而是复用现有 `ThreadPoolExecutor` / `IOLoop.current().run_in_executor()` 模式；流式输出用后台线程读取 chunk，再通过 `asyncio.Queue` 或 Tornado queue 推给 SSE handler。
+3. `chat_async()` / `httpx.AsyncClient` 仅作为未来高并发优化，不进入 MVP 必选项。
 
 ### 10.3 鉴权模型修正
 
@@ -412,36 +483,34 @@ INSTOCK_AI_GLOBAL_TOOLS=sql_query,kline_fetch,code_validate,backtest_run
 
 - 限流维度从 `user_id` 改为 `(client_ip, scene)`，仍写入 `cn_stock_ai_call_log.user_id` 字段（值为 IP，向后兼容）。
 - 自定义 agent 没有"所有者"概念，只有 `is_builtin / enabled` 标志；多用户化以后再补。
-- `cn_stock_ai_agent` 表删除 `created_by` 之类的列，避免无谓迁移。
+- 沿用此原则，§3.3 的 `cn_stock_ai_agent` 表**不引入** `created_by / owner_id` 等多租户字段，避免后续无谓迁移。
 
-### 10.4 `validate_code` 行为复核
+### 10.4 `validate_code` / `validate_code_strict` 行为复核
 
-实际位置在 [portfolioBacktestHandler.py](instock/web/portfolioBacktestHandler.py) `validate_code()`（L1779 附近）。**实施前必须**：
+实际实现位于 [strategy_sandbox.py](instock/core/backtest/strategy_sandbox.py)；[portfolioBacktestHandler.py](instock/web/portfolioBacktestHandler.py) 在保存策略时懒导入并调用 `validate_code()`。当前仓库已存在 `validate_code_strict()`，AI 通道实施前必须：
 
-1. 通读其完整规则（关键字黑名单 / AST 检查 / 长度上限 / 函数签名要求）。
+1. 通读 `validate_code()` 与 `validate_code_strict()` 的完整规则（关键字黑名单 / AST 检查 / 导入白名单 / 函数签名要求）。
 2. 把规则原文 dump 进 `strategy_coder` agent 的 system prompt，作为"硬约束清单"。
 3. AI 修复闭环每轮调用必须传完整的 `validate_code` 错误文本（含规则名），LLM 才能定向修。
 
-> **风险**：若 `validate_code` 仅做关键字字符串检查（如 `"import os"` 子串），AI 可能生成 `__import__('os')` 等绕过形式。**审核前必须确认**它包含 AST 检查；若不含，先补强 sandbox 再上线 AI 通道。
+> **风险**：普通保存链路仍只调用 `validate_code()`；AI 生成 / 修改 / 修复链路必须显式调用 `validate_code_strict()`，否则 AST 层加固不会生效。
 
 ### 10.5 回测错误回流路径已就绪
 
-复核 [portfolioBacktestHandler.py](instock/web/portfolioBacktestHandler.py) L2947：`cn_stock_backtest_portfolio.error_message TEXT` 列已存在。修复闭环可直接 `SELECT error_message FROM cn_stock_backtest_portfolio WHERE id=...`，无需补字段。
+复核 [portfolioBacktestHandler.py](instock/web/portfolioBacktestHandler.py) 与 [task_recorder.py](instock/core/backtest/task_recorder.py)：`cn_stock_backtest_portfolio.error_message TEXT` 列已存在，失败分支已通过 `record_failed(...)` 写入 `error_message` / `result_json`，修复闭环可直接复用 `fetch_last_failure(strategy_id)`，无需新增字段或直接拼 SQL。
 
-但需要：
+仍需：
 
-- 确认 `PortfolioBacktestEngine` 真的把 traceback 写进了这一列（grep `error_message` 看 UPDATE 语句）。
-- 缺失则补：`engine.run()` 的最外层 `except` 必须 `traceback.format_exc()` → 截断 8KB → 入库。
+- 跑同步/异步失败回测端到端用例，确认实际异常 traceback 进入 `error_message`。
+- AI 修复工具只调用 `task_recorder.fetch_last_failure(strategy_id)`，不要绕过统一模块直接查表。
 
 ### 10.6 依赖与现有库对齐
 
-仓库已用 `requests`（`moat_ai_service.py`）。修订：
+仓库已用 `requests`（`moat_ai_service.py`）。最终修订：
 
-- **同步路径继续用 `requests`**（已在 requirements，零新增依赖）。
-- **异步路径用 `httpx`**（已是行业标准；新加）。
-- `pydantic` 仅 tool schema 用——若希望零新增依赖，改用手写 dict + `jsonschema`（仓库已隐式依赖）。
-
-最终新增依赖只有 1 个：`httpx>=0.27`。
+- **MVP 零新增依赖**：同步 provider 继续用 `requests`；Tornado handler 通过线程池避免阻塞 IOLoop。
+- **不引入 `pydantic`**：tool schema 统一用手写 dict + 现有 `jsonschema` 风格。
+- **不强制引入 `httpx`**：未来高并发、纯 async provider 或更复杂流式场景再评估。
 
 ### 10.7 路由命名空间
 
@@ -482,7 +551,8 @@ instock/
 │       │   └── db.py                    # cn_stock_ai_conversation 表
 │       ├── retrieval/
 │       │   ├── base.py                  # VectorStore ABC
-│       │   ├── sqlite_vss.py            # 默认实现（零依赖部署）
+│       │   ├── mysql_fulltext.py        # 默认实现：MySQL FULLTEXT + LIKE 兜底（零新增依赖）
+│       │   ├── sqlite_vec.py            # 可选：真向量检索
 │       │   ├── chroma.py                # 可选
 │       │   └── indexer.py               # 模板/文档/回测结果索引器
 │       ├── tools/
@@ -504,7 +574,8 @@ instock/
 │       │   ├── strategy_repairer.md
 │       │   ├── market_summarizer.md
 │       │   └── general_assistant.md
-│       └── cli.py                       # python -m instock.lib.ai.cli
+│       ├── __main__.py                  # python -m instock.lib.ai 入口
+│       └── cli.py                       # argparse 实现
 ├── web/
 │   └── aiAssistantHandler.py            # ★ 新增：所有 /api/ai/* 路由
 ├── core/
@@ -551,7 +622,7 @@ instock/
 
 **风险**：
 
-- Tornado 同 IOLoop 下需保证 handler 真正 async（`AsyncHTTPClient` 或 `httpx.AsyncClient`）；否则伪流式（缓冲后一次性吐出）。
+- Tornado 同 IOLoop 下需保证 handler 不阻塞：MVP 用 `requests(stream=True)` + 线程池 + queue；未来也可切 `AsyncHTTPClient` / `httpx.AsyncClient`。
 - nginx 反向代理需关 `proxy_buffering`（在 supervisor/Tornado 自部署中无问题）。
 
 **结论**：M2 阶段就把 `chat/stream` 实现，否则用户对 30 秒级生成会觉得卡死。前端组件 `AiChatDrawer.vue` 默认走流式。
@@ -574,20 +645,7 @@ instock/
 | **Chroma 本地** | `chromadb` | 后续大语料 |
 | **MySQL FULLTEXT** | 0 新依赖（已有 MySQL） | 文本检索，零运维 |
 
-**推荐**：MVP 用 **MySQL FULLTEXT 索引** + LIKE 兜底，新增 `cn_stock_ai_kb` 表存切片；嵌入向量阶段再切 `sqlite-vec`。
-
-```sql
-CREATE TABLE cn_stock_ai_kb (
-  id BIGINT PRIMARY KEY AUTO_INCREMENT,
-  source_type VARCHAR(32) NOT NULL,    -- template / doc / strategy / backtest_failure
-  source_id VARCHAR(64),
-  title VARCHAR(255),
-  content MEDIUMTEXT,
-  embedding BLOB NULL,                 -- 后续补
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  FULLTEXT KEY ftx_content (title, content)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-```
+**推荐**：MVP 用 **MySQL FULLTEXT 索引** + LIKE 兜底，表结构详见 **§3.4**（v1.1 已统一给出含 `UNIQUE KEY uk_source(source_type, source_id)` 与 `FULLTEXT ftx_content(title, content)` 的最终 DDL，实施请直接按 §3.4 建表，**不要使用本节早先列出的旧版 DDL**）。嵌入向量阶段再切 `sqlite-vec`，到那时在表中填充 `embedding BLOB` 列即可。
 
 工具 `kb_search(query, top_k=5, source_types=['template','doc'])` 实现于 `instock/lib/ai/tools/kb_search.py`，由 indexer 定时（cron 已有框架）刷新。
 
@@ -657,7 +715,7 @@ INSTOCK_AI_DEFAULT_MODEL=qwen2.5-coder:7b
 
 | 风险 | 等级 | 触发场景 | 缓解 |
 | --- | --- | --- | --- |
-| Tornado IOLoop 被同步 LLM 阻塞 | **高** | handler 内直接 `requests.post` | 异步 provider + `run_in_executor`（10.2） |
+| Tornado IOLoop 被同步 LLM 阻塞 | **高** | handler 内直接 `requests.post` | 线程池 + queue / `run_in_executor`（10.2 / 16.7） |
 | `validate_code` 不含 AST 检查导致沙箱绕过 | **高** | LLM 生成 `__import__('os')` | 实施前复核并补强（10.4） |
 | 双套 AI 配置漂移 | 中 | `moat_ai_service` 与新统一层并存 | 强制收敛到 `lib/ai`（10.1） |
 | 流式响应在 nginx 后被缓冲 | 中 | 生产部署反代时 | 文档化 `proxy_buffering off`（11.1） |
@@ -672,7 +730,7 @@ INSTOCK_AI_DEFAULT_MODEL=qwen2.5-coder:7b
 
 ## 13. 修订后的 MVP 验收清单（替代第 9 节）
 
-- [ ] `python -m instock.lib.ai.cli "你好"` 用任一 provider 成功返回。
+- [ ] `python -m instock.lib.ai "你好"` 用任一 provider 成功返回。
 - [ ] `moat_ai_service.py` 改造完成，所有原功能不退化（跑一次现存的护城河分析单测）。
 - [ ] `POST /instock/api/ai/chat/stream` 在浏览器中**逐字显示**输出（验证非伪流式）。
 - [ ] 策略编辑页 prompt → 生成代码 → 一键灌入编辑器 → 保存 → 回测全流程通过。
@@ -680,7 +738,7 @@ INSTOCK_AI_DEFAULT_MODEL=qwen2.5-coder:7b
 - [ ] 故意触发回测除零错误，"AI 修复"按钮在 ≤3 轮内修复并跑通。
 - [ ] 自定义 agent（仅勾 `sql_query`）尝试调 `backtest_run` 时被 registry 拒绝，审计日志记录拒绝事件。
 - [ ] 切换 provider deepseek ↔ qwen ↔ local(ollama) 后均成功；`cn_stock_ai_call_log.provider/model` 正确。
-- [ ] 同一 IP 30 次/小时后续请求返回 429。
+- [ ] 同一 IP 超过 `60 calls/hour` 或 `200000 tokens/hour` 后续请求返回 429。
 - [ ] 多轮会话：连续 5 轮"再加一个止损条件"能基于上一轮代码累积修改。
 - [ ] RAG 工具：prompt 含"布林带"时 `kb_search` 命中对应模板（看审计 `tools_used`）。
 
@@ -694,37 +752,42 @@ INSTOCK_AI_DEFAULT_MODEL=qwen2.5-coder:7b
 2. **`PortfolioBacktestEngine` 异常是否落 `error_message`？** 不落则先补；否则修复闭环没输入。
 3. **生产部署是否经过 nginx？** 若是，需文档化反代配置（SSE / 长连接）。
 4. **是否计划很快开放外网访问？** 若是，限流策略要从 IP 改为登录用户 + 鉴权前置（不在本特性范围）。
-5. **是否接受 1 个新依赖 `httpx`？** 若不接受，流式与异步退化为同步 + 线程池实现，能力略弱但可接受。
+5. ~~是否接受 1 个新依赖 `httpx`？~~ **已在 v1.1 修订中关闭**——§16.7 决定零新增依赖（同步 `requests` + `ThreadPoolExecutor` + `asyncio.Queue`），未来需要高并发流式时再评估是否引入 `httpx`。
 
-确认后即可按 §7 阶段表 M1 → M8 顺序推进。
+确认后即可按 §18 阶段表 M0 → M10 顺序推进。
 
 ---
 
-## 15. 前置项代码级核查结果（2026-05-06 实测）
+## 15. 前置项代码级核查结果（2026-05-11 实测）
 
-### 15.1 `validate_code` 实现现状 ⚠ 部分到位
+### 15.1 `validate_code` / `validate_code_strict` 实现现状 ✅ 已具备
 
-文件：[instock/core/backtest/strategy_sandbox.py](instock/core/backtest/strategy_sandbox.py) L60-L92
+文件：[instock/core/backtest/strategy_sandbox.py](instock/core/backtest/strategy_sandbox.py)
 
-**采用方式**：纯正则黑名单 + 模块白名单 + 必含 `def initialize` 检查。**没有 AST**。
+**当前实现**：
 
-**已覆盖**：`import os/sys/subprocess/shutil`、`__import__`、`eval/exec/compile/open`、`getattr/setattr/delattr`、`globals/locals`、`__class__/__bases__/__subclasses__/__mro__/__dict__/__globals__/__code__/__builtins__`、白名单 `math/numpy/pandas/talib/datetime/collections/functools/itertools/operator/jqdata/jqlib`。
+- `validate_code()`：正则黑名单 + 模块白名单 + 必含 `def initialize` 检查。
+- `validate_code_strict()`：先调用 `validate_code()`，再用 `ast.parse` / `ast.walk` 检查 `Import / ImportFrom / Attribute / Name / Call`，复用 `_ALLOWED_IMPORTS` 与 `_AST_FORBIDDEN_*` 黑名单。
+
+**已覆盖**：`import os/sys/subprocess/shutil`、`__import__`、`eval/exec/compile/open`、`getattr/setattr/delattr`、`globals/locals`、`vars/breakpoint/help/input`、`__class__/__bases__/__subclasses__/__mro__/__dict__/__globals__/__code__/__builtins__`、白名单 `math/numpy/pandas/talib/datetime/collections/functools/itertools/operator/jqdata/jqlib`。
 
 **正则可被绕过的形式（仅静态校验层面）**：
 
 ```python
-# 字符串拼接绕过 __import__ 黑名单
+# 1. 字符串拼接绕过 __import__ 黑名单
 m = '__imp' + 'ort__'
 __builtins__[m]('os')
 
-# 通过 type() 遍历类层次拿 object 的子类
-().__class__.__bases__[0].__subclasses__()  # __class__ 已被屏蔽，但 ().__class.__bases__ 可能漏
+# 2. 通过 __builtins__.__dict__ 取被屏蔽的内置（getattr 已在黑名单，但拼接后可绕过）
+g = __builtins__.__dict__.get('ge' + 'tattr')
 
-# unicode 同形字符
-import\u202eos     # 正则不一定匹配（取决于引擎）
+# 3. unicode RTL/控制字符注入（取决于正则引擎与 Python 解释器）
+# 例如混入 \u202e 等控制符的字面量，部分正则可能漏匹配
 ```
 
-**实际风险评估：低**。原因——运行时 [_create_safe_namespace()](instock/core/backtest/strategy_sandbox.py) L150 提供了**真正的双重防御**：
+> 注：早先示例 `().__class__.__bases__[0].__subclasses__()` **已被现有黑名单覆盖**（`__class__` / `__bases__` / `__subclasses__` 三者均已纳入），不属于真实绕过案例，不再列出。
+
+**实际风险评估：低**。原因——静态层已有 strict AST 校验，运行时 [_create_safe_namespace()](instock/core/backtest/strategy_sandbox.py) 还提供了第二层防御：
 
 - 自定义 `__builtins__` 字典只暴露 30 个安全函数，**移除了 `type / __import__ 原版`**。
 - `__import__` 替换为 `_safe_import`，遇到非白名单模块 `raise ImportError`。
@@ -732,82 +795,79 @@ import\u202eos     # 正则不一定匹配（取决于引擎）
 
 **结论**：
 
-1. AI 通道**可以**直接复用现有 `validate_code` + `compile_strategy` 双层防御。
-2. **建议但非阻塞**：M1 阶段补一个 `validate_code_ast()` 走 `ast.parse` + `NodeVisitor` 检查 `Import/ImportFrom/Attribute` 黑名单，作为第三层防御；新通道全部用 AST 版本。
-3. M1 启动**不被此项阻塞**。
+1. AI 通道必须直接调用现有 `validate_code_strict()`，不要重新实现一套 AST 校验。
+2. 普通用户手写保存链路可继续保留 `validate_code()`，避免扩大行为变更。
+3. M0 剩余工作从“新增 strict 校验”改为“确认 AI handler 接入 strict 校验，并运行/补齐相关 pytest”。
 
-### 15.2 回测错误回流 ❌ 不到位（必须补）
+### 15.2 回测错误回流 ✅ 已补基础设施，仍需端到端复核
 
-复核 [portfolioBacktestHandler.py](instock/web/portfolioBacktestHandler.py) L2092-L2150 `StartPortfolioBacktestHandler._run_and_finish`：
+当前仓库已存在 [task_recorder.py](instock/core/backtest/task_recorder.py)，并已在 [portfolioBacktestHandler.py](instock/web/portfolioBacktestHandler.py) 的失败分支中调用 `record_failed(...)`。对应测试 [test_backtest_task_recorder.py](tests/test_backtest_task_recorder.py) 已覆盖：
 
-```python
-def _run_and_finish():
-    try:
-        result = engine.run(...)
-        # ↓ 仅 status=='completed' 时才 INSERT
-        if result.get('status') == 'completed':
-            _insert_and_get_id('INSERT INTO cn_stock_backtest_portfolio ...')
-    except Exception as e:
-        # ↓ 异常路径只更新内存字典，没有 INSERT/UPDATE 数据库
-        task['result'] = {'status': 'error', 'message': str(e)}
-```
+- `record_failed(...)` 写入 `error_message` 与 `result_json`。
+- 长错误文本截断到 8KB。
+- `fetch_last_failure(strategy_id)` 返回最近失败记录。
+- DB 异常时安全返回 `None`。
 
-**问题**：
+**剩余复核点**：
 
-- 回测失败时**没有任何记录入库**，`error_message` 列永远是空的。
-- AI 修复闭环的"取最近一次失败的报错"无源可读。
-- 用户在历史列表里看不到失败任务。
+- 跑 `tests/test_backtest_task_recorder.py` 与失败回测端到端用例，确认同步入口与异步入口都能落 `status='failed'`。
+- AI 修复工具只读 `task_recorder.fetch_last_failure(strategy_id)`，不要直接拼 SQL 读表。
+- 若后续表结构再变更，`record_failed(...)` 仍需和 `_ensure_backtest_table()` 保持一致。
 
-**M1 必须补丁（10 分钟改动）**：
+**当前推荐接入模式**：
+
+> ⚠️ 不要在 handler 里复制粘贴 INSERT 语句；表结构变化时容易漏列。统一走 `task_recorder.record_failed(...)`，由该模块和 `_ensure_backtest_table()` 对齐表结构。
 
 ```python
 # 失败分支
 except Exception as e:
     err_text = traceback.format_exc()[:8000]
-    try:
-        _ensure_backtest_table()
-        _insert_and_get_id(
-            'INSERT INTO cn_stock_backtest_portfolio '
-            '(strategy_id, strategy_name, start_date, end_date, initial_cash, '
-            ' status, started_at, completed_at, error_message) '
-            'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)',
-            (strategy_id, strategy_name or None, start_date, end_date, initial_cash,
-             'failed', now, datetime.datetime.now(), err_text))
-    except Exception as ee:
-        logging.warning(f"失败任务持久化异常: {ee}")
+    from instock.core.backtest.task_recorder import record_failed
+    record_failed(
+        strategy_id=strategy_id,
+        strategy_name=strategy_name,
+        start_date=start_date,
+        end_date=end_date,
+        initial_cash=initial_cash,
+        benchmark=benchmark,
+        error_text=str(e),
+        traceback_text=err_text,
+        started_at=started_at,
+    )
     task['result'] = {'status': 'error', 'message': str(e), 'traceback': err_text}
 ```
 
-同样要改：`RunPortfolioBacktestHandler`（同步入口）的 try/except。
+同步入口与异步入口都应保持这一原则：失败也必须入库，并将 traceback 截断写入 `error_message`。
 
 ### 15.3 异步基础设施 ✅ 已具备
 
 `StartPortfolioBacktestHandler` 已使用 `tornado.gen.coroutine` + `ThreadPoolExecutor(max_workers=2)`。这意味着：
 
-- AI 路由可直接复用同款模式：handler `@gen.coroutine` + 把 LLM 调用扔线程池（同步 `requests`）或用 `httpx.AsyncClient` 与 `tornado.platform.asyncio`。
+- AI 路由可直接复用同款模式：handler `@gen.coroutine` / `async def` + 把 LLM 调用扔线程池（同步 `requests`），流式响应用 queue 传增量。
 - §10.2 提到的"IOLoop 阻塞"风险**已经有解法范例**，直接照抄即可。
 
 ### 15.4 阻塞性结论
 
 | 前置项 | 状态 | 是否阻塞 M1 |
 | --- | --- | --- |
-| 1. `validate_code` 含 AST | ❌ 仅正则；但运行时沙箱兜底 | **不阻塞**（可选加固） |
-| 2. 回测异常落 `error_message` | ❌ 缺失 | **阻塞 M4 修复闭环**（M1 可先做） |
+| 1. `validate_code_strict` 含 AST | ✅ 已存在 | 不阻塞；AI handler 必须接入 |
+| 2. 回测异常落 `error_message` | ✅ `task_recorder.record_failed` 已存在并已接入失败分支 | 不阻塞；需跑端到端验证 |
 | 3. nginx 部署 | 待用户确认 | 不阻塞，仅文档化 |
 | 4. 多用户/鉴权 | 单部署 | 不阻塞 |
-| 5. 接受 `httpx` 依赖 | 待用户确认 | 不阻塞（可降级同步） |
+| 5. 依赖策略 | 已取消 `httpx` 必选项 | 不阻塞；MVP 零新增依赖 |
 
 ---
 
 ## 16. 架构进一步优化（基于实测的修订）
 
-### 16.1 引入"AI 通道专用强校验" `validate_code_strict()`
+### 16.1 复用"AI 通道专用强校验" `validate_code_strict()`
 
-仅 AI 生成路径使用，普通用户手写代码继续走 `validate_code`，避免影响现有体验：
+当前仓库已在 `strategy_sandbox.py` 中提供 `validate_code_strict()`。AI 生成路径只需要复用它，普通用户手写代码继续走 `validate_code()`，避免影响现有体验。关键实现形态如下（示意，勿重复定义）：
 
 ```python
-# instock/core/backtest/strategy_sandbox.py 追加
+# instock/core/backtest/strategy_sandbox.py 内已有
 import ast
+# 直接复用同文件中的 _ALLOWED_IMPORTS；不要在同一个文件里 from .strategy_sandbox import 自己。
 
 _AST_FORBIDDEN_NAMES = {
     '__import__','eval','exec','compile','open','getattr','setattr','delattr',
@@ -849,21 +909,20 @@ def validate_code_strict(code_str: str) -> tuple[bool, str]:
 - `aiAssistantHandler.py` 在所有 `/strategy/generate|refine|repair` 完成 LLM 调用后强制走 `validate_code_strict`。
 - 普通 `SaveStrategyCodeHandler` 不变（向后兼容）。
 
-### 16.2 回测失败必入库——抽出统一的"任务状态机"
+### 16.2 回测失败必入库——复用统一的"任务状态机"
 
-不要再分散在各个 handler 里写 `INSERT (completed)` / `INSERT (failed)`，抽成一个模块：
+当前仓库已提供 `instock/core/backtest/task_recorder.py`，不要再分散在各个 handler 里写 `INSERT (completed)` / `INSERT (failed)`；后续只需复用并补端到端验证：
 
 ```python
-# instock/core/backtest/task_recorder.py（新增）
-def record_running(task_id, *, strategy_id, params): ...
-def record_completed(task_id, *, metrics, result_json): ...
-def record_failed(task_id, *, error_text, traceback_text): ...   # ← AI 修复读取这里
+# instock/core/backtest/task_recorder.py（已存在）
+def record_completed(*, strategy_id, strategy_name, start_date, end_date, initial_cash, benchmark, result, started_at=None): ...
+def record_failed(*, strategy_id, strategy_name, start_date, end_date, initial_cash, benchmark, error_text, traceback_text='', started_at=None, extra_result=None): ...
 def fetch_last_failure(strategy_id) -> dict | None: ...           # ← AI 修复工具用
 ```
 
 `RunPortfolioBacktestHandler` / `StartPortfolioBacktestHandler` / 失败分支统一调用 `record_*`。
 - 收益：日后给 AI agent 加 `get_last_failure(strategy_id)` 工具时只需 1 行实现。
-- 顺带修复了一个真实 bug（失败任务不入库）。
+- 已修复历史 bug（失败任务不入库）；剩余工作是跑端到端失败回测验证，确认前端历史列表也能看到失败任务。
 
 ### 16.3 `instock/lib/ai/` 模块依赖方向（防循环引用）
 
@@ -1032,8 +1091,8 @@ export const AI_ERROR_CODES = {
 
 | 阶段 | 关键动作 | 验收 |
 | --- | --- | --- |
-| **M0 前置加固** (~0.5 d) | (1) 补 `validate_code_strict`；(2) 补回测失败入库 + `task_recorder`；(3) 抽 `error_message` 读取工具 | pytest 覆盖 strict 校验 + 失败入库 |
-| **M1 AI 基础层** | `instock/lib/ai/` 骨架 + `OpenAICompat` provider（同步 `requests`）+ `config.py` 三层合并 + `audit.py` + `cn_stock_ai_call_log` 表 + CLI | `python -m instock.lib.ai.cli "ping"` 跑通 + 调用入库 |
+| **M0 前置复核** (~0.25 d) | (1) 确认 AI handler 后续统一调用现有 `validate_code_strict`；(2) 跑 `tests/test_strategy_sandbox_strict.py` + `tests/test_backtest_task_recorder.py`；(3) 做一次失败回测端到端验证 | strict 校验 + 失败入库测试通过，失败任务历史可查 |
+| **M1 AI 基础层** | `instock/lib/ai/` 骨架 + `OpenAICompat` provider（同步 `requests`）+ `config.py` 三层合并 + `audit.py` + `cn_stock_ai_call_log` 表 + CLI | `python -m instock.lib.ai "ping"` 跑通 + 调用入库 |
 | **M2 策略生成** | `strategy_coder` agent + `aiAssistantHandler.GenerateHandler`（异步线程池）+ `AiChatDrawer` 最小版 + 流式 SSE | prompt → 代码 → 灌入编辑器 |
 | **M3 校验闭环** | strict 校验失败自动重试 ≤3 轮 + 前端错误 UI | 故意写 `import os` 被自动修复 |
 | **M4 修复闭环** | `strategy_repairer` agent + `/strategy/repair` + 回测详情页"AI 修复"按钮 + 读 `task_recorder.fetch_last_failure` | 故意触发除零 → 一键修好 |
@@ -1044,16 +1103,30 @@ export const AI_ERROR_CODES = {
 | **M9 RAG** | `cn_stock_ai_kb` + FULLTEXT + `kb_search` 工具 + cron.workdayly 索引器 | "布林带"prompt 命中模板 |
 | **M10 编排 & 跨场景** | 顺序管线 `analyst→coder→tester` + IM 摘要/回测解读统一接入 | `moat_ai_service` 改用 lib/ai 后老用例不退化 |
 
-> **最小可演示**：M0 + M1 + M2（生成）+ M3（校验闭环）+ 最小流式即可线下演示，约 2–3 个工作单元。
+> **最小可演示**：M0 复核 + M1 + M2（生成）+ M3（校验闭环）+ 最小流式即可线下演示，约 2–3 个工作单元。
 
 ---
 
-## 19. 推荐立即开始 M0
+## 19. 推荐立即开始 M0 复核
 
-M0 是**纯本仓库内的 bug 修复 + 加固**，与 AI 无关，先做完之后 AI 各阶段都顺畅。建议立即开工：
+M0 现在不是从零实现，而是**复核已经落地的前置加固**，与 AI 无关，先跑通之后 AI 各阶段都顺畅。建议立即做：
 
-1. 在 [strategy_sandbox.py](instock/core/backtest/strategy_sandbox.py) 追加 `validate_code_strict()`。
-2. 新建 `instock/core/backtest/task_recorder.py` 抽取入库逻辑，`Run*` / `Start*` Handler 失败分支接入。
-3. 加 pytest：`tests/test_strategy_sandbox_strict.py` + `tests/test_backtest_task_recorder.py`。
+1. 运行 [test_strategy_sandbox_strict.py](tests/test_strategy_sandbox_strict.py) 与 [test_backtest_task_recorder.py](tests/test_backtest_task_recorder.py)。
+2. 手动触发一次同步/异步失败回测，确认 [task_recorder.py](instock/core/backtest/task_recorder.py) 写入 `status='failed'`、`error_message` 与 `result_json`。
+3. 在后续 `aiAssistantHandler.py` 实现时，把 `/strategy/generate|refine|repair` 的最终代码统一接入 `validate_code_strict()`，不要只走普通 `validate_code()`。
 
-完成 M0 后，AI 通道的"必备地基"全部就位，后续 M1+ 全是新增模块、零侵入。
+完成 M0 复核后，AI 通道的"必备地基"全部确认可用，后续 M1+ 主要是新增模块、低侵入接入。
+
+---
+
+## 20. CLI 入口约定（v1.1 新增）
+
+文档前后多处验收（§9 / §13 / §M1）都要求 `python -m instock.lib.ai "你好"` 跑通。Python 的 `-m <package>` 调用规则要求该 package 下存在 `__main__.py`，因此 M1 阶段需创建：
+
+```
+instock/lib/ai/
+├── __main__.py     # 内容仅一行：from .cli import main; main()
+└── cli.py          # 实际 argparse 实现（参数：--provider --model --agent --tools --stream ...）
+```
+
+若遗漏 `__main__.py`，命令会报 `No module named instock.lib.ai.__main__`。§10.8 目录树已包含这两个文件，此处单独提示以免实现时漏建。

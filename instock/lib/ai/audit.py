@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""AI 调用审计：写入 cn_stock_ai_call_log。
+
+此模块负责：
+  * 惰性建表（首次调用时 CREATE TABLE IF NOT EXISTS）
+  * 同步写入一条调用记录（失败仅记 warning，不影响业务）
+"""
+
+import json
+import logging
+import threading
+from typing import Any, Dict, Optional
+
+import instock.lib.database as mdb
+
+__author__ = 'InStock'
+__date__ = '2026/05/11'
+
+_TABLE = 'cn_stock_ai_call_log'
+_table_ready = False
+_lock = threading.Lock()
+
+_DDL = f"""
+CREATE TABLE IF NOT EXISTS {_TABLE} (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    scene VARCHAR(32) NOT NULL COMMENT 'strategy_gen / strategy_repair / im_summary / ...',
+    agent VARCHAR(64) NULL,
+    provider VARCHAR(32) NOT NULL,
+    model VARCHAR(64) NOT NULL,
+    user_id VARCHAR(64) NULL COMMENT '单部署下存 client_ip，多用户化后存真实用户 ID',
+    prompt MEDIUMTEXT,
+    response MEDIUMTEXT,
+    tools_used JSON NULL,
+    prompt_tokens INT,
+    completion_tokens INT,
+    total_tokens INT,
+    latency_ms INT,
+    ok TINYINT(1) NOT NULL,
+    error VARCHAR(512) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_scene_time (scene, created_at),
+    INDEX idx_user_time (user_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+""".strip()
+
+
+def _ensure_table() -> None:
+    global _table_ready
+    if _table_ready:
+        return
+    with _lock:
+        if _table_ready:
+            return
+        try:
+            with mdb.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(_DDL)
+            _table_ready = True
+        except Exception as exc:
+            logging.warning(f"[ai.audit] 建表失败: {exc}")
+
+
+def record_call(
+    *,
+    scene: str,
+    provider: str,
+    model: str,
+    prompt: str,
+    response: str,
+    ok: bool,
+    agent: Optional[str] = None,
+    user_id: Optional[str] = None,
+    tools_used: Optional[Any] = None,
+    prompt_tokens: Optional[int] = None,
+    completion_tokens: Optional[int] = None,
+    total_tokens: Optional[int] = None,
+    latency_ms: Optional[int] = None,
+    error: Optional[str] = None,
+) -> Optional[int]:
+    """写入一条 AI 调用记录，返回自增 id（失败返回 None，不抛异常）。"""
+    _ensure_table()
+    try:
+        with mdb.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f'INSERT INTO {_TABLE} '
+                    '(scene, agent, provider, model, user_id, prompt, response, tools_used, '
+                    ' prompt_tokens, completion_tokens, total_tokens, latency_ms, ok, error) '
+                    'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                    (
+                        scene, agent, provider, model, user_id,
+                        prompt, response,
+                        json.dumps(tools_used, ensure_ascii=False) if tools_used is not None else None,
+                        prompt_tokens, completion_tokens, total_tokens,
+                        latency_ms, 1 if ok else 0,
+                        (error or '')[:512] or None,
+                    ),
+                )
+                cur.execute('SELECT LAST_INSERT_ID()')
+                row = cur.fetchone()
+                return int(row[0]) if row and row[0] is not None else None
+    except Exception as exc:
+        logging.warning(f"[ai.audit] 写入调用日志失败: {exc}")
+        return None
