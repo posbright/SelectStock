@@ -9,6 +9,7 @@
 
 import json
 import logging
+import os
 import threading
 from typing import Any, Dict, Optional
 
@@ -20,6 +21,23 @@ __date__ = '2026/05/11'
 _TABLE = 'cn_stock_ai_call_log'
 _table_ready = False
 _lock = threading.Lock()
+
+# A3：审计字段截断上限，避免超出 MySQL max_allowed_packet（默认 4MB）
+_MAX_TEXT_BYTES = max(1024, int(os.environ.get('INSTOCK_AI_AUDIT_MAX_BYTES', str(128 * 1024))))
+
+
+def _truncate_for_audit(text: Optional[str]) -> Optional[str]:
+    """按字节安全截断，保留 UTF-8 边界。"""
+    if text is None:
+        return None
+    if not isinstance(text, str):
+        text = str(text)
+    encoded = text.encode('utf-8')
+    if len(encoded) <= _MAX_TEXT_BYTES:
+        return text
+    truncated = encoded[:_MAX_TEXT_BYTES].decode('utf-8', errors='ignore')
+    suffix = f"\n...[TRUNCATED: original {len(encoded)} bytes]"
+    return truncated + suffix
 
 _DDL = f"""
 CREATE TABLE IF NOT EXISTS {_TABLE} (
@@ -90,7 +108,7 @@ def record_call(
                     'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
                     (
                         scene, agent, provider, model, user_id,
-                        prompt, response,
+                        _truncate_for_audit(prompt), _truncate_for_audit(response),
                         json.dumps(tools_used, ensure_ascii=False) if tools_used is not None else None,
                         prompt_tokens, completion_tokens, total_tokens,
                         latency_ms, 1 if ok else 0,

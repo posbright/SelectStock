@@ -7,6 +7,7 @@
 
 import json
 import logging
+import re
 from typing import Iterator, List
 
 import requests
@@ -16,6 +17,18 @@ from instock.lib.ai.providers.base import ChatMessage, ChatResult, Provider
 
 __author__ = 'InStock'
 __date__ = '2026/05/11'
+
+# C2：异常消息中可能回显请求头/凭证 → 在外抛前做正则脱敏
+_SECRET_RE = re.compile(
+    r'(Bearer\s+[A-Za-z0-9._\-]{8,}|sk-[A-Za-z0-9._\-]{8,}|api[_-]?key["\']?\s*[:=]\s*["\']?[A-Za-z0-9._\-]{8,})',
+    re.IGNORECASE,
+)
+
+
+def _scrub(text: str) -> str:
+    if not text:
+        return text
+    return _SECRET_RE.sub('[REDACTED]', text)
 
 
 class OpenAICompatProvider(Provider):
@@ -101,16 +114,16 @@ class OpenAICompatProvider(Provider):
                 timeout=kwargs.get('timeout', self.config.timeout),
             )
         except requests.RequestException as exc:
-            raise ProviderError(f'网络错误: {exc}') from exc
+            raise ProviderError(f'网络错误: {_scrub(str(exc))}') from exc
 
         try:
             if resp.status_code == 429:
-                raise RateLimitError(f'上游 429: {resp.text[:200]}')
+                raise RateLimitError(f'上游 429: {_scrub(resp.text[:200])}')
             if resp.status_code >= 400:
                 raise ProviderError(
                     f'HTTP {resp.status_code}',
                     status_code=resp.status_code,
-                    body=resp.text[:500],
+                    body=_scrub(resp.text[:500]),
                 )
 
             for raw_line in resp.iter_lines(decode_unicode=True):

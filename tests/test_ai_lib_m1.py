@@ -137,5 +137,67 @@ class TestRunChat(unittest.TestCase):
         self.assertIn('429', kwargs['error'])
 
 
+class TestAuditTruncation(unittest.TestCase):
+    """A3：审计写入前对 prompt/response 做按字节截断。"""
+
+    def test_truncate_long_text(self):
+        from instock.lib.ai import audit as _audit
+        original_max = _audit._MAX_TEXT_BYTES
+        _audit._MAX_TEXT_BYTES = 100
+        try:
+            big = 'a' * 10_000
+            out = _audit._truncate_for_audit(big)
+            # 包含 TRUNCATED 标记，且总长度小于 raw（保留首部）
+            self.assertIn('TRUNCATED', out)
+            self.assertLess(len(out), len(big))
+            self.assertTrue(out.startswith('a' * 50))
+        finally:
+            _audit._MAX_TEXT_BYTES = original_max
+
+    def test_short_text_passthrough(self):
+        from instock.lib.ai import audit as _audit
+        self.assertEqual(_audit._truncate_for_audit('hi'), 'hi')
+        self.assertIsNone(_audit._truncate_for_audit(None))
+
+
+class TestProviderSecretScrub(unittest.TestCase):
+    """C2：异常消息中含 Bearer token / sk-xxx / api_key 应脱敏。"""
+
+    def test_scrub_bearer(self):
+        from instock.lib.ai.providers.openai_compat import _scrub
+        s = "401 Unauthorized: Bearer sk-abcdef1234567890 invalid"
+        out = _scrub(s)
+        self.assertNotIn('sk-abcdef', out)
+        self.assertIn('[REDACTED]', out)
+
+    def test_scrub_api_key_field(self):
+        from instock.lib.ai.providers.openai_compat import _scrub
+        s = '{"error":"api_key=sk-1234567890abcdef invalid"}'
+        out = _scrub(s)
+        self.assertNotIn('1234567890abcdef', out)
+
+
+class TestRunChatAuditFailure(unittest.TestCase):
+    """J1：DB 不可达时 run_chat 仍应正常返回内容。"""
+
+    @patch('instock.lib.ai.config._load_from_env', return_value={'api_key': 'k', 'api_base': 'http://x'})
+    @patch('instock.lib.ai.config._load_from_db', return_value={})
+    def test_audit_failure_does_not_break_run_chat(self, *_):
+        body = {'choices': [{'message': {'content': 'hi'}, 'finish_reason': 'stop'}],
+                'usage': {'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2}}
+
+        def _fake_post(*args, **kwargs):
+            r = MagicMock()
+            r.status_code = 200
+            r.json = lambda: body
+            return r
+
+        with patch('instock.lib.ai.providers.openai_compat.requests.post',
+                   side_effect=_fake_post), \
+             patch('instock.lib.ai.audit.record_call', side_effect=Exception('DB down')):
+            result = run_chat('ping', scene='unit_test')
+        self.assertEqual(result, 'hi')
+
+
 if __name__ == '__main__':
     unittest.main()

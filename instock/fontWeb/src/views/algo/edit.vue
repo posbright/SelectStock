@@ -318,6 +318,7 @@ async function doSave() {
       if (!strategy.value.id && data?.id) strategy.value.id = data.id
       dirty.value = false
       aiMeta.value = null  // 已落库，下次保存默认按手工
+      aiAppliedSnapshot.value = ''
       ElMessage.success('已保存')
     } else {
       ElMessage.error(msg)
@@ -565,11 +566,21 @@ window.addEventListener('resize', () => chart?.resize())
 
 // AI 助手：把生成代码灌入编辑器
 const aiMeta = ref<{ source: 'ai'; ai_prompt: string; ai_agent: string; ai_model?: string } | null>(null)
+// 应用 AI 代码后的快照，用于检测用户是否在此基础上手工修改
+const aiAppliedSnapshot = ref<string>('')
 function onAiApply(newCode: string, meta: { source: 'ai'; ai_prompt: string; ai_agent: string; ai_model?: string }) {
   strategy.value.code = newCode
   aiMeta.value = meta
+  aiAppliedSnapshot.value = newCode
   dirty.value = true
 }
+// F2：用户在 AI 应用基础上手工修改代码 → 立即作废 ai 元数据，避免 source='ai' 但代码已被人改的语义错乱
+watch(() => strategy.value.code, (newCode) => {
+  if (aiMeta.value && newCode !== aiAppliedSnapshot.value) {
+    aiMeta.value = null
+    aiAppliedSnapshot.value = ''
+  }
+})
 </script>
 
 <style scoped>

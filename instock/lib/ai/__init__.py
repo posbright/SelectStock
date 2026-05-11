@@ -11,6 +11,7 @@
 后续阶段（M6+）会扩展 run_agent / 工具循环 / 编排管线。
 """
 
+import logging
 import time
 from typing import Any, Dict, Iterator, List, Optional
 
@@ -82,21 +83,25 @@ def run_chat(
         raise
     finally:
         latency_ms = int((time.time() - started) * 1000)
-        audit.record_call(
-            scene=scene,
-            agent=agent,
-            provider=cfg.provider,
-            model=cfg.model,
-            user_id=user_id,
-            prompt=prompt,
-            response=content,
-            ok=ok,
-            prompt_tokens=result.prompt_tokens if result else None,
-            completion_tokens=result.completion_tokens if result else None,
-            total_tokens=result.total_tokens if result else None,
-            latency_ms=latency_ms,
-            error=err_text,
-        )
+        try:
+            audit.record_call(
+                scene=scene,
+                agent=agent,
+                provider=cfg.provider,
+                model=cfg.model,
+                user_id=user_id,
+                prompt=prompt,
+                response=content,
+                ok=ok,
+                prompt_tokens=result.prompt_tokens if result else None,
+                completion_tokens=result.completion_tokens if result else None,
+                total_tokens=result.total_tokens if result else None,
+                latency_ms=latency_ms,
+                error=err_text,
+            )
+        except Exception as audit_exc:
+            # J1：审计写入错误不得遮蔽业务返回值或原始异常
+            logging.warning(f'[ai.run_chat] 审计写入失败（忽略）: {audit_exc}')
 
 
 def stream_chat(
@@ -127,15 +132,18 @@ def stream_chat(
         raise
     finally:
         latency_ms = int((time.time() - started) * 1000)
-        audit.record_call(
-            scene=scene,
-            agent=agent,
-            provider=cfg.provider,
-            model=cfg.model,
-            user_id=user_id,
-            prompt=prompt,
-            response=''.join(pieces),
-            ok=ok,
-            latency_ms=latency_ms,
-            error=err_text,
-        )
+        try:
+            audit.record_call(
+                scene=scene,
+                agent=agent,
+                provider=cfg.provider,
+                model=cfg.model,
+                user_id=user_id,
+                prompt=prompt,
+                response=''.join(pieces),
+                ok=ok,
+                latency_ms=latency_ms,
+                error=err_text,
+            )
+        except Exception as audit_exc:
+            logging.warning(f'[ai.stream_chat] 审计写入失败（忽略）: {audit_exc}')

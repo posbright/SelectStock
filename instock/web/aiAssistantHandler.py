@@ -14,6 +14,7 @@ M2 提供：
 
 import json
 import logging
+import os
 import re
 import queue
 import threading
@@ -91,9 +92,16 @@ def _call_ai_blocking(prompt: str, system: str, scene: str, agent: str, user_id:
     return content, cfg.model
 
 
-# M3：strict 校验失败自动重试上限。设计为环境可调，方便测试。
-import os as _os
-_MAX_REPAIR_ATTEMPTS = max(0, int(_os.environ.get('INSTOCK_AI_REPAIR_MAX_ATTEMPTS', '3')))
+def _get_max_repair_attempts() -> int:
+    """M3：strict 校验失败自动重试上限。每次调用读环境变量，便于测试。"""
+    try:
+        return max(0, int(os.environ.get('INSTOCK_AI_REPAIR_MAX_ATTEMPTS', '3')))
+    except (TypeError, ValueError):
+        return 3
+
+
+# 单次生成上限（防止内存/带宽攻击）—— L2
+_MAX_GENERATED_CHARS = max(8 * 1024, int(os.environ.get('INSTOCK_AI_MAX_GENERATED_CHARS', str(256 * 1024))))
 
 
 def _build_repair_prompt(prev_code: str, err: str, original_intent: str) -> str:
@@ -155,10 +163,13 @@ class GenerateStrategyHandler(webBase.BaseHandler, ABC):
         code = _strip_code_fence(raw)
         ok, err = _validate_or_msg(code)
         attempts = 0
+        repair_status = 'success' if ok else 'unrepaired'
+        max_attempts = _get_max_repair_attempts()
         # M3：strict 校验失败自动重试 ≤ N 轮
-        if not ok and _MAX_REPAIR_ATTEMPTS > 0:
+        if not ok and max_attempts > 0:
             repairer_sys = prompt_loader.load('strategy_repairer')
-            for _ in range(_MAX_REPAIR_ATTEMPTS):
+            prev_signature = (code, err)
+            for _ in range(max_attempts):
                 attempts += 1
                 fix_prompt = _build_repair_prompt(code, err, user_prompt)
                 try:
@@ -170,16 +181,26 @@ class GenerateStrategyHandler(webBase.BaseHandler, ABC):
                         _client_ip(self), overrides,
                     )
                 except RateLimitError as exc:
-                    # 重试中触发限流：返回最近一次失败结果（已包含 raw/error）
                     logging.warning(f'生成自动修复阶段触发限流: {exc}')
+                    repair_status = 'rate_limited'
                     break
                 except (ProviderError, AIError) as exc:
                     logging.warning(f'生成自动修复阶段 AI 调用失败: {exc}')
+                    repair_status = 'provider_error'
                     break
                 code = _strip_code_fence(raw)
                 ok, err = _validate_or_msg(code)
                 if ok:
+                    repair_status = 'success'
                     break
+                # D1：LLM 返回与上一轮完全相同的错误代码——提前退出避免浪费 token
+                signature = (code, err)
+                if signature == prev_signature:
+                    repair_status = 'no_progress'
+                    break
+                prev_signature = signature
+            else:
+                repair_status = 'max_attempts'
         payload = {
             'code': 0 if ok else -2,
             'msg': '' if ok else f'代码沙箱校验失败: {err}',
@@ -190,6 +211,7 @@ class GenerateStrategyHandler(webBase.BaseHandler, ABC):
                 'validation_error': err,
                 'model': resolved_model,
                 'repair_attempts': attempts,
+                'repair_status': repair_status,
             },
         }
         self.set_header('Content-Type', 'application/json')
@@ -247,9 +269,12 @@ class RefineStrategyHandler(webBase.BaseHandler, ABC):
         code = _strip_code_fence(raw)
         ok, err = _validate_or_msg(code)
         attempts = 0
-        if not ok and _MAX_REPAIR_ATTEMPTS > 0:
+        repair_status = 'success' if ok else 'unrepaired'
+        max_attempts = _get_max_repair_attempts()
+        if not ok and max_attempts > 0:
             repairer_sys = prompt_loader.load('strategy_repairer')
-            for _ in range(_MAX_REPAIR_ATTEMPTS):
+            prev_signature = (code, err)
+            for _ in range(max_attempts):
                 attempts += 1
                 fix_prompt = _build_repair_prompt(code, err, user_prompt)
                 try:
@@ -262,21 +287,32 @@ class RefineStrategyHandler(webBase.BaseHandler, ABC):
                     )
                 except RateLimitError as exc:
                     logging.warning(f'修改自动修复阶段触发限流: {exc}')
+                    repair_status = 'rate_limited'
                     break
                 except (ProviderError, AIError) as exc:
                     logging.warning(f'修改自动修复阶段 AI 调用失败: {exc}')
+                    repair_status = 'provider_error'
                     break
                 code = _strip_code_fence(raw)
                 ok, err = _validate_or_msg(code)
                 if ok:
+                    repair_status = 'success'
                     break
+                signature = (code, err)
+                if signature == prev_signature:
+                    repair_status = 'no_progress'
+                    break
+                prev_signature = signature
+            else:
+                repair_status = 'max_attempts'
         self.set_header('Content-Type', 'application/json')
         self.write(json.dumps({
             'code': 0 if ok else -2,
             'msg': '' if ok else f'代码沙箱校验失败: {err}',
             'data': {'code': code, 'raw': raw, 'validated': ok,
                      'validation_error': err, 'model': resolved_model,
-                     'repair_attempts': attempts},
+                     'repair_attempts': attempts,
+                     'repair_status': repair_status},
         }, ensure_ascii=False))
 
 
@@ -358,9 +394,12 @@ class RepairStrategyHandler(webBase.BaseHandler, ABC):
         code = _strip_code_fence(raw)
         ok, err = _validate_or_msg(code)
         attempts = 0
-        if not ok and _MAX_REPAIR_ATTEMPTS > 0:
+        repair_status = 'success' if ok else 'unrepaired'
+        max_attempts = _get_max_repair_attempts()
+        if not ok and max_attempts > 0:
             repairer_sys = prompt_loader.load('strategy_repairer')
-            for _ in range(_MAX_REPAIR_ATTEMPTS):
+            prev_signature = (code, err)
+            for _ in range(max_attempts):
                 attempts += 1
                 fix_prompt = _build_repair_prompt(code, err, error_text or '原始代码有安全问题')
                 try:
@@ -373,14 +412,24 @@ class RepairStrategyHandler(webBase.BaseHandler, ABC):
                     )
                 except RateLimitError as exc:
                     logging.warning(f'修复重试触发限流: {exc}')
+                    repair_status = 'rate_limited'
                     break
                 except (ProviderError, AIError) as exc:
                     logging.warning(f'修复重试 AI 调用失败: {exc}')
+                    repair_status = 'provider_error'
                     break
                 code = _strip_code_fence(raw)
                 ok, err = _validate_or_msg(code)
                 if ok:
+                    repair_status = 'success'
                     break
+                signature = (code, err)
+                if signature == prev_signature:
+                    repair_status = 'no_progress'
+                    break
+                prev_signature = signature
+            else:
+                repair_status = 'max_attempts'
         self.set_header('Content-Type', 'application/json')
         self.write(json.dumps({
             'code': 0 if ok else -2,
@@ -390,6 +439,7 @@ class RepairStrategyHandler(webBase.BaseHandler, ABC):
                 'validated': ok, 'validation_error': err,
                 'model': resolved_model,
                 'repair_attempts': attempts,
+                'repair_status': repair_status,
                 'failure': {
                     'error_message': error_text,
                     'started_at': str(last.get('started_at') or ''),
@@ -499,6 +549,7 @@ class GenerateStrategyStreamHandler(webBase.BaseHandler, ABC):
         self.set_header('X-Accel-Buffering', 'no')
 
         q: 'queue.Queue' = queue.Queue(maxsize=64)
+        cancel_event = threading.Event()  # E1：消费端通知生产端停止
 
         def _producer():
             try:
@@ -506,7 +557,14 @@ class GenerateStrategyStreamHandler(webBase.BaseHandler, ABC):
                     user_prompt, scene='strategy_gen_stream', system=system,
                     agent='strategy_coder', user_id=user_id, overrides=overrides,
                 ):
-                    q.put(('chunk', piece))
+                    if cancel_event.is_set():
+                        break
+                    try:
+                        # 队列满 1s 仍未被消费 → 视为客户端落后，提前终止以释放上游连接
+                        q.put(('chunk', piece), timeout=1.0)
+                    except queue.Full:
+                        cancel_event.set()
+                        break
             except RateLimitError as exc:
                 q.put(('error', {'code': 429, 'msg': f'触发限流: {exc}'}))
             except (ProviderError, AIError) as exc:
@@ -515,40 +573,73 @@ class GenerateStrategyStreamHandler(webBase.BaseHandler, ABC):
                 logging.exception('GenerateStrategyStreamHandler producer 异常')
                 q.put(('error', {'code': -1, 'msg': f'内部错误: {exc}'}))
             finally:
-                q.put((_STREAM_SENTINEL, None))
+                try:
+                    q.put((_STREAM_SENTINEL, None), timeout=1.0)
+                except queue.Full:
+                    pass
 
         threading.Thread(target=_producer, name='ai-stream-producer', daemon=True).start()
 
         pieces = []
+        total_chars = 0
+        truncated = False
         loop = IOLoop.current()
         try:
             while True:
-                item = yield loop.run_in_executor(None, q.get)
+                # E2：用共享 _AI_EXECUTOR 而不是默认线程池
+                item = yield loop.run_in_executor(_get_executor(), q.get)
                 kind, payload = item
                 if kind is _STREAM_SENTINEL:
                     break
                 if kind == 'chunk':
                     pieces.append(payload)
-                    self.write('data: ' + json.dumps(
-                        {'type': 'chunk', 'text': payload}, ensure_ascii=False) + '\n\n')
-                    yield self.flush()
+                    total_chars += len(payload)
+                    # L2：单次生成上限
+                    if total_chars > _MAX_GENERATED_CHARS:
+                        truncated = True
+                        cancel_event.set()
+                        self.write('data: ' + json.dumps(
+                            {'type': 'error', 'code': -1,
+                             'msg': f'生成内容超过上限 {_MAX_GENERATED_CHARS} 字符，已截断'},
+                            ensure_ascii=False) + '\n\n')
+                        try:
+                            yield self.flush()
+                        except Exception:
+                            pass
+                        break
+                    try:
+                        self.write('data: ' + json.dumps(
+                            {'type': 'chunk', 'text': payload}, ensure_ascii=False) + '\n\n')
+                        yield self.flush()
+                    except Exception:
+                        # E1：客户端断开 → 通知生产端立即结束
+                        cancel_event.set()
+                        return
                 elif kind == 'error':
-                    self.write('data: ' + json.dumps(
-                        {'type': 'error', **payload}, ensure_ascii=False) + '\n\n')
-                    yield self.flush()
+                    try:
+                        self.write('data: ' + json.dumps(
+                            {'type': 'error', **payload}, ensure_ascii=False) + '\n\n')
+                        yield self.flush()
+                    except Exception:
+                        pass
+                    cancel_event.set()
                     return
         except Exception:
             logging.exception('GenerateStrategyStreamHandler 写出异常')
+            cancel_event.set()
             return
 
         full = ''.join(pieces)
         code = _strip_code_fence(full)
         ok, err = _validate_or_msg(code)
         attempts = 0
+        repair_status = 'success' if ok else 'unrepaired'
+        max_attempts = _get_max_repair_attempts()
         # M3：流式生成完成后，如沙箱校验失败，串行做最多 N 次修复
-        if not ok and _MAX_REPAIR_ATTEMPTS > 0:
+        if not ok and not truncated and max_attempts > 0:
             repairer_sys = prompt_loader.load('strategy_repairer')
-            for _ in range(_MAX_REPAIR_ATTEMPTS):
+            prev_signature = (code, err)
+            for _ in range(max_attempts):
                 attempts += 1
                 fix_prompt = _build_repair_prompt(code, err, user_prompt)
                 try:
@@ -559,23 +650,47 @@ class GenerateStrategyStreamHandler(webBase.BaseHandler, ABC):
                         'strategy_gen_stream_repair', 'strategy_repairer',
                         _client_ip(self), overrides,
                     )
-                except (RateLimitError, ProviderError, AIError) as exc:
-                    logging.warning(f'SSE 修复阶段异常: {exc}')
+                except RateLimitError as exc:
+                    logging.warning(f'SSE 修复阶段触发限流: {exc}')
+                    repair_status = 'rate_limited'
                     break
-                self.write('data: ' + json.dumps(
-                    {'type': 'repair', 'attempt': attempts}, ensure_ascii=False) + '\n\n')
-                yield self.flush()
+                except (ProviderError, AIError) as exc:
+                    logging.warning(f'SSE 修复阶段 AI 调用失败: {exc}')
+                    repair_status = 'provider_error'
+                    break
+                try:
+                    self.write('data: ' + json.dumps(
+                        {'type': 'repair', 'attempt': attempts}, ensure_ascii=False) + '\n\n')
+                    yield self.flush()
+                except Exception:
+                    return
                 code = _strip_code_fence(raw)
                 ok, err = _validate_or_msg(code)
                 if ok:
+                    repair_status = 'success'
+                    full = raw  # D3：让 raw 反映最终被采用的代码来源
                     break
-        self.write('data: ' + json.dumps({
-            'type': 'done',
-            'code': code,
-            'raw': full,
-            'validated': ok,
-            'validation_error': err,
-            'model': resolved_model,
-            'repair_attempts': attempts,
-        }, ensure_ascii=False) + '\n\n')
-        yield self.flush()
+                signature = (code, err)
+                if signature == prev_signature:
+                    repair_status = 'no_progress'
+                    full = raw
+                    break
+                prev_signature = signature
+                full = raw  # 同步累计的 raw，使前端 done.raw 与 done.code 来自同一轮
+            else:
+                repair_status = 'max_attempts'
+        try:
+            self.write('data: ' + json.dumps({
+                'type': 'done',
+                'code': code,
+                'raw': full,
+                'validated': ok,
+                'validation_error': err,
+                'model': resolved_model,
+                'repair_attempts': attempts,
+                'repair_status': repair_status,
+                'truncated': truncated,
+            }, ensure_ascii=False) + '\n\n')
+            yield self.flush()
+        except Exception:
+            return

@@ -282,6 +282,8 @@ class RateLimitStatusTests(AsyncHTTPTestCase):
 
 # ─── M3：strict 校验失败自动重试 ≤3 轮 ──────────────────────────
 _UNSAFE_CODE = "import os\n" + _VALID_CODE
+_UNSAFE_CODE_2 = "import sys\n" + _VALID_CODE
+_UNSAFE_CODE_3 = "import subprocess\n" + _VALID_CODE
 
 
 class M3RetryTests(AsyncHTTPTestCase):
@@ -299,23 +301,51 @@ class M3RetryTests(AsyncHTTPTestCase):
         self.assertEqual(body['code'], 0, body)
         self.assertTrue(body['data']['validated'])
         self.assertEqual(body['data']['repair_attempts'], 1)
+        self.assertEqual(body['data']['repair_status'], 'success')
         self.assertNotIn('import os', body['data']['code'])
 
-    def test_generate_all_attempts_fail_returns_minus2(self):
-        """3 次重试都返回不安全代码 → 应返回 code=-2 + repair_attempts=3。"""
-        bad = [(_UNSAFE_CODE, 'm1')] * 4  # 1 次首轮 + 3 次重试
+    def test_generate_distinct_unsafe_3_attempts_max_attempts(self):
+        """3 次重试每次都返回**不同**的不安全代码 → repair_status='max_attempts', attempts=3。"""
+        bad = [(_UNSAFE_CODE, 'm1'), (_UNSAFE_CODE_2, 'm1'),
+               (_UNSAFE_CODE_3, 'm1'), (_UNSAFE_CODE, 'm1')]
         with mock.patch('instock.web.aiAssistantHandler._call_ai_blocking',
                         side_effect=bad):
             resp = self.fetch('/instock/api/ai/strategy/generate', method='POST',
                               body=json.dumps({'prompt': 'x'}))
         body = json.loads(resp.body)
-        self.assertEqual(body['code'], -2)
+        self.assertEqual(body['code'], -2)  # 校验失败统一返回 -2
         self.assertFalse(body['data']['validated'])
         self.assertEqual(body['data']['repair_attempts'], 3)
+        self.assertEqual(body['data']['repair_status'], 'max_attempts')
+
+    def test_generate_dedup_same_unsafe_returned_twice(self):
+        """D1：连续两次返回完全相同的不安全代码 → 提前退出 repair_status='no_progress'。"""
+        seq = [(_UNSAFE_CODE, 'm1'), (_UNSAFE_CODE, 'm1')]
+        with mock.patch('instock.web.aiAssistantHandler._call_ai_blocking',
+                        side_effect=seq):
+            resp = self.fetch('/instock/api/ai/strategy/generate', method='POST',
+                              body=json.dumps({'prompt': 'x'}))
+        body = json.loads(resp.body)
+        self.assertEqual(body['code'], -2)
+        self.assertEqual(body['data']['repair_attempts'], 1)
+        self.assertEqual(body['data']['repair_status'], 'no_progress')
+
+    def test_generate_repair_rate_limited_propagates_status(self):
+        """D2：重试中触发限流 → repair_status='rate_limited'，但响应仍是 200/-2 + 上次 raw。"""
+        from instock.lib.ai import RateLimitError
+        seq = [(_UNSAFE_CODE, 'm1'), RateLimitError('429 in retry')]
+        with mock.patch('instock.web.aiAssistantHandler._call_ai_blocking',
+                        side_effect=seq):
+            resp = self.fetch('/instock/api/ai/strategy/generate', method='POST',
+                              body=json.dumps({'prompt': 'x'}))
+        body = json.loads(resp.body)
+        self.assertEqual(body['code'], -2)
+        self.assertEqual(body['data']['repair_status'], 'rate_limited')
+        self.assertEqual(body['data']['repair_attempts'], 1)
 
     def test_refine_repair_attempts_succeed_on_2nd(self):
         """refine 首轮失败、第 2 轮成功 → repair_attempts=2。"""
-        seq = [(_UNSAFE_CODE, 'm1'), (_UNSAFE_CODE, 'm1'), (_VALID_CODE, 'm1')]
+        seq = [(_UNSAFE_CODE, 'm1'), (_UNSAFE_CODE_2, 'm1'), (_VALID_CODE, 'm1')]
         with mock.patch('instock.web.aiAssistantHandler._call_ai_blocking',
                         side_effect=seq):
             resp = self.fetch('/instock/api/ai/strategy/refine', method='POST',
@@ -323,6 +353,26 @@ class M3RetryTests(AsyncHTTPTestCase):
         body = json.loads(resp.body)
         self.assertEqual(body['code'], 0, body)
         self.assertEqual(body['data']['repair_attempts'], 2)
+        self.assertEqual(body['data']['repair_status'], 'success')
+
+    def test_max_attempts_env_override(self):
+        """D4：INSTOCK_AI_REPAIR_MAX_ATTEMPTS 应在每次请求时动态生效。"""
+        import os as _os
+        seq = [(_UNSAFE_CODE, 'm1')] * 5
+        original = _os.environ.get('INSTOCK_AI_REPAIR_MAX_ATTEMPTS')
+        _os.environ['INSTOCK_AI_REPAIR_MAX_ATTEMPTS'] = '0'
+        try:
+            with mock.patch('instock.web.aiAssistantHandler._call_ai_blocking',
+                            side_effect=seq):
+                resp = self.fetch('/instock/api/ai/strategy/generate', method='POST',
+                                  body=json.dumps({'prompt': 'x'}))
+            body = json.loads(resp.body)
+            self.assertEqual(body['data']['repair_attempts'], 0)
+        finally:
+            if original is None:
+                _os.environ.pop('INSTOCK_AI_REPAIR_MAX_ATTEMPTS', None)
+            else:
+                _os.environ['INSTOCK_AI_REPAIR_MAX_ATTEMPTS'] = original
 
 
 if __name__ == '__main__':

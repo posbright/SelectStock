@@ -1786,9 +1786,13 @@ class SaveStrategyCodeHandler(webBase.BaseHandler, ABC):
                 self.write(json.dumps({'code': -1, 'msg': '策略代码不能为空'}))
                 return
 
-            # 验证代码安全性
-            from instock.core.backtest.strategy_sandbox import validate_code
-            ok, err = validate_code(code)
+            # 验证代码安全性：AI 来源走 strict 校验（与 aiAssistantHandler 一致）
+            if source == 'ai':
+                from instock.core.backtest.strategy_sandbox import validate_code_strict
+                ok, err = validate_code_strict(code)
+            else:
+                from instock.core.backtest.strategy_sandbox import validate_code
+                ok, err = validate_code(code)
             if not ok:
                 self.write(json.dumps({'code': -1, 'msg': f'代码验证失败: {err}'}, ensure_ascii=False))
                 return

@@ -41,6 +41,7 @@ export interface StrategyAiResponse {
     validation_error?: string
     model?: string
     repair_attempts?: number
+    repair_status?: 'success' | 'unrepaired' | 'max_attempts' | 'no_progress' | 'rate_limited' | 'provider_error'
     failure?: {
       error_message: string
       started_at: string
@@ -69,7 +70,7 @@ export function aiChat(data: ChatRequest) {
 export type AiStreamEvent =
   | { type: 'chunk'; text: string }
   | { type: 'repair'; attempt: number }
-  | { type: 'done'; code: string; raw: string; validated: boolean; validation_error?: string; model?: string; repair_attempts?: number }
+  | { type: 'done'; code: string; raw: string; validated: boolean; validation_error?: string; model?: string; repair_attempts?: number; repair_status?: string; truncated?: boolean }
   | { type: 'error'; code: number; msg: string }
 
 /**
