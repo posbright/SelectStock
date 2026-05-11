@@ -16,6 +16,16 @@ class ChatMessage:
     content: str
     name: Optional[str] = None
     tool_call_id: Optional[str] = None
+    # M6：assistant 回复中携带的 tool_calls（用于将上一轮调用回放给 LLM）
+    tool_calls: Optional[List[Dict[str, Any]]] = None
+
+
+@dataclass
+class ToolCall:
+    """M6：function-calling 响应中的单个工具调用。"""
+    id: str
+    name: str
+    arguments: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -26,6 +36,7 @@ class ChatResult:
     total_tokens: int = 0
     finish_reason: str = ''
     raw: Dict[str, Any] = field(default_factory=dict)
+    tool_calls: List['ToolCall'] = field(default_factory=list)
 
 
 class Provider(ABC):

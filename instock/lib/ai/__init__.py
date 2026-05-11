@@ -18,17 +18,17 @@ from typing import Any, Dict, Iterator, List, Optional
 from instock.lib.ai import audit
 from instock.lib.ai.config import AIConfig, load_config
 from instock.lib.ai.exceptions import AIError, ProviderError, RateLimitError, ValidationError
-from instock.lib.ai.providers.base import ChatMessage, ChatResult, Provider
+from instock.lib.ai.providers.base import ChatMessage, ChatResult, Provider, ToolCall
 from instock.lib.ai.providers.openai_compat import OpenAICompatProvider
 
 __author__ = 'InStock'
 __date__ = '2026/05/11'
 
 __all__ = [
-    'run_chat', 'stream_chat', 'get_provider',
+    'run_chat', 'stream_chat', 'get_provider', 'run_agent',
     'AIConfig', 'load_config',
     'AIError', 'RateLimitError', 'ValidationError', 'ProviderError',
-    'ChatMessage', 'ChatResult', 'Provider',
+    'ChatMessage', 'ChatResult', 'Provider', 'ToolCall',
 ]
 
 
@@ -147,3 +147,9 @@ def stream_chat(
             )
         except Exception as audit_exc:
             logging.warning(f'[ai.stream_chat] 审计写入失败（忽略）: {audit_exc}')
+
+
+def run_agent(*args, **kwargs):
+    """惰性导入避免与 agent 模块的循环依赖。"""
+    from instock.lib.ai.agent import run_agent as _impl
+    return _impl(*args, **kwargs)

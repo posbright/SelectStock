@@ -13,7 +13,7 @@ from typing import Iterator, List
 import requests
 
 from instock.lib.ai.exceptions import ProviderError, RateLimitError
-from instock.lib.ai.providers.base import ChatMessage, ChatResult, Provider
+from instock.lib.ai.providers.base import ChatMessage, ChatResult, Provider, ToolCall
 
 __author__ = 'InStock'
 __date__ = '2026/05/11'
@@ -53,6 +53,7 @@ class OpenAICompatProvider(Provider):
                     'content': m.content,
                     'name': m.name,
                     'tool_call_id': m.tool_call_id,
+                    'tool_calls': m.tool_calls,
                 }.items() if v is not None}
                 for m in messages
             ],
@@ -92,8 +93,26 @@ class OpenAICompatProvider(Provider):
 
         try:
             choice = data['choices'][0]
-            content = (choice.get('message') or {}).get('content') or ''
+            message = choice.get('message') or {}
+            content = message.get('content') or ''
             finish_reason = choice.get('finish_reason') or ''
+            # M6：解析 tool_calls（OpenAI 函数调用协议）
+            tool_calls: List[ToolCall] = []
+            for tc in (message.get('tool_calls') or []):
+                func = tc.get('function') or {}
+                args_raw = func.get('arguments') or '{}'
+                if isinstance(args_raw, str):
+                    try:
+                        args = json.loads(args_raw)
+                    except (ValueError, TypeError):
+                        args = {'_raw': args_raw}
+                else:
+                    args = dict(args_raw) if isinstance(args_raw, dict) else {}
+                tool_calls.append(ToolCall(
+                    id=str(tc.get('id') or ''),
+                    name=str(func.get('name') or ''),
+                    arguments=args,
+                ))
         except (KeyError, IndexError, TypeError) as exc:
             raise ProviderError(f'响应结构异常: {str(data)[:200]}') from exc
 
@@ -105,6 +124,7 @@ class OpenAICompatProvider(Provider):
             total_tokens=int(usage.get('total_tokens') or 0),
             finish_reason=finish_reason,
             raw=data,
+            tool_calls=tool_calls,
         )
 
     def stream(self, messages: List[ChatMessage], **kwargs) -> Iterator[str]:
