@@ -66,6 +66,49 @@ export function aiChat(data: ChatRequest) {
   return request({ url: '/api/ai/chat', method: 'post', data })
 }
 
+// ── M5: provider/model/agent 元数据 ────────────────────────────
+export interface AiProviderProfile {
+  name: string
+  api_base?: string
+  has_key?: boolean
+  models?: string[]
+  default_model?: string
+}
+
+export interface AiAgentMeta {
+  name: string
+  display_name?: string
+  description?: string
+  is_builtin?: boolean
+  has_prompt?: boolean
+}
+
+export interface AiConfigResponse {
+  code: number
+  msg?: string
+  data?: {
+    profiles: AiProviderProfile[]
+    default: string
+    default_model?: string
+    temperature?: number
+    max_tokens?: number
+    timeout?: number
+    agents: AiAgentMeta[]
+  }
+}
+
+export function aiGetConfig() {
+  return request({ url: '/api/ai/config', method: 'get' }) as Promise<AiConfigResponse>
+}
+
+export function aiListAgents(includePrompt = false) {
+  return request({
+    url: '/api/ai/agents',
+    method: 'get',
+    params: includePrompt ? { include_prompt: 1 } : undefined,
+  })
+}
+
 // SSE 事件类型（B1）
 export type AiStreamEvent =
   | { type: 'chunk'; text: string }

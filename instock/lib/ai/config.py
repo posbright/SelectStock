@@ -140,3 +140,64 @@ def load_config(overrides: Optional[Dict[str, Any]] = None) -> AIConfig:
     if extra:
         cfg_kwargs.setdefault('extra', {}).update(extra)
     return AIConfig(**cfg_kwargs)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# M5：列出已配置的 provider 与 model（供 /ai/config 使用）
+#
+# 设计：
+#   * provider profile 通过 env 命名空间发现：
+#       INSTOCK_AI_PROVIDER_<NAME>_API_BASE
+#       INSTOCK_AI_PROVIDER_<NAME>_API_KEY
+#       INSTOCK_AI_PROVIDER_<NAME>_MODELS  (逗号分隔模型列表，可选)
+#       INSTOCK_AI_PROVIDER_<NAME>_DEFAULT_MODEL (可选)
+#   * 始终包含一个 fallback 'default' profile，对应 INSTOCK_AI_API_BASE/_KEY/_MODEL
+#   * api_key 永不外露（只返回是否已配置）
+# ──────────────────────────────────────────────────────────────────────
+def list_provider_profiles() -> Dict[str, Any]:
+    """枚举可用 provider profile。返回 {profiles: [...], default: <name>}。"""
+    import os
+    env = os.environ
+    profiles: Dict[str, Dict[str, Any]] = {}
+    prefix = 'INSTOCK_AI_PROVIDER_'
+    for k, _v in env.items():
+        if not k.startswith(prefix):
+            continue
+        rest = k[len(prefix):]
+        if '_' not in rest:
+            continue
+        name, attr = rest.split('_', 1)
+        name = name.lower()
+        prof = profiles.setdefault(name, {'name': name})
+        if attr == 'API_BASE':
+            prof['api_base'] = env[k]
+        elif attr == 'API_KEY':
+            prof['has_key'] = bool(env[k])
+        elif attr == 'MODELS':
+            prof['models'] = [m.strip() for m in env[k].split(',') if m.strip()]
+        elif attr == 'DEFAULT_MODEL':
+            prof['default_model'] = env[k]
+
+    # 总是追加 default profile（来自 INSTOCK_AI_* 直配）
+    cfg = load_config()
+    if 'default' not in profiles:
+        profiles['default'] = {
+            'name': 'default',
+            'api_base': cfg.api_base,
+            'has_key': bool(cfg.api_key),
+            'default_model': cfg.model,
+        }
+    # 默认 profile 名（启动时实际生效的那一个）
+    default_name = (env.get('INSTOCK_AI_DEFAULT_PROVIDER') or 'default').lower()
+    if default_name not in profiles:
+        default_name = 'default'
+
+    return {
+        'profiles': list(profiles.values()),
+        'default': default_name,
+        'default_model': cfg.model,
+        'temperature': cfg.temperature,
+        'max_tokens': cfg.max_tokens,
+        'timeout': cfg.timeout,
+    }
+

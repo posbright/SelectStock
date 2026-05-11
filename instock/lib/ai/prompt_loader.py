@@ -32,3 +32,33 @@ def load(name: str, *, refresh: bool = False) -> str:
 def clear_cache() -> None:
     with _lock:
         _cache.clear()
+
+
+# ── M5：内置 agent 元数据（提示词从 prompt/*.md 读取） ─────────
+_BUILTIN_AGENTS = [
+    {
+        'name': 'strategy_coder',
+        'display_name': '策略生成器',
+        'description': '根据自然语言描述生成 Pinetrade DSL 策略代码。',
+        'is_builtin': True,
+    },
+    {
+        'name': 'strategy_repairer',
+        'display_name': '策略修复器',
+        'description': '根据沙箱报错或回测错误信息修复策略代码。',
+        'is_builtin': True,
+    },
+]
+
+
+def list_agents():
+    """返回所有可用 agent 元数据列表（仅内置；自定义留给 M7）。"""
+    out = []
+    for meta in _BUILTIN_AGENTS:
+        prompt_text = load(meta['name'])
+        out.append({
+            **meta,
+            'system_prompt': prompt_text,
+            'has_prompt': bool(prompt_text),
+        })
+    return out

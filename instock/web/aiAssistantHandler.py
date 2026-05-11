@@ -497,6 +497,46 @@ class ChatHandler(webBase.BaseHandler, ABC):
 
 
 # ──────────────────────────────────────────────────────────────────────
+# 5) M5：列出 provider/model/agent 可选项
+#    GET /instock/api/ai/config   返回前端 picker 所需数据
+#    GET /instock/api/ai/agents   返回 agent 元数据（含 system_prompt）
+# ──────────────────────────────────────────────────────────────────────
+class GetAiConfigHandler(webBase.BaseHandler, ABC):
+    """暴露 provider profile + agent 列表 + 默认值（不含 api_key）。"""
+
+    def get(self):
+        try:
+            from instock.lib.ai.config import list_provider_profiles
+            data = list_provider_profiles()
+            data['agents'] = [
+                {k: v for k, v in a.items() if k != 'system_prompt'}
+                for a in prompt_loader.list_agents()
+            ]
+            self.set_header('Content-Type', 'application/json')
+            self.write(json.dumps({'code': 0, 'data': data}, ensure_ascii=False))
+        except Exception as exc:
+            logging.exception('GetAiConfigHandler 异常')
+            _write_error(self, -1, f'读取 AI 配置失败: {exc}')
+
+
+class ListAiAgentsHandler(webBase.BaseHandler, ABC):
+    """列出 agent 详情，可选 ?include_prompt=1 一并返回 system_prompt。"""
+
+    def get(self):
+        try:
+            include_prompt = self.get_argument('include_prompt', '0') in ('1', 'true', 'yes')
+            agents = prompt_loader.list_agents()
+            if not include_prompt:
+                agents = [{k: v for k, v in a.items() if k != 'system_prompt'} for a in agents]
+            self.set_header('Content-Type', 'application/json')
+            self.write(json.dumps({'code': 0, 'data': {'agents': agents}},
+                                  ensure_ascii=False))
+        except Exception as exc:
+            logging.exception('ListAiAgentsHandler 异常')
+            _write_error(self, -1, f'读取 agent 列表失败: {exc}')
+
+
+# ──────────────────────────────────────────────────────────────────────
 # helpers
 # ──────────────────────────────────────────────────────────────────────
 def _build_overrides(body: dict) -> dict:

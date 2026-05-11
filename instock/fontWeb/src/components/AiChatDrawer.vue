@@ -7,6 +7,12 @@
     :before-close="handleClose"
   >
     <div class="ai-drawer">
+      <!-- M5: provider/model + agent 选择 -->
+      <div class="ai-pickers">
+        <AiModelPicker v-model="modelSel" />
+        <AiAgentPicker v-model="agentSel" :default-agent="defaultAgentForMode" />
+      </div>
+
       <!-- 模式切换 -->
       <el-radio-group v-model="mode" size="small" style="margin-bottom: 12px;">
         <el-radio-button value="generate">生成新策略</el-radio-button>
@@ -100,6 +106,8 @@ import {
   aiGenerateStrategy, aiRefineStrategy, aiRepairStrategy,
   type StrategyAiResponse,
 } from '../api/ai'
+import AiModelPicker from './AiModelPicker.vue'
+import AiAgentPicker from './AiAgentPicker.vue'
 
 type FailureInfo = {
   error_message: string
@@ -132,6 +140,19 @@ const visible = computed({
 })
 
 const mode = ref<'generate' | 'refine' | 'repair'>(props.defaultMode || 'generate')
+
+// M5: provider/model/agent 选择（持久化由各 picker 自负责）
+const modelSel = ref<{ provider?: string; model?: string }>({})
+const agentSel = ref<string>('')
+const defaultAgentForMode = computed(() =>
+  mode.value === 'repair' ? 'strategy_repairer' : 'strategy_coder')
+
+function _overrides() {
+  const o: Record<string, any> = {}
+  if (modelSel.value.provider) o.provider = modelSel.value.provider
+  if (modelSel.value.model) o.model = modelSel.value.model
+  return o
+}
 
 // 抽屉打开时若指定了 defaultMode，则按指定模式重置（避免用户上次切换的 mode 残留）
 watch(() => props.modelValue, (v) => {
@@ -179,17 +200,20 @@ async function run() {
   loading.value = true
   try {
     let resp: StrategyAiResponse
+    const ov = _overrides()
     if (mode.value === 'generate') {
-      resp = await aiGenerateStrategy({ prompt: prompt.value }) as any
+      resp = await aiGenerateStrategy({ prompt: prompt.value, ...ov }) as any
     } else if (mode.value === 'refine') {
       resp = await aiRefineStrategy({
         prompt: prompt.value,
         code: props.currentCode || '',
+        ...ov,
       }) as any
     } else {
       resp = await aiRepairStrategy({
         strategy_id: props.strategyId!,
         code: props.currentCode || undefined,
+        ...ov,
       }) as any
     }
 
@@ -222,7 +246,7 @@ async function run() {
 
 function apply() {
   if (!lastCode.value) return
-  const agent = mode.value === 'repair' ? 'strategy_repairer' : 'strategy_coder'
+  const agent = agentSel.value || defaultAgentForMode.value
   emit('apply', lastCode.value, {
     source: 'ai',
     ai_prompt: prompt.value || (mode.value === 'repair' ? '[repair from last failure]' : ''),
@@ -250,6 +274,7 @@ function handleClose(done: () => void) {
 
 <style scoped>
 .ai-drawer { padding: 0 16px; }
+.ai-pickers { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
 .section-label { font-size: 13px; color: #606266; margin: 12px 0 6px; font-weight: 500; }
 .ai-actions { margin-top: 12px; display: flex; gap: 8px; }
 .failure-block, .result-block { margin-top: 16px; }
