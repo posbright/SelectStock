@@ -304,55 +304,39 @@ class MoatAIService:
         return scorecard
     
     def _call_ai(self, prompt: str) -> Optional[str]:
-        """
-        调用AI接口
-        
-        注意：这是一个接口框架，实际使用需要根据选择的AI服务进行实现
+        """调用 AI 接口。
+
+        M10：从原本自带的 `requests.post(.../chat/completions)` 切换到统一的
+        `instock.lib.ai.run_chat()` —— 这样限流 / 审计 / token 统计 /
+        错误重试都走同一份代码，避免 spec §10.1 / §12 提到的 "双套 AI 配置漂移"。
+
+        行为约束（保持向后兼容，§13 验收）：
+          * 未配置 api_key → 直接返回 None（不报错、不写审计），与旧实现一致。
+          * 网络/服务异常 → 返回 None 而不是抛出（旧实现 try/except 兜底，
+            护城河评估走"AI 失败也能用纯量化结果"路径，§13）。
+          * 单测通过 mock `_call_ai` 直接接管，不会真打 LLM。
         """
         if not self.config.api_key:
             logging.warning("未配置AI API密钥，跳过AI分析")
             return None
-        
-        # 这里可以根据需要接入不同的AI服务
-        # 以下是OpenAI API的示例实现框架
-        
         try:
-            import requests
-            
-            headers = {
-                "Authorization": f"Bearer {self.config.api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            data = {
-                "model": self.config.model,
-                "messages": [
-                    {"role": "system", "content": "你是一位专业的价值投资分析师。"},
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": self.config.temperature,
-                "max_tokens": self.config.max_tokens
-            }
-            
-            response = requests.post(
-                f"{self.config.api_base}/chat/completions",
-                headers=headers,
-                json=data,
-                timeout=self.config.timeout
+            from instock.lib.ai import run_chat
+            return run_chat(
+                prompt,
+                scene='moat_analysis',
+                agent='moat_analyst',
+                system='你是一位专业的价值投资分析师。',
+                overrides={
+                    'api_base': self.config.api_base,
+                    'api_key': self.config.api_key,
+                    'model': self.config.model,
+                    'temperature': self.config.temperature,
+                    'max_tokens': self.config.max_tokens,
+                    'timeout': self.config.timeout,
+                },
             )
-            
-            if response.status_code == 200:
-                result = response.json()
-                return result['choices'][0]['message']['content']
-            else:
-                logging.error(f"AI API调用失败: {response.status_code}")
-                return None
-                
-        except ImportError:
-            logging.warning("requests库未安装，无法调用AI API")
-            return None
-        except Exception as e:
-            logging.error(f"AI API调用异常", exc_info=True)
+        except Exception:
+            logging.error('AI API调用异常', exc_info=True)
             return None
     
     def _parse_analysis_result(self, response: str) -> Optional[AIAnalysisResult]:

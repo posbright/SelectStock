@@ -26,7 +26,7 @@ __author__ = 'InStock'
 __date__ = '2026/05/11'
 
 __all__ = [
-    'run_chat', 'stream_chat', 'get_provider', 'run_agent',
+    'run_chat', 'stream_chat', 'get_provider', 'run_agent', 'run_pipeline',
     'AIConfig', 'load_config',
     'AIError', 'RateLimitError', 'ValidationError', 'ProviderError',
     'ChatMessage', 'ChatResult', 'Provider', 'ToolCall',
@@ -178,4 +178,10 @@ def stream_chat(
 def run_agent(*args, **kwargs):
     """惰性导入避免与 agent 模块的循环依赖。"""
     from instock.lib.ai.agent import run_agent as _impl
+    return _impl(*args, **kwargs)
+
+
+def run_pipeline(*args, **kwargs):
+    """M10 编排管线便捷入口；惰性导入避免循环。"""
+    from instock.lib.ai.orchestrator import run_pipeline as _impl
     return _impl(*args, **kwargs)

@@ -48,6 +48,19 @@ _BUILTIN_AGENTS = [
         'description': '根据沙箱报错或回测错误信息修复策略代码。',
         'is_builtin': True,
     },
+    # M10 新增：编排管线 / 跨场景内置 agent
+    {
+        'name': 'strategy_analyst',
+        'display_name': '策略分析师',
+        'description': '把自然语言需求拆解为思路 + 伪代码（pipeline 第一步）。',
+        'is_builtin': True,
+    },
+    {
+        'name': 'market_summarizer',
+        'display_name': '行情/回测解读',
+        'description': '把回测指标或行情数据解读成简洁中文摘要（IM / 复盘文案）。',
+        'is_builtin': True,
+    },
 ]
 
 

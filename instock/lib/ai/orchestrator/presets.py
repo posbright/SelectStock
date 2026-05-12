@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""M10 内置编排预设。
+
+§11.4 / §18-M10：strategy_analyst → strategy_coder → strategy_repairer。
+默认 tester 步骤用 `validate_code_strict` 做静态校验闭环（最多 3 轮）。
+"""
+
+import logging
+import re
+from typing import Any, Dict
+
+from instock.lib.ai.orchestrator.pipeline import Pipeline, Step
+
+__author__ = 'InStock'
+__date__ = '2026/05/12'
+
+
+_PY_BLOCK_RE = re.compile(r'```(?:python|py)?\s*\n(.*?)```', re.DOTALL | re.IGNORECASE)
+
+
+def _extract_python_block(text: str) -> str:
+    """优先取第一个 ```python``` 代码块；没有则原样返回（去 markdown 围栏）。"""
+    if not text:
+        return ''
+    m = _PY_BLOCK_RE.search(text)
+    if m:
+        return m.group(1).strip()
+    return text.strip()
+
+
+def _tester_passes(output: str, ctx: Dict[str, Any]) -> bool:
+    """tester 步骤的终止条件：strict 校验 OK 即通过。
+
+    output 期望是 strict 校验报告或 'OK'；用 coder 的输出做静态校验。
+    """
+    code = _extract_python_block(ctx.get('coder', '') or '')
+    if not code:
+        return False
+    try:
+        from instock.core.backtest.strategy_sandbox import validate_code_strict
+        ok, _msg = validate_code_strict(code)
+        return bool(ok)
+    except Exception as exc:
+        logging.warning(f'[ai.orchestrator.presets] strict 校验异常视为不通过: {exc}')
+        return False
+
+
+# ── analyst → coder → tester（带最多 3 轮 self-fix）
+STRATEGY_PIPELINE = Pipeline([
+    Step(
+        name='analyst',
+        agent='strategy_analyst',
+        # 不写 user_template：直接用初始 input 作为问题
+    ),
+    Step(
+        name='coder',
+        agent='strategy_coder',
+        user_template=(
+            '需求：{input}\n\n'
+            '已分析的思路与伪代码：\n{analyst}\n\n'
+            '请严格按 sandbox 规范输出可执行 Python 代码（仅一个 ```python 代码块）。'
+        ),
+    ),
+    Step(
+        name='tester',
+        agent='strategy_repairer',
+        user_template=(
+            '请审查并在必要时修复下面的策略代码，使其通过沙箱静态校验。\n'
+            '原始需求：{input}\n\n'
+            '当前代码：\n{coder}\n\n'
+            '只输出最终的完整 Python 代码（一个 ```python 代码块）。'
+        ),
+        loop_until=_tester_passes,
+        max_iters=3,
+    ),
+])
+
+
+__all__ = ['STRATEGY_PIPELINE']
