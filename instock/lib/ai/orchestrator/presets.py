@@ -20,7 +20,11 @@ _PY_BLOCK_RE = re.compile(r'```(?:python|py)?\s*\n(.*?)```', re.DOTALL | re.IGNO
 
 
 def _extract_python_block(text: str) -> str:
-    """优先取第一个 ```python``` 代码块；没有则原样返回（去 markdown 围栏）。"""
+    """优先取第一个 ```python``` 代码块；没有则原样返回（去 markdown 围栏）。
+
+    audit-fix-2-P2: 现在默认 prompt 要求输出裸 Python，所以多数情况走 fallback
+    分支；保留围栏提取以兼容 LLM 仁心加围栏的情况。
+    """
     if not text:
         return ''
     m = _PY_BLOCK_RE.search(text)
@@ -51,6 +55,9 @@ def _tester_passes(output: str, ctx: Dict[str, Any]) -> bool:
 
 
 # ── analyst → coder → tester（带最多 3 轮 self-fix）
+# audit-fix-2-P2: 与 strategy_coder.md / strategy_repairer.md 一致，
+# user_template 不再要求输出 Markdown 代码块（两者原本矛盾）。
+# _extract_python_block 同时兼容裸代码与 ```python``` 围栏，作为兏底。
 STRATEGY_PIPELINE = Pipeline([
     Step(
         name='analyst',
@@ -63,7 +70,7 @@ STRATEGY_PIPELINE = Pipeline([
         user_template=(
             '需求：{input}\n\n'
             '已分析的思路与伪代码：\n{analyst}\n\n'
-            '请严格按 sandbox 规范输出可执行 Python 代码（仅一个 ```python 代码块）。'
+            '请严格按 sandbox 规范输出可执行 Python 代码（只输出源码，不要 Markdown 围栏与讲解）。'
         ),
     ),
     Step(
@@ -73,7 +80,7 @@ STRATEGY_PIPELINE = Pipeline([
             '请审查并在必要时修复下面的策略代码，使其通过沙箱静态校验。\n'
             '原始需求：{input}\n\n'
             '当前代码：\n{coder}\n\n'
-            '只输出最终的完整 Python 代码（一个 ```python 代码块）。'
+            '只输出最终的完整 Python 源码（不要 Markdown 围栏与讲解）。'
         ),
         loop_until=_tester_passes,
         max_iters=3,

@@ -139,6 +139,27 @@ class PipelineRunTests(unittest.TestCase):
         scenes = [c.get('step') for c in runner.calls]
         self.assertEqual(scenes, ['first', 'second'])
 
+    def test_audit2_p2_scene_string_carries_pipeline_prefix(self):
+        """audit-fix-2-P2: 每一步发给 run_agent 的 scene 必须是
+        '<pipeline_scene>:<step_name>'，以便 rate_limiter / 审计 按步分桶。
+        默认 pipeline scene = 'pipeline'。"""
+        observed = []
+
+        def runner(*, user_message, scene, **_kw):
+            observed.append(scene)
+            return _FakeAgentResult('OUT')
+
+        pl = Pipeline([Step('analyst'), Step('coder'), Step('tester')])
+        pl.run(user_message='go', _run_agent=runner)
+        self.assertEqual(observed,
+                         ['pipeline:analyst', 'pipeline:coder', 'pipeline:tester'])
+        # 自定义 scene 也应被透传为前缀
+        observed.clear()
+        pl.run(user_message='go', scene='strategy_gen', _run_agent=runner)
+        self.assertEqual(observed,
+                         ['strategy_gen:analyst', 'strategy_gen:coder',
+                          'strategy_gen:tester'])
+
     def test_overrides_merged_step_wins(self):
         pl = Pipeline([Step('s', overrides={'model': 'step-model'})])
         runner = _make_fake_agent({'s': 'OK'})
@@ -298,6 +319,33 @@ class StrategyPipelinePresetTests(unittest.TestCase):
         self.assertEqual(len(seen), 2)
         self.assertNotIn('select_stocks', seen[0])
         self.assertIn('select_stocks', seen[1])
+
+    def test_audit2_p2_strategy_pipeline_tester_exhaustion_raises(self):
+        """audit-fix-2-P2: 当 tester 在 max_iters=3 内始终无法通过 strict 校验，
+        必须抛 PipelineError 并附 partial；最后一步 iters 应 == 3 且 ok=False。"""
+        bad_code = '```python\nstill not valid !!!\n```'
+        runner = _make_fake_agent({
+            'analyst': 'IDEA',
+            'coder': bad_code,
+            'tester': bad_code,  # 每轮都坏
+        })
+
+        def fake_validate(_code):
+            return False, 'syntax error'
+
+        with mock.patch(
+                'instock.core.backtest.strategy_sandbox.validate_code_strict',
+                side_effect=fake_validate):
+            with self.assertRaises(PipelineError) as cm:
+                STRATEGY_PIPELINE.run(user_message='go', _run_agent=runner)
+        err = cm.exception
+        self.assertEqual(err.step_name, 'tester')
+        self.assertIsNotNone(err.partial)
+        self.assertEqual(len(err.partial.steps), 3)
+        self.assertTrue(err.partial.steps[0].ok)   # analyst
+        self.assertTrue(err.partial.steps[1].ok)   # coder
+        self.assertFalse(err.partial.steps[2].ok)  # tester
+        self.assertEqual(err.partial.steps[2].iters, 3)
 
 
 # ─────────────────────────────────────────────────────────────────────
