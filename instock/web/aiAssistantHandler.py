@@ -72,9 +72,11 @@ def _write_error(handler, code: int, msg: str, **extra):
     body = {'code': code, 'msg': msg}
     body.update(extra)
     handler.set_header('Content-Type', 'application/json')
-    # HTTP 状态码语义对齐（前端 axios 拦截器可按 status 区分限流）
+    # HTTP 状态码语义对齐（前端 axios 拦截器可按 status 区分限流/无权）
     if code == 429:
         handler.set_status(429)
+    elif code == 403:
+        handler.set_status(403)
     handler.write(json.dumps(body, ensure_ascii=False))
 
 
@@ -505,14 +507,27 @@ class ChatHandler(webBase.BaseHandler, ABC):
 
         mem = _get_memory()
         history_msgs: list = []
-        try:
+
+        # audit-fix-P0-2 + P2-9: get_or_create / load / append 均在线程池执行，
+        # 且对用户传入的 conversation_id 在查到记录后校验 ownership
+        # （user_id == 当前 client_ip），以免跨 IP 读/写别人会话。
+        def _load_history_blocking():
+            existing = mem.get(conv_id) if conv_id_in else None
+            if existing is not None and existing.user_id and existing.user_id != user_ip:
+                return ('forbidden', [])
             mem.get_or_create(conv_id, scene=scene, user_id=user_ip, agent=agent)
             raw_hist = mem.load(conv_id, max_tokens=max_hist_tokens)
-            history_msgs = [ChatMessage(role=m.role, content=m.content)
-                            for m in raw_hist]
+            return ('ok', [ChatMessage(role=m.role, content=m.content)
+                            for m in raw_hist])
+        try:
+            status, history_msgs = yield IOLoop.current().run_in_executor(
+                _get_executor(), _load_history_blocking)
         except Exception as exc:
             logging.warning(f'ChatHandler load history 失败（忽略）: {exc}')
-            history_msgs = []
+            status, history_msgs = 'ok', []
+        if status == 'forbidden':
+            _write_error(self, 403, f'无权访问会话: {conv_id}')
+            return
 
         try:
             raw, resolved_model = yield IOLoop.current().run_in_executor(
@@ -533,11 +548,15 @@ class ChatHandler(webBase.BaseHandler, ABC):
             return
 
         # 追加 user / assistant 两条消息（失败不影响业务返回）
-        try:
+        # audit-fix-P2-9: append 走线程池避免 IOLoop 阻塞
+        def _append_blocking():
             mem.append(conv_id, 'user', user_prompt,
                        scene=scene, user_id=user_ip, agent=agent)
             mem.append(conv_id, 'assistant', raw,
                        scene=scene, user_id=user_ip, agent=agent)
+        try:
+            yield IOLoop.current().run_in_executor(
+                _get_executor(), _append_blocking)
         except Exception as exc:
             logging.warning(f'ChatHandler append history 失败（忽略）: {exc}')
 
@@ -744,6 +763,11 @@ class AiConversationsHandler(webBase.BaseHandler, ABC):
             return
         try:
             mem = _get_memory()
+            # audit-fix-P0-2: ownership 校验
+            existing = mem.get(cid)
+            if existing is not None and existing.user_id and existing.user_id != _client_ip(self):
+                _write_error(self, 403, f'无权删除会话: {cid}')
+                return
             ok = mem.delete(cid)
             self.set_header('Content-Type', 'application/json')
             self.write(json.dumps({'code': 0, 'data': {'deleted': bool(ok)}},
@@ -764,6 +788,10 @@ class AiConversationDetailHandler(webBase.BaseHandler, ABC):
             conv = mem.get(cid)
             if conv is None:
                 _write_error(self, -1, f'会话不存在: {cid}')
+                return
+            # audit-fix-P0-2: ownership 校验
+            if conv.user_id and conv.user_id != _client_ip(self):
+                _write_error(self, 403, f'无权访问会话: {cid}')
                 return
             self.set_header('Content-Type', 'application/json')
             self.write(json.dumps({'code': 0, 'data': conv.to_dict()},
@@ -787,6 +815,11 @@ class AiConversationRenameHandler(webBase.BaseHandler, ABC):
             return
         try:
             mem = _get_memory()
+            # audit-fix-P0-2: ownership 校验
+            existing = mem.get(cid)
+            if existing is not None and existing.user_id and existing.user_id != _client_ip(self):
+                _write_error(self, 403, f'无权重命名会话: {cid}')
+                return
             ok = mem.rename(cid, title)
             self.set_header('Content-Type', 'application/json')
             self.write(json.dumps({'code': 0, 'data': {'renamed': bool(ok)}},

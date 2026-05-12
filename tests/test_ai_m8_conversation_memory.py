@@ -247,5 +247,134 @@ class RunChatHistoryBuildTests(unittest.TestCase):
             del os.environ['INSTOCK_AI_RATE_DISABLED']
 
 
+# ──────────────────────────────────────────────────────────────────────
+# audit-fix-P0/P1/P2 回归测试
+# ──────────────────────────────────────────────────────────────────────
+class AuditFixesTests(unittest.TestCase):
+    """覆盖 audit-fix-P0-1/P0-2/P1-4/P1-5/P2-7/P2-8/P3-13。"""
+
+    def test_p0_1_db_append_holds_per_cid_lock_serializes_writes(self):
+        """两次并发 append 不应丢消息（per-cid 锁）。"""
+        from instock.lib.ai.memory import db as dbmod
+        dbmod._table_ready = True
+
+        # 模拟一个简单的 in-memory DB 通过共享 dict
+        store = {'msgs': '[]'}
+
+        def fake_fetch(sql, params):
+            if 'WHERE conversation_id' in sql:
+                return [(1, 'cid', 'chat', None, None, store['msgs'], 0,
+                         'u1', None, None)]
+            return []
+
+        def fake_exec(sql, params):
+            if 'UPDATE' in sql and 'messages_json=%s' in sql:
+                store['msgs'] = params[0]
+
+        import threading
+        from instock.lib.ai.memory.db import DbConversationMemory
+
+        with mock.patch('instock.lib.ai.memory.db._ensure_table'), \
+             mock.patch('instock.lib.ai.memory.db.mdb.executeSqlFetch',
+                        side_effect=fake_fetch), \
+             mock.patch('instock.lib.ai.memory.db.mdb.executeSql',
+                        side_effect=fake_exec):
+            mem = DbConversationMemory()
+            errors = []
+
+            def writer(role, content):
+                try:
+                    mem.append('cid', role, content,
+                               scene='chat', user_id='u1')
+                except Exception as e:
+                    errors.append(e)
+
+            threads = [threading.Thread(target=writer,
+                                         args=('user', f'msg-{i}'))
+                       for i in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            self.assertEqual(errors, [])
+            decoded = json.loads(store['msgs'])
+            # 串行化保证：8 条 append 全部落库
+            self.assertEqual(len(decoded), 8)
+
+    def test_p1_4_get_or_create_recovers_from_unique_violation(self):
+        from instock.lib.ai.memory import db as dbmod
+        dbmod._table_ready = True
+
+        # 第一次 SELECT 返回空 → INSERT 抛 1062 → 第二次 SELECT 返回行
+        existing_row = (1, 'cid', 'chat', 'agent-x', None,
+                        '[]', 0, 'u1', None, None)
+        select_returns = [[], [existing_row]]
+
+        def fake_fetch(sql, params):
+            return select_returns.pop(0) if select_returns else [existing_row]
+
+        def fake_exec(sql, params):
+            raise Exception('(1062, "Duplicate entry for key conversation_id")')
+
+        from instock.lib.ai.memory.db import DbConversationMemory
+        with mock.patch('instock.lib.ai.memory.db._ensure_table'), \
+             mock.patch('instock.lib.ai.memory.db.mdb.executeSqlFetch',
+                        side_effect=fake_fetch), \
+             mock.patch('instock.lib.ai.memory.db.mdb.executeSql',
+                        side_effect=fake_exec):
+            mem = DbConversationMemory()
+            conv = mem.get_or_create('cid', scene='chat', user_id='u1')
+        self.assertEqual(conv.user_id, 'u1')
+        self.assertEqual(conv.agent, 'agent-x')
+
+    def test_p1_5_5round_context_accumulation_acceptance(self):
+        """spec §13 #M8：5 轮上下文累积修改，最近若干轮在 budget 内可被加载。"""
+        m = InMemoryConversationMemory()
+        m.get_or_create('c1', scene='chat', user_id='u1')
+        for i in range(5):
+            m.append('c1', 'user', f'问题{i}: ' + 'x' * 10)
+            m.append('c1', 'assistant', f'回答{i}: ' + 'y' * 10)
+        # 至少能一字不漏地加载最近 5 轮的最后 1 条
+        loaded = m.load('c1', max_tokens=10000)
+        self.assertEqual(len(loaded), 10)
+        roles = [x.role for x in loaded]
+        self.assertEqual(roles, ['user', 'assistant'] * 5)
+        self.assertEqual(loaded[-1].content, '回答4: ' + 'y' * 10)
+        # 极小预算时也至少保留最后一条（P2-7）
+        loaded_small = m.load('c1', max_tokens=1)
+        self.assertEqual(len(loaded_small), 1)
+
+    def test_p2_7_truncate_keeps_last_when_single_message_exceeds_budget(self):
+        from instock.lib.ai.memory.base import (
+            Message as Msg, truncate_to_budget,
+        )
+        msgs = [Msg('user', 'x' * 10000)]  # 单条远超
+        kept = truncate_to_budget(msgs, max_tokens=10)
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0].content, msgs[0].content)
+
+    def test_p2_8_inmem_caps_messages_per_conversation(self):
+        os.environ['INSTOCK_AI_MEMORY_MAX_CONVS'] = '50'
+        try:
+            m = InMemoryConversationMemory()
+            m.get_or_create('c1', scene='chat')
+            for i in range(250):
+                m.append('c1', 'user', f'msg{i}')
+            conv = m.get('c1')
+            # 上限为 _MAX_MSGS_PER_CONV=200
+            self.assertLessEqual(len(conv.messages), 200)
+            # 最后一条应被保留
+            self.assertEqual(conv.messages[-1].content, 'msg249')
+        finally:
+            del os.environ['INSTOCK_AI_MEMORY_MAX_CONVS']
+
+    def test_p3_13_role_whitelist_in_from_dict(self):
+        from instock.lib.ai.memory.base import Message as Msg
+        m1 = Msg.from_dict({'role': '<script>', 'content': 'x'})
+        self.assertEqual(m1.role, 'user')
+        for ok in ('system', 'user', 'assistant', 'tool'):
+            self.assertEqual(Msg.from_dict({'role': ok, 'content': ''}).role, ok)
+
+
 if __name__ == '__main__':
     unittest.main()

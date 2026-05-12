@@ -21,6 +21,9 @@ from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
 
 
+_ALLOWED_ROLES = ('system', 'user', 'assistant', 'tool')
+
+
 @dataclass
 class Message:
     role: str               # 'system' | 'user' | 'assistant' | 'tool'
@@ -32,7 +35,11 @@ class Message:
 
     @classmethod
     def from_dict(cls, raw: Dict[str, Any]) -> 'Message':
-        return cls(role=str(raw.get('role') or 'user'),
+        # audit-fix-P3-13: 白名单 role，避免脑变型 XSS 从 DB 走到前端
+        role = str(raw.get('role') or 'user')
+        if role not in _ALLOWED_ROLES:
+            role = 'user'
+        return cls(role=role,
                    content=str(raw.get('content') or ''),
                    ts=float(raw.get('ts') or time.time()))
 
@@ -137,5 +144,9 @@ def truncate_to_budget(messages: List[Message], max_tokens: int) -> List[Message
             break
         kept_rev.append(m)
         used += t
+    # audit-fix-P2-7: 单条超预算时 — 以上循环会跳过所有消息。
+    # 避免返回空，至少保留最后一条。
+    if not kept_rev and body:
+        kept_rev.append(body[-1])
     kept = list(reversed(kept_rev))
     return head_system + kept

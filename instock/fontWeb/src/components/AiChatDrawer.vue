@@ -336,7 +336,17 @@ type ChatMsg = { role: string; content: string; ts?: number }
 const chatMessages = ref<ChatMsg[]>([])
 const chatHistoryEl = ref<HTMLElement | null>(null)
 const conversations = ref<AiConversationSummary[]>([])
-const currentConvId = ref<string>('')
+// audit-fix-P1-3: conversation_id 持久化到 localStorage（spec §11.3 末尾）
+const _LS_KEY = 'ai_chat_conversation_id'
+const currentConvId = ref<string>(
+  (typeof localStorage !== 'undefined' && localStorage.getItem(_LS_KEY)) || ''
+)
+watch(currentConvId, (v) => {
+  try {
+    if (v) localStorage.setItem(_LS_KEY, v)
+    else localStorage.removeItem(_LS_KEY)
+  } catch { /* SSR / 隐私模式 */ }
+})
 
 async function loadConversationsList() {
   try {
@@ -441,7 +451,16 @@ watch(() => mode.value, (v) => {
 })
 
 watch(() => props.modelValue, (v) => {
-  if (v && mode.value === 'chat') loadConversationsList()
+  if (v && mode.value === 'chat') {
+    loadConversationsList()
+    // audit-fix-P1-3: 抽屉重开时若 localStorage 有上次会话 id，自动加载历史
+    if (currentConvId.value && !chatMessages.value.length) {
+      selectConversation(currentConvId.value).catch(() => {
+        // 可能 ownership 校验失败或被删除 → 清掉本地引用
+        currentConvId.value = ''
+      })
+    }
+  }
 })
 </script>
 

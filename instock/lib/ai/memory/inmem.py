@@ -21,9 +21,14 @@ from instock.lib.ai.memory.base import (
 
 def _max_convs() -> int:
     try:
-        return max(10, int(os.environ.get('INSTOCK_AI_MEMORY_MAX_CONVS', '200')))
+        # audit-fix-P3-14: \u4e0a\u9650 5000 \u907f\u514d\u8bef\u914d OOM
+        return min(5000, max(10, int(os.environ.get('INSTOCK_AI_MEMORY_MAX_CONVS', '200'))))
     except (TypeError, ValueError):
         return 200
+
+
+# audit-fix-P2-8: \u6bcf\u4f1a\u8bdd\u6d88\u606f\u603b\u6570\u4e0a\u9650
+_MAX_MSGS_PER_CONV = 200
 
 
 class InMemoryConversationMemory(ConversationMemory):
@@ -77,6 +82,13 @@ class InMemoryConversationMemory(ConversationMemory):
                 self._store[conversation_id] = conv
             msg = Message(role=role, content=content)
             conv.messages.append(msg)
+            # audit-fix-P2-8
+            if len(conv.messages) > _MAX_MSGS_PER_CONV:
+                head = []
+                if conv.messages and conv.messages[0].role == 'system':
+                    head = [conv.messages[0]]
+                tail = conv.messages[-(_MAX_MSGS_PER_CONV - len(head)):]
+                conv.messages = head + tail
             # 首条 user 消息作为 title
             if not conv.title and role == 'user':
                 conv.title = (content[:60].strip() or None)

@@ -13,7 +13,7 @@ import logging
 import threading
 import time
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import instock.lib.database as mdb
 from instock.lib.ai.memory.base import (
@@ -24,6 +24,25 @@ from instock.lib.ai.memory.base import (
 _TABLE = 'cn_stock_ai_conversation'
 _table_ready = False
 _lock = threading.Lock()
+
+# audit-fix-P0-1: per-conversation_id 锁，避免 append 读-改-写丢消息
+_cid_locks: Dict[str, threading.Lock] = {}
+_cid_locks_lock = threading.Lock()
+
+# audit-fix-P2-8: messages_json 会话消息总数上限（超出从最旧丢弃、保留 head system）
+_MAX_MSGS_PER_CONV = 200
+
+
+def _get_cid_lock(cid: str) -> threading.Lock:
+    with _cid_locks_lock:
+        lk = _cid_locks.get(cid)
+        if lk is None:
+            # 轻量限制字典大小避免无限增长
+            if len(_cid_locks) > 4096:
+                _cid_locks.clear()
+            lk = threading.Lock()
+            _cid_locks[cid] = lk
+        return lk
 
 _DDL = f"""
 CREATE TABLE IF NOT EXISTS {_TABLE} (
@@ -121,66 +140,102 @@ class DbConversationMemory(ConversationMemory):
     def get_or_create(self, conversation_id, *, scene, user_id=None,
                       agent=None, title=None) -> Conversation:
         _ensure_table()
-        existing = self.get(conversation_id)
-        if existing is not None:
-            # 补齐空字段
-            updates = []
-            params: list = []
-            if user_id and not existing.user_id:
-                updates.append('user_id=%s'); params.append(user_id); existing.user_id = user_id
-            if agent and not existing.agent:
-                updates.append('agent=%s'); params.append(agent); existing.agent = agent
-            if title and not existing.title:
-                updates.append('title=%s'); params.append(title[:255]); existing.title = title[:255]
-            if updates:
-                params.append(conversation_id)
-                try:
-                    mdb.executeSql(
-                        f'UPDATE {_TABLE} SET ' + ','.join(updates)
-                        + ' WHERE conversation_id=%s', tuple(params))
-                except Exception as exc:
-                    logging.warning(f'[ai.memory.db.get_or_create.update] {exc}')
-            return existing
-        # 新建
-        conv = Conversation(
-            conversation_id=conversation_id,
-            scene=scene, agent=agent, user_id=user_id, title=title,
-        )
-        try:
-            mdb.executeSql(
-                f'INSERT INTO {_TABLE} '
-                '(conversation_id, scene, agent, title, messages_json, '
-                ' total_tokens, user_id) VALUES (%s,%s,%s,%s,%s,%s,%s)',
-                (conversation_id, scene, agent, title[:255] if title else None,
-                 '[]', 0, user_id),
+        with _get_cid_lock(conversation_id):
+            existing = self.get(conversation_id)
+            if existing is not None:
+                # 补齐空字段
+                updates = []
+                params: list = []
+                if user_id and not existing.user_id:
+                    updates.append('user_id=%s'); params.append(user_id); existing.user_id = user_id
+                if agent and not existing.agent:
+                    updates.append('agent=%s'); params.append(agent); existing.agent = agent
+                if title and not existing.title:
+                    updates.append('title=%s'); params.append(title[:255]); existing.title = title[:255]
+                if updates:
+                    params.append(conversation_id)
+                    try:
+                        mdb.executeSql(
+                            f'UPDATE {_TABLE} SET ' + ','.join(updates)
+                            + ' WHERE conversation_id=%s', tuple(params))
+                    except Exception as exc:
+                        logging.warning(f'[ai.memory.db.get_or_create.update] {exc}')
+                return existing
+            # 新建
+            conv = Conversation(
+                conversation_id=conversation_id,
+                scene=scene, agent=agent, user_id=user_id, title=title,
             )
-        except Exception as exc:
-            logging.warning(f'[ai.memory.db.get_or_create.insert] {exc}')
-        return conv
+            try:
+                mdb.executeSql(
+                    f'INSERT INTO {_TABLE} '
+                    '(conversation_id, scene, agent, title, messages_json, '
+                    ' total_tokens, user_id) VALUES (%s,%s,%s,%s,%s,%s,%s)',
+                    (conversation_id, scene, agent, title[:255] if title else None,
+                     '[]', 0, user_id),
+                )
+            except Exception as exc:
+                # audit-fix-P1-4: 并发 INSERT 冲突 → 重取一次
+                msg = str(exc).lower()
+                if '1062' in msg or 'duplicate' in msg:
+                    logging.info(f'[ai.memory.db.get_or_create] duplicate, re-fetching: {conversation_id}')
+                    fetched = self.get(conversation_id)
+                    if fetched is not None:
+                        return fetched
+                logging.warning(f'[ai.memory.db.get_or_create.insert] {exc}')
+            return conv
 
     def append(self, conversation_id, role, content, *,
                scene=None, user_id=None, agent=None) -> None:
         _ensure_table()
-        conv = self.get(conversation_id)
-        if conv is None:
-            conv = self.get_or_create(
-                conversation_id, scene=scene or 'chat',
-                user_id=user_id, agent=agent)
-        msg = Message(role=role, content=content)
-        conv.messages.append(msg)
-        if not conv.title and role == 'user':
-            conv.title = (content[:60].strip() or None)
-        conv.total_tokens = estimate_messages_tokens(conv.messages)
-        try:
-            mdb.executeSql(
-                f'UPDATE {_TABLE} SET messages_json=%s, total_tokens=%s, '
-                ' title=COALESCE(title, %s) WHERE conversation_id=%s',
-                (json.dumps([m.to_dict() for m in conv.messages],
-                            ensure_ascii=False),
-                 conv.total_tokens, conv.title, conversation_id),
-            )
-        except Exception as exc:
-            logging.warning(f'[ai.memory.db.append] {exc}')
+        # audit-fix-P0-1: 锁住从 get 到 update 的读-改-写区间
+        with _get_cid_lock(conversation_id):
+            conv = self.get(conversation_id)
+            if conv is None:
+                # get_or_create 自身也要拿同一把锁（RLock 不适用于跨函数）——
+                # 改为直接内联 INSERT 逻辑避免重入
+                conv = Conversation(
+                    conversation_id=conversation_id,
+                    scene=scene or 'chat', user_id=user_id, agent=agent,
+                )
+                try:
+                    mdb.executeSql(
+                        f'INSERT INTO {_TABLE} '
+                        '(conversation_id, scene, agent, title, messages_json, '
+                        ' total_tokens, user_id) VALUES (%s,%s,%s,%s,%s,%s,%s)',
+                        (conversation_id, conv.scene, agent, None,
+                         '[]', 0, user_id),
+                    )
+                except Exception as exc:
+                    msg = str(exc).lower()
+                    if '1062' in msg or 'duplicate' in msg:
+                        fetched = self.get(conversation_id)
+                        if fetched is not None:
+                            conv = fetched
+                    else:
+                        logging.warning(f'[ai.memory.db.append.insert] {exc}')
+            msg_obj = Message(role=role, content=content)
+            conv.messages.append(msg_obj)
+            # audit-fix-P2-8: 消息总数超上限时，从最旧丢弃（保留 head system）
+            if len(conv.messages) > _MAX_MSGS_PER_CONV:
+                head = []
+                if conv.messages and conv.messages[0].role == 'system':
+                    head = [conv.messages[0]]
+                tail = conv.messages[-(_MAX_MSGS_PER_CONV - len(head)):]
+                conv.messages = head + tail
+            if not conv.title and role == 'user':
+                conv.title = (content[:60].strip() or None)
+            conv.total_tokens = estimate_messages_tokens(conv.messages)
+            try:
+                mdb.executeSql(
+                    f'UPDATE {_TABLE} SET messages_json=%s, total_tokens=%s, '
+                    ' title=COALESCE(title, %s) WHERE conversation_id=%s',
+                    (json.dumps([m.to_dict() for m in conv.messages],
+                                ensure_ascii=False),
+                     conv.total_tokens, conv.title, conversation_id),
+                )
+            except Exception as exc:
+                logging.warning(f'[ai.memory.db.append] {exc}')
 
     def load(self, conversation_id, *, max_tokens: int = 4000) -> List[Message]:
         conv = self.get(conversation_id)
