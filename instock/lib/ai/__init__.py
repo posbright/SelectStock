@@ -16,6 +16,7 @@ import time
 from typing import Any, Dict, Iterator, List, Optional
 
 from instock.lib.ai import audit
+from instock.lib.ai import rate_limiter
 from instock.lib.ai.config import AIConfig, load_config
 from instock.lib.ai.exceptions import AIError, ProviderError, RateLimitError, ValidationError
 from instock.lib.ai.providers.base import ChatMessage, ChatResult, Provider, ToolCall
@@ -62,10 +63,19 @@ def run_chat(
     agent: Optional[str] = None,
     user_id: Optional[str] = None,
     overrides: Optional[Dict[str, Any]] = None,
+    rate_limit_loop: bool = False,
     **kwargs: Any,
 ) -> str:
-    """同步聊天。返回 assistant 文本内容；异常会被审计后重新抛出。"""
+    """同步聊天。返回 assistant 文本内容；异常会被审计后重新抛出。
+
+    rate_limit_loop=True 表示当前调用是修复闭环内部重试（spec §4.4），
+    其本身不计入 (user_id, scene) 滑窗配额，并在审计记录中落 
+    tools_used.rate_limit_loop=true，供 rate_limiter 后续查询排除。
+    """
     cfg = load_config(overrides)
+    # spec §16.5：在 provider 调用前检查滑窗配额（fail-open）
+    rate_limiter.check_quota(
+        user_id=user_id, scene=scene, rate_limit_loop=rate_limit_loop)
     provider = get_provider(cfg)
     messages = _build_messages(prompt, system)
     started = time.time()
@@ -98,6 +108,7 @@ def run_chat(
                 total_tokens=result.total_tokens if result else None,
                 latency_ms=latency_ms,
                 error=err_text,
+                rate_limit_loop=rate_limit_loop,
             )
         except Exception as audit_exc:
             # J1：审计写入错误不得遮蔽业务返回值或原始异常
@@ -112,10 +123,13 @@ def stream_chat(
     agent: Optional[str] = None,
     user_id: Optional[str] = None,
     overrides: Optional[Dict[str, Any]] = None,
+    rate_limit_loop: bool = False,
     **kwargs: Any,
 ) -> Iterator[str]:
     """流式聊天，yield 文本片段；结束后写一条审计记录（response 为完整拼接）。"""
     cfg = load_config(overrides)
+    rate_limiter.check_quota(
+        user_id=user_id, scene=scene, rate_limit_loop=rate_limit_loop)
     provider = get_provider(cfg)
     messages = _build_messages(prompt, system)
     started = time.time()
@@ -144,6 +158,7 @@ def stream_chat(
                 ok=ok,
                 latency_ms=latency_ms,
                 error=err_text,
+                rate_limit_loop=rate_limit_loop,
             )
         except Exception as audit_exc:
             logging.warning(f'[ai.stream_chat] 审计写入失败（忽略）: {audit_exc}')

@@ -77,17 +77,23 @@ def _write_error(handler, code: int, msg: str, **extra):
 
 
 def _call_ai_blocking(prompt: str, system: str, scene: str, agent: str, user_id: str,
-                      overrides: Optional[dict] = None):
+                      overrides: Optional[dict] = None,
+                      rate_limit_loop: bool = False):
     """在线程池中执行的同步 AI 调用。
 
     返回 (content, resolved_model) —— 让上层把实际使用的模型回传给前端，
     便于 SaveStrategyCodeHandler 落库 ai_model 字段（N1 修正）。
+
+    rate_limit_loop=True 仅供修复闭环内部重试使用（spec §4.4 / §16.5），
+    使该次调用从用户 1 小时滑窗配额中扣除（不计入），避免 max_attempts=3
+    把用户 60 calls/h 配额吃光。
     """
     from instock.lib.ai.config import load_config as _load_cfg
     cfg = _load_cfg(overrides)
     content = run_chat(
         prompt, scene=scene, system=system, agent=agent,
         user_id=user_id, overrides=overrides,
+        rate_limit_loop=rate_limit_loop,
     )
     return content, cfg.model
 
@@ -178,7 +184,7 @@ class GenerateStrategyHandler(webBase.BaseHandler, ABC):
                         _call_ai_blocking,
                         fix_prompt, repairer_sys,
                         'strategy_gen_repair', 'strategy_repairer',
-                        _client_ip(self), overrides,
+                        _client_ip(self), overrides, True,  # rate_limit_loop
                     )
                 except RateLimitError as exc:
                     logging.warning(f'生成自动修复阶段触发限流: {exc}')
@@ -283,7 +289,7 @@ class RefineStrategyHandler(webBase.BaseHandler, ABC):
                         _call_ai_blocking,
                         fix_prompt, repairer_sys,
                         'strategy_refine_repair', 'strategy_repairer',
-                        _client_ip(self), overrides,
+                        _client_ip(self), overrides, True,  # rate_limit_loop
                     )
                 except RateLimitError as exc:
                     logging.warning(f'修改自动修复阶段触发限流: {exc}')
@@ -408,7 +414,7 @@ class RepairStrategyHandler(webBase.BaseHandler, ABC):
                         _call_ai_blocking,
                         fix_prompt, repairer_sys,
                         'strategy_repair_retry', 'strategy_repairer',
-                        _client_ip(self), overrides,
+                        _client_ip(self), overrides, True,  # rate_limit_loop
                     )
                 except RateLimitError as exc:
                     logging.warning(f'修复重试触发限流: {exc}')
@@ -813,7 +819,7 @@ class GenerateStrategyStreamHandler(webBase.BaseHandler, ABC):
                         _call_ai_blocking,
                         fix_prompt, repairer_sys,
                         'strategy_gen_stream_repair', 'strategy_repairer',
-                        _client_ip(self), overrides,
+                        _client_ip(self), overrides, True,  # rate_limit_loop
                     )
                 except RateLimitError as exc:
                     logging.warning(f'SSE 修复阶段触发限流: {exc}')

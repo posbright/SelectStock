@@ -95,9 +95,25 @@ def record_call(
     total_tokens: Optional[int] = None,
     latency_ms: Optional[int] = None,
     error: Optional[str] = None,
+    rate_limit_loop: bool = False,
 ) -> Optional[int]:
-    """写入一条 AI 调用记录，返回自增 id（失败返回 None，不抛异常）。"""
+    """写入一条 AI 调用记录，返回自增 id（失败返回 None，不抛异常）。
+
+    rate_limit_loop=True 时在 tools_used JSON 中追加 `{"rate_limit_loop": true}`，
+    供 rate_limiter 滑窗查询排除（spec §4.4 / §16.5）。
+    """
     _ensure_table()
+    # 把 rate_limit_loop 标志合并到 tools_used JSON 中（保留原 list 结构作为
+    # `calls` 子键），保持向后兼容：rate_limiter SQL 查询用 JSON_EXTRACT 在
+    # 顶层取 $.rate_limit_loop。
+    tools_payload: Optional[Any]
+    if rate_limit_loop or (tools_used is not None):
+        tools_payload = {
+            'rate_limit_loop': bool(rate_limit_loop),
+            'calls': tools_used if tools_used is not None else [],
+        }
+    else:
+        tools_payload = None
     try:
         with mdb.get_connection() as conn:
             with conn.cursor() as cur:
@@ -109,7 +125,7 @@ def record_call(
                     (
                         scene, agent, provider, model, user_id,
                         _truncate_for_audit(prompt), _truncate_for_audit(response),
-                        json.dumps(tools_used, ensure_ascii=False) if tools_used is not None else None,
+                        json.dumps(tools_payload, ensure_ascii=False) if tools_payload is not None else None,
                         prompt_tokens, completion_tokens, total_tokens,
                         latency_ms, 1 if ok else 0,
                         (error or '')[:512] or None,

@@ -202,11 +202,19 @@ def run_agent(
     user_id: Optional[str] = None,
     overrides: Optional[Dict[str, Any]] = None,
     allowed_tools: Optional[Iterable[str]] = None,
+    rate_limit_loop: bool = False,
     **chat_kwargs,
 ) -> AgentRunResult:
-    """便捷入口。会写入审计 cn_stock_ai_call_log（含 tools_used）。"""
+    """便捷入口。会写入审计 cn_stock_ai_call_log（含 tools_used）。
+
+    rate_limit_loop=True 表示当前是修复闭环内部重试（spec §4.4），
+    不计入 (user_id, scene) 滑窗配额。
+    """
     from instock.lib.ai import get_provider
+    from instock.lib.ai import rate_limiter
     cfg: AIConfig = load_config(overrides)
+    rate_limiter.check_quota(
+        user_id=user_id, scene=scene, rate_limit_loop=rate_limit_loop)
     provider = get_provider(cfg)
     runtime = AgentRuntime(provider, allowed_tools=allowed_tools)
     started = time.time()
@@ -241,6 +249,7 @@ def run_agent(
                 total_tokens=(result.total_tokens if result else None),
                 latency_ms=latency_ms,
                 error=err_text,
+                rate_limit_loop=rate_limit_loop,
             )
         except Exception as audit_exc:
             logging.warning(f'[ai.run_agent] 审计写入失败（忽略）: {audit_exc}')
