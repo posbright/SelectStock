@@ -1,6 +1,6 @@
 # AI 辅助自定义策略生成与回测 — 可行性分析与实施方案
 
-> 文档版本：v1.1.3 ｜ 修订日期：2026-05-11 ｜ 适用分支：`backTest_dev`
+> 文档版本：v1.1.4 ｜ 修订日期：2026-05-12 ｜ 适用分支：`backTest_dev`
 >
 > 范围：在 SelectStock 项目内，新增"用户输入提示词 → AI 生成策略代码 → 用户/AI 二次修改 → 保存 → 回测 → 报错自动修正"的闭环；同时把 AI 配置抽象为项目级统一服务，支持多模型切换、工具调用（agent）、自定义 agent。
 >
@@ -19,6 +19,13 @@
 > **v1.1.2 修订（同日再审）**：按当前仓库实测状态更新 §15 / §18 / §19：`validate_code_strict()`、`task_recorder.py`、失败任务落库接入与对应 pytest 已存在，M0 从“新增”改为“复核、补接入、跑测试”；修正 §10.2 / §10.6 / §15.3 / §15.4 中仍把 `httpx` 当必选的残留表述；补 §10.8 的 `__main__.py`；把 RAG 默认实现从误写的 `sqlite_vss.py（零依赖）` 改成 `mysql_fulltext.py`；统一旧 §7 / §18 的 CLI 命令；统一 429 验收为 `60 calls/hour + 200000 tokens/hour`；修正 §16.1 中“同文件 import 自己”的示例错误。
 >
 > **v1.1.3 修订（同日验证）**：修正 §1“现有可复用基础”中校验入口与错误回流入口的旧描述：AI 代码必须使用 `validate_code_strict()`，修复闭环统一通过 `task_recorder.fetch_last_failure(strategy_id)` 取失败信息；清理 §4.6 中 `httpx/pydantic` 旧依赖写法，避免读者误以为仍需修改 `requirements.txt`。
+>
+> **v1.1.4 修订（2026-05-12 文档审核）**：基于代码侧实测做一致性修复——
+> ① §10.3 / §10.7 / §13 之间的"限流维度"矛盾澄清：实际实现统一为 `user_id`（值由 `_client_ip` 注入），§10.3 与 §13 已对齐；
+> ② §10.7 路由表标记**当前未实现**的 4 条路由（`/chat/stream`、`/strategy/explain`、`/backtest/explain`、`/calls`），仅保留实际已注册的 7 条；
+> ③ §4.2 / §8 / §16.5 删除 / 注释 `INSTOCK_AI_RATE_REPAIR_LOOP_FREE` env 项——代码侧未读取，由 `rate_limiter.check_quota(rate_limit_loop=True)` 形参写死；
+> ④ §13 / §18 增加 **M11 历史踩坑 KB**（`strategy_lessons.md` 自动注入 + 修复成功自动记录）的描述；
+> ⑤ §13 commit 引用更新到 `01729b57`。
 
 ---
 
@@ -248,7 +255,9 @@ INSTOCK_AI_PROVIDER_OPENAI_API_KEY=sk-xxx
 # 限流（与 §16.5 双桶限流一致；原名 `..._PER_USER_PER_HOUR` 已废弃）
 INSTOCK_AI_RATE_CALLS_PER_HOUR=60
 INSTOCK_AI_RATE_TOKENS_PER_HOUR=200000
-INSTOCK_AI_RATE_REPAIR_LOOP_FREE=true
+# （历史草案：INSTOCK_AI_RATE_REPAIR_LOOP_FREE — 已废弃。
+#  当前实现：修复闭环内的多轮重试**始终**算 1 次，由 `rate_limiter.check_quota(rate_limit_loop=True)`
+#  形参在调用点传入；无配置开关。详见 instock/lib/ai/rate_limiter.py 与 §16.5。）
 INSTOCK_AI_MAX_TOKENS_PER_CALL=8192
 INSTOCK_AI_TIMEOUT_SECONDS=60
 
@@ -427,7 +436,7 @@ INSTOCK_AI_PROVIDER_QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode
 INSTOCK_AI_PROVIDER_QWEN_API_KEY=sk-***
 INSTOCK_AI_RATE_CALLS_PER_HOUR=60
 INSTOCK_AI_RATE_TOKENS_PER_HOUR=200000
-INSTOCK_AI_RATE_REPAIR_LOOP_FREE=true
+# INSTOCK_AI_RATE_REPAIR_LOOP_FREE 已废弃 — 当前实现固定豁免修复闭环重试（rate_limiter.py 形参 rate_limit_loop=True）
 INSTOCK_AI_MAX_TOKENS_PER_CALL=8192
 INSTOCK_AI_TIMEOUT_SECONDS=60
 INSTOCK_AI_GLOBAL_TOOLS=sql_query,kline_fetch,code_validate,backtest_run
@@ -475,13 +484,18 @@ INSTOCK_AI_GLOBAL_TOOLS=sql_query,kline_fetch,code_validate,backtest_run
 2. 所有 Tornado handler 不直接 `requests.post()`，而是复用现有 `ThreadPoolExecutor` / `IOLoop.current().run_in_executor()` 模式；流式输出用后台线程读取 chunk，再通过 `asyncio.Queue` 或 Tornado queue 推给 SSE handler。
 3. `chat_async()` / `httpx.AsyncClient` 仅作为未来高并发优化，不进入 MVP 必选项。
 
-### 10.3 鉴权模型修正
+### 10.3 鉴权模型修正（v1.1.4 修正）
 
 [instock/web/base.py](instock/web/base.py) 没有用户体系——本项目是单用户/内部部署。原方案中 `per-user` 概念不成立。
 
-修订：
+**实际实现（与 §13 注释一致）**：
 
-- 限流维度从 `user_id` 改为 `(client_ip, scene)`，仍写入 `cn_stock_ai_call_log.user_id` 字段（值为 IP，向后兼容）。
+- 限流维度统一为 **`user_id`**（值由 `_client_ip(handler)` 取 `handler.request.remote_ip` 注入；
+  详见 [`aiAssistantHandler.py::_client_ip`](instock/web/aiAssistantHandler.py) 与
+  [`rate_limiter.check_quota(user_id, ...)`](instock/lib/ai/rate_limiter.py)）。
+  `cn_stock_ai_call_log.user_id` 列存储该值（当前即 IP）。
+- 未来开放外网访问时，只需把 handler 中的 `_client_ip(self)` 替换为登录用户 ID，
+  限流与审计无需改 schema。
 - 自定义 agent 没有"所有者"概念，只有 `is_builtin / enabled` 标志；多用户化以后再补。
 - 沿用此原则，§3.3 的 `cn_stock_ai_agent` 表**不引入** `created_by / owner_id` 等多租户字段，避免后续无谓迁移。
 
@@ -517,17 +531,20 @@ INSTOCK_AI_GLOBAL_TOOLS=sql_query,kline_fetch,code_validate,backtest_run
 修订：所有 AI 路由统一前缀 `/instock/api/ai/`，避免和已有 `/instock/api/strategy/code` 等混淆。策略相关 AI 操作放二级路径：
 
 ```
-/instock/api/ai/chat                 # 通用对话
-/instock/api/ai/chat/stream          # SSE 流式
-/instock/api/ai/config               # 可见配置
-/instock/api/ai/agents               # CRUD
-/instock/api/ai/calls                # 审计
-/instock/api/ai/strategy/generate    # 策略生成
-/instock/api/ai/strategy/refine      # 策略修改
-/instock/api/ai/strategy/explain     # 解释
-/instock/api/ai/strategy/repair      # 报错修复
-/instock/api/ai/backtest/explain     # 回测解读
+/instock/api/ai/chat                 # 通用对话           ✅ 已实现
+/instock/api/ai/config               # 可见配置           ✅ 已实现
+/instock/api/ai/agents               # CRUD（POST 用 /agents/manage 命名空间，无 PUT/{id}） ✅ 部分实现
+/instock/api/ai/strategy/generate          # 策略生成（同步）✅
+/instock/api/ai/strategy/generate/stream   # 策略生成（SSE 流式，前端默认）✅
+/instock/api/ai/strategy/refine            # 策略修改      ✅
+/instock/api/ai/strategy/repair            # 报错修复      ✅
 ```
+
+> ⚠️ 历史草案中的下列路由**当前未实现**，需要时按相同模式新增 handler 即可：
+> - `/instock/api/ai/chat/stream`（通用对话流式；目前流式仅 `/strategy/generate/stream` 支持）
+> - `/instock/api/ai/strategy/explain`（代码解释；前端走通用 `/chat` 即可）
+> - `/instock/api/ai/backtest/explain`（回测解读；前端走通用 `/chat` 即可）
+> - `/instock/api/ai/calls`（审计列表 API；目前直接查 `cn_stock_ai_call_log` 表）
 
 `web_service.py` `handlers` 列表的"组合回测 & 策略管理"块下方新增"AI 助手"块。
 
@@ -730,9 +747,11 @@ INSTOCK_AI_DEFAULT_MODEL=qwen2.5-coder:7b
 
 ## 13. 修订后的 MVP 验收清单（替代第 9 节）
 
-> **核对状态（2026-05-12，commit `d4512e16`）**：代码侧 11/11 全部就位；剩余 3 条标
-> *需浏览器联调* 的项目（流式逐字显示、编辑器灌入→保存→回测、AI 修复按钮）已通过
-> 等价 HTTP/SSE 脚本端到端验证（脚本：`_verify_ui_endpoints.py`，复用前端调用的同一组接口）。
+> **核对状态（2026-05-12，commit `01729b57`）**：代码侧 11/11 全部就位，剩余 3 项“需浏览器联调”
+> 项目（流式逐字显示、编辑器灌入→保存→回测、AI 修复按钮）已同时通过：
+> - 等价 HTTP/SSE 脚本 [`_verify_ui_endpoints.py`](_verify_ui_endpoints.py) 端到端验证；
+> - **真实浏览器点击验证**（`/algo/edit/93`，M10/M11 新增的「一键让 AI 根据建议修复」按钮 → AiChatDrawer 预填诊断 prompt →
+>   生成出的代码遵守 strategy_lessons KB 规则（STOCH 两元解包 / 异常日志 / ±2% 缓冲）→ 采用后 Monaco 编辑器变“未保存”）。
 
 > **2026-05-12 端到端验证结果**（`_verify_ui_endpoints.py`，provider=qwen）：
 > - (A) `/instock/api/ai/strategy/generate/stream` — 收到 **115 条 SSE 事件**，
@@ -778,6 +797,11 @@ INSTOCK_AI_DEFAULT_MODEL=qwen2.5-coder:7b
       → `instock/lib/ai/memory/` 双实现（inmem + db）；`ChatHandler.post` 串入 history。
 - [x] RAG 工具：prompt 含"布林带"时 `kb_search` 命中对应模板（看审计 `tools_used`）。
       → `kb_search` 工具 + `KbStore._is_cjk_query` → LIKE 主路径；`cron.workdayly/run_kb_indexer.sh` 周期刷库。
+- [x] **M11 历史踩坑 KB （2026-05-12 新增）**：strategy_coder/repairer/analyst 系统提示词自动追加
+      [`strategy_lessons.md`](instock/lib/ai/prompt/strategy_lessons.md) 踩坑知识库（HIGH/MED/LOW 分级、附策略 89 骨架）；
+      AI 修复成功后 `aiAssistantHandler._record_repair_lesson` 按 7 类错误关键字自动写回去重。
+      → 实现：[`prompt_loader.load()`](instock/lib/ai/prompt_loader.py) `_LESSONS_AGENTS` 机制 + `record_lesson(...)` API；
+      **浏览器验证**：策略 93 修复后代码同时体现多条规则（`slowk, slowd = talib.STOCH(...)`两元解包、`except Exception as e: log.warn(...)` 、性“±2% 缓冲”注释）。
 
 > 上述 3 项已于 2026-05-12 通过等价脚本 [`_verify_ui_endpoints.py`](_verify_ui_endpoints.py) 进行
 > 端到端验证，调用路径与前端一致（SSE 读 fetch+reader、保存走 `cn_stock_strategy_code`、
@@ -1014,10 +1038,11 @@ Layer 1 (infra)      : instock/lib/ai/{config,audit,memory/inmem,exceptions}
 优化：**双桶限流（按场景 + 按总 token）**
 
 ```python
-# 配置
+# 配置（环境变量 — 实际生效项）
 INSTOCK_AI_RATE_CALLS_PER_HOUR=60          # 调用次数
 INSTOCK_AI_RATE_TOKENS_PER_HOUR=200000     # token 总额
-INSTOCK_AI_RATE_REPAIR_LOOP_FREE=true      # 修复闭环内的多轮算 1 次
+# 修复闭环重试豁免：当前由 rate_limiter.check_quota(rate_limit_loop=True) 形参写死开启，
+# 无 INSTOCK_AI_RATE_REPAIR_LOOP_FREE 这种 env 开关；如需禁用需改 handler 调用点。
 ```
 
 实现位置：`audit.py` 写日志的同时维护 1 小时滑动窗口（直接 SQL 查 `cn_stock_ai_call_log` 即可，不必额外缓存）。
@@ -1157,6 +1182,7 @@ export const AI_ERROR_CODES = {
 | **M8 多轮记忆** | `ConversationMemory` (inmem 默认) + `cn_stock_ai_conversation` + 前端会话列表 | 5 轮上下文累积修改 |
 | **M9 RAG** | `cn_stock_ai_kb` + FULLTEXT + `kb_search` 工具 + cron.workdayly 索引器 | "布林带"prompt 命中模板 |
 | **M10 编排 & 跨场景** | 顺序管线 `analyst→coder→tester` + IM 摘要/回测解读统一接入 | `moat_ai_service` 改用 lib/ai 后老用例不退化 |
+| **M11 踩坑知识库（2026-05-12 新增）** | (1) 新增 [`strategy_lessons.md`](instock/lib/ai/prompt/strategy_lessons.md)，按 HIGH/MED/LOW 三级沉淀 8 类常见 bug + 策略 89 骨架；(2) `prompt_loader.load()` 对 strategy_coder/repairer/analyst 三个 agent **自动追加**该文件到系统提示词末尾；(3) 新增 `record_lesson(title, problem, fix, severity, dedup)` API + AI 修复成功路径上 `aiAssistantHandler._record_repair_lesson` 按 7 类错误关键字自动写回 | 修复后代码体现 KB 规则（talib.STOCH 两元解包、`except Exception as e:`、±2% 缓冲）。浏览器验证于策略 93。 |
 
 > **最小可演示**：M0 复核 + M1 + M2（生成）+ M3（校验闭环）+ 最小流式即可线下演示，约 2–3 个工作单元。
 
