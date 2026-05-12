@@ -24,6 +24,13 @@ from typing import Any, Dict, List, Optional
 _ALLOWED_ROLES = ('system', 'user', 'assistant', 'tool')
 
 
+def coerce_role(role: Optional[str]) -> str:
+    """audit-fix-2-P1-C: 任何写入 Message.role 的入口都要走这个白名单，
+    避免直接 Message(role=user_input,...) 绕过 from_dict 的校验。"""
+    r = str(role or 'user')
+    return r if r in _ALLOWED_ROLES else 'user'
+
+
 @dataclass
 class Message:
     role: str               # 'system' | 'user' | 'assistant' | 'tool'
@@ -36,10 +43,7 @@ class Message:
     @classmethod
     def from_dict(cls, raw: Dict[str, Any]) -> 'Message':
         # audit-fix-P3-13: 白名单 role，避免脑变型 XSS 从 DB 走到前端
-        role = str(raw.get('role') or 'user')
-        if role not in _ALLOWED_ROLES:
-            role = 'user'
-        return cls(role=role,
+        return cls(role=coerce_role(raw.get('role')),
                    content=str(raw.get('content') or ''),
                    ts=float(raw.get('ts') or time.time()))
 

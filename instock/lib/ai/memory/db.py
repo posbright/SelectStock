@@ -12,13 +12,14 @@ import json
 import logging
 import threading
 import time
+import weakref
 from datetime import datetime
 from typing import Dict, List, Optional
 
 import instock.lib.database as mdb
 from instock.lib.ai.memory.base import (
     Conversation, ConversationMemory, Message,
-    estimate_messages_tokens, truncate_to_budget,
+    coerce_role, estimate_messages_tokens, truncate_to_budget,
 )
 
 _TABLE = 'cn_stock_ai_conversation'
@@ -26,21 +27,35 @@ _table_ready = False
 _lock = threading.Lock()
 
 # audit-fix-P0-1: per-conversation_id 锁，避免 append 读-改-写丢消息
-_cid_locks: Dict[str, threading.Lock] = {}
+# audit-fix-2-P0-A: 使用 WeakValueDictionary 让锁在所有持有者释放后自动从 dict 中移除，
+# 不再需要 .clear() 兜底（清空可能丢弃正在被持有的锁，破坏 per-CID 串行化）。
+# threading.Lock() 是 C 实现的 _thread.lock，不支持 weakref，需要包一层 Python 类。
+class _RefLock:
+    __slots__ = ('_lock', '__weakref__')
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+
+    def __enter__(self):
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self._lock.release()
+
+
+_cid_locks: 'weakref.WeakValueDictionary[str, _RefLock]' = weakref.WeakValueDictionary()
 _cid_locks_lock = threading.Lock()
 
 # audit-fix-P2-8: messages_json 会话消息总数上限（超出从最旧丢弃、保留 head system）
 _MAX_MSGS_PER_CONV = 200
 
 
-def _get_cid_lock(cid: str) -> threading.Lock:
+def _get_cid_lock(cid: str) -> _RefLock:
     with _cid_locks_lock:
         lk = _cid_locks.get(cid)
         if lk is None:
-            # 轻量限制字典大小避免无限增长
-            if len(_cid_locks) > 4096:
-                _cid_locks.clear()
-            lk = threading.Lock()
+            lk = _RefLock()
             _cid_locks[cid] = lk
         return lk
 
@@ -214,7 +229,7 @@ class DbConversationMemory(ConversationMemory):
                             conv = fetched
                     else:
                         logging.warning(f'[ai.memory.db.append.insert] {exc}')
-            msg_obj = Message(role=role, content=content)
+            msg_obj = Message(role=coerce_role(role), content=content)
             conv.messages.append(msg_obj)
             # audit-fix-P2-8: 消息总数超上限时，从最旧丢弃（保留 head system）
             if len(conv.messages) > _MAX_MSGS_PER_CONV:

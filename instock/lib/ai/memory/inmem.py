@@ -15,7 +15,7 @@ from typing import List, Optional
 
 from instock.lib.ai.memory.base import (
     Conversation, ConversationMemory, Message,
-    estimate_messages_tokens, truncate_to_budget,
+    coerce_role, estimate_messages_tokens, truncate_to_budget,
 )
 
 
@@ -80,7 +80,7 @@ class InMemoryConversationMemory(ConversationMemory):
                     scene=scene or 'chat', user_id=user_id, agent=agent,
                 )
                 self._store[conversation_id] = conv
-            msg = Message(role=role, content=content)
+            msg = Message(role=coerce_role(role), content=content)
             conv.messages.append(msg)
             # audit-fix-P2-8
             if len(conv.messages) > _MAX_MSGS_PER_CONV:

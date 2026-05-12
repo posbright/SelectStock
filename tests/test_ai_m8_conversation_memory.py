@@ -375,6 +375,32 @@ class AuditFixesTests(unittest.TestCase):
         for ok in ('system', 'user', 'assistant', 'tool'):
             self.assertEqual(Msg.from_dict({'role': ok, 'content': ''}).role, ok)
 
+    def test_audit2_p1c_inmem_append_coerces_role(self):
+        """直接 append('<script>', ...) 也必须被白名单拒收（不只是 from_dict）。"""
+        m = InMemoryConversationMemory()
+        m.get_or_create('c-evil', scene='chat')
+        m.append('c-evil', '<img onerror=x>', 'pwn')
+        m.append('c-evil', 'system', 'ok')
+        conv = m.get('c-evil')
+        roles = [x.role for x in conv.messages]
+        self.assertEqual(roles, ['user', 'system'])
+
+    def test_audit2_p0a_cid_lock_returns_same_object_for_concurrent_callers(self):
+        """WeakValueDictionary 在锁仍被持有时不应回收，并发请求拿到同一把锁。"""
+        from instock.lib.ai.memory.db import _get_cid_lock
+        l1 = _get_cid_lock('cid-z')
+        l2 = _get_cid_lock('cid-z')
+        self.assertIs(l1, l2)
+        # 释放强引用 → 可被弱引用字典回收
+        del l1, l2
+        import gc
+        gc.collect()
+        # 重新取应该是新对象（旧的已被 GC），但仍然可用
+        l3 = _get_cid_lock('cid-z')
+        with l3:
+            pass
+        self.assertIsNotNone(l3)
+
 
 if __name__ == '__main__':
     unittest.main()

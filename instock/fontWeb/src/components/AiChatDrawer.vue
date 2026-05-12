@@ -370,10 +370,13 @@ async function selectConversation(cid: string) {
       chatMessages.value = (r.data.messages || []).filter(m => m.role !== 'system')
       await scrollChatToBottom()
     } else {
+      // audit-fix-2-P0-B: 失败时抛出，让自动恢复路径能清掉 localStorage 中的过期 id
       ElMessage.error(r.msg || '加载会话失败')
+      throw new Error(r.msg || 'load_conversation_failed')
     }
   } catch (e: any) {
     ElMessage.error(e?.message || '加载会话失败')
+    throw e
   }
 }
 
