@@ -32,9 +32,13 @@ def _extract_python_block(text: str) -> str:
 def _tester_passes(output: str, ctx: Dict[str, Any]) -> bool:
     """tester 步骤的终止条件：strict 校验 OK 即通过。
 
-    output 期望是 strict 校验报告或 'OK'；用 coder 的输出做静态校验。
+    audit-fix-1-P1: 验证 **本轮输出**（tester 产出的修复后代码），而不是
+    原始的 ctx['coder']——后者在 loop 重试期间永不更新，会导致任何修复
+    都被误判为未通过。如果 tester 输出为空，回退到 ctx['coder']以充当
+    'tester 没变动代码' 的语义。
     """
-    code = _extract_python_block(ctx.get('coder', '') or '')
+    code = _extract_python_block(output or '') or _extract_python_block(
+        ctx.get('coder', '') or '')
     if not code:
         return False
     try:

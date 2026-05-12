@@ -133,8 +133,12 @@ class Pipeline:
         try:
             return template.format(**context)
         except KeyError as exc:
+            # audit-fix-1-P3: 提供一个空 partial，避免 caller 拿到 None 踩空指针
+            empty = PipelineResult(final='', steps=[], total_latency_ms=0,
+                                    total_tokens=0)
             raise PipelineError(
-                f'user_template 引用了未知占位符 {exc!s}；可用键：{sorted(context.keys())}'
+                f'user_template 引用了未知占位符 {exc!s}；可用键：{sorted(context.keys())}',
+                partial=empty,
             )
 
     def run(self, *, user_message: str, scene: str = 'pipeline',

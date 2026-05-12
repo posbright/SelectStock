@@ -126,8 +126,11 @@ class PipelineRunTests(unittest.TestCase):
     def test_unknown_template_placeholder_raises(self):
         pl = Pipeline([Step('a', user_template='{nope}')])
         runner = _make_fake_agent({'a': 'X'})
-        with self.assertRaises(PipelineError):
+        with self.assertRaises(PipelineError) as cm:
             pl.run(user_message='hi', _run_agent=runner)
+        # audit-fix-1-P3: _render 抢出时 partial 不应为 None
+        self.assertIsNotNone(cm.exception.partial)
+        self.assertEqual(cm.exception.partial.steps, [])
 
     def test_scene_namespacing_per_step(self):
         pl = Pipeline([Step('first'), Step('second')])
@@ -235,8 +238,9 @@ class StrategyPipelinePresetTests(unittest.TestCase):
         self.assertIsNotNone(tester.loop_until)
 
     def test_strategy_pipeline_runs_with_fake_agent_and_safe_code(self):
-        """tester 的 loop_until 调真实 validate_code_strict；
-        给一个最简单的合法策略代码即可在第 1 轮通过。"""
+        """audit-fix-1-P2: 不再静默吞下 PipelineError；mock validate_code_strict
+        强制走通路。同时验证 tester loop 是以 *本轮* tester 输出为输入调
+        validate_code_strict（audit-fix-1-P1 回归）。"""
         good_code = (
             "```python\n"
             "def select_stocks(data, params):\n"
@@ -246,16 +250,54 @@ class StrategyPipelinePresetTests(unittest.TestCase):
         runner = _make_fake_agent({
             'analyst': 'IDEA',
             'coder': good_code,
-            'tester': good_code,  # tester 输出代码块
+            'tester': good_code,
         })
-        try:
-            res = STRATEGY_PIPELINE.run(user_message='做个空策略', _run_agent=runner)
-        except PipelineError as exc:
-            # 若环境缺少 strict 校验依赖，则记录 partial 仍可断言执行了 3 步
-            self.assertIsNotNone(exc.partial)
-            return
-        self.assertEqual(res.final.strip().startswith('```python'), True)
+        seen_inputs = []
+
+        def fake_validate(code):
+            seen_inputs.append(code)
+            return True, 'ok'
+
+        with mock.patch(
+                'instock.core.backtest.strategy_sandbox.validate_code_strict',
+                side_effect=fake_validate):
+            res = STRATEGY_PIPELINE.run(
+                user_message='做个空策略', _run_agent=runner)
         self.assertEqual(len(res.steps), 3)
+        self.assertTrue(res.steps[-1].ok)
+        # validate 应被调用；验证传给它的 code 不是空串
+        self.assertTrue(seen_inputs)
+        self.assertIn('select_stocks', seen_inputs[0])
+
+    def test_strategy_pipeline_tester_validates_current_iter_not_original_coder(self):
+        """audit-fix-1-P1 回归防守：tester 迭代 1 输出 BAD、迭代 2 输出 GOOD；
+        validate_code_strict 应看到 GOOD（本轮输出）后返回 True。说明 loop_until
+        读的是 *output* 而不是始终的 ctx['coder']。"""
+        bad_code = '```python\nthis is not valid python !!!\n```'
+        good_code = '```python\ndef select_stocks(data, params):\n    return []\n```'
+        runner = _make_fake_agent({
+            'analyst': 'IDEA',
+            'coder': bad_code,
+            'tester': [bad_code, good_code],  # 首轮坏，次轮好
+        })
+        seen = []
+
+        def fake_validate(code):
+            seen.append(code)
+            return ('select_stocks' in code), 'syntax' if 'select_stocks' not in code else 'ok'
+
+        with mock.patch(
+                'instock.core.backtest.strategy_sandbox.validate_code_strict',
+                side_effect=fake_validate):
+            res = STRATEGY_PIPELINE.run(
+                user_message='make', _run_agent=runner)
+        # tester 应在 iter=2 通过
+        self.assertTrue(res.steps[-1].ok)
+        self.assertEqual(res.steps[-1].iters, 2)
+        # 首次看到 bad，第二次看到 good——证明用的是本轮输出
+        self.assertEqual(len(seen), 2)
+        self.assertNotIn('select_stocks', seen[0])
+        self.assertIn('select_stocks', seen[1])
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -292,7 +334,9 @@ class MoatAiServiceMigrationTests(unittest.TestCase):
         m.assert_called_once()
         kwargs = m.call_args.kwargs
         self.assertEqual(kwargs.get('scene'), 'moat_analysis')
-        self.assertEqual(kwargs.get('agent'), 'moat_analyst')
+        # audit-fix-1-P3: agent 名与 scene 对齐、带专用 user_id 避免与用户共享限流桶
+        self.assertEqual(kwargs.get('agent'), 'moat_analysis')
+        self.assertEqual(kwargs.get('user_id'), '__moat_service__')
         ov = kwargs.get('overrides') or {}
         self.assertEqual(ov.get('api_base'), 'http://example.test/v1')
         self.assertEqual(ov.get('api_key'), 'sk-test')

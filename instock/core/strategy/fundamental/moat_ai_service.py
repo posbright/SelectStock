@@ -324,7 +324,10 @@ class MoatAIService:
             return run_chat(
                 prompt,
                 scene='moat_analysis',
-                agent='moat_analyst',
+                # audit-fix-1-P3: 使用专用 user_id，避免与 Web 用户调用共享全局限流桶
+                user_id='__moat_service__',
+                # audit-fix-1-P3: agent 名与 scene 对齐，便于审计检索（不需注册为 builtin）
+                agent='moat_analysis',
                 system='你是一位专业的价值投资分析师。',
                 overrides={
                     'api_base': self.config.api_base,
