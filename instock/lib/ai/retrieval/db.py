@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
@@ -46,7 +47,8 @@ CREATE TABLE IF NOT EXISTS {_TABLE} (
 
 # audit-fix-1-P2: 部分 MySQL 构建未启 ngram parser，则回退不带 parser 的 DDL，
 # Chinese 查询会走 LIKE 主路径（见 _is_cjk_query）。
-_DDL_NO_NGRAM = _DDL.replace(' WITH PARSER ngram', '')
+# audit-fix-2-P3: 用 regex 去掉 WITH PARSER ngram 子句，对 DDL 重排版更鲁棒。
+_DDL_NO_NGRAM = re.sub(r'\s+WITH\s+PARSER\s+ngram', '', _DDL)
 
 
 @dataclass
@@ -78,12 +80,14 @@ def _ensure_table() -> None:
         if _table_ready:
             return
         with mdb.get_connection() as conn:
-            with conn.cursor() as cur:
-                try:
+            try:
+                with conn.cursor() as cur:
                     cur.execute(_DDL)
-                except Exception as exc:
-                    # ngram parser 不可用 → 回退不带 parser，Chinese 走 LIKE 主路径
-                    logging.info(f'[ai.retrieval] ngram parser 不可用，回退普通 FULLTEXT: {exc}')
+            except Exception as exc:
+                # ngram parser 不可用 → 回退不带 parser
+                # audit-fix-2-P0/P1: 开新 cursor，避免某些驱动在 execute 报错后 cursor 状态不可用
+                logging.info(f'[ai.retrieval] ngram parser 不可用，回退普通 FULLTEXT: {exc}')
+                with conn.cursor() as cur:
                     cur.execute(_DDL_NO_NGRAM)
         _table_ready = True
 

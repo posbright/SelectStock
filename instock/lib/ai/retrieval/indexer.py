@@ -23,7 +23,9 @@ from instock.lib.ai.retrieval.db import KbStore
 
 _DOC_DIR = os.path.abspath(os.path.join(
     os.path.dirname(__file__), '..', '..', '..', '..', 'document'))
-_DOC_MAX_BYTES = 200_000   # 单个 md ≤200KB 才入库（避免巨型说明书）
+# audit-fix-2-P2: 这里是“读取后的字符上限”（text mode read 返回 chars）；
+# 文件字节上限另外用 os.path.getsize() 预检，避免读超大文件。
+_DOC_MAX_CHARS = 200_000
 _STRATEGY_LIMIT = 200      # 最近 N 条用户策略
 _FAILURE_LIMIT = 100       # 最近 N 条失败回测
 
@@ -33,6 +35,10 @@ def _index_templates(store: KbStore) -> int:
         from instock.web.portfolioBacktestHandler import STRATEGY_TEMPLATES
     except Exception as exc:
         logging.warning(f'[ai.retrieval.indexer.templates] import 失败: {exc}')
+        return 0
+    # audit-fix-2-P2: 空源不应抹掎旧表 —— 防重构后 STRATEGY_TEMPLATES 意外为空导致清库
+    if not STRATEGY_TEMPLATES:
+        logging.info('[ai.retrieval.indexer.templates] STRATEGY_TEMPLATES 为空，跳过。')
         return 0
     # audit-fix-1-P2: 模板源是闭集（代码里写死的 STRATEGY_TEMPLATES），
     # 重建前清掉旧 template 行，避免删除 / 改名后旧条目残留。
@@ -66,20 +72,22 @@ def _index_docs(store: KbStore) -> int:
         return 0
     n = 0
     # audit-fix-1-P3: 递归扫 document/ 下所有 .md（包括子目录）
-    for root, _dirs, files in os.walk(_DOC_DIR):
+    for root, dirs, files in os.walk(_DOC_DIR):
+        # audit-fix-2-P3: 原地排序 dirs/files，使递归顺序在各平台上一致
+        dirs.sort()
         for fname in sorted(files):
             if not fname.lower().endswith('.md'):
                 continue
             fpath = os.path.join(root, fname)
             try:
                 # audit-fix-1-P2: size + read 放同一 try 里，避免中间文件被改后读取异常裸露
-                if os.path.getsize(fpath) > _DOC_MAX_BYTES:
+                if os.path.getsize(fpath) > _DOC_MAX_CHARS:
+                    # 按字节预检（UTF-8 中文 1 字 ≈ 3 字节，实际允许的文件还会更大）
                     continue
                 with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-                    body = f.read(_DOC_MAX_BYTES + 1)
-                if len(body) > _DOC_MAX_BYTES:
-                    # 中间被写大了，截断
-                    body = body[:_DOC_MAX_BYTES]
+                    body = f.read(_DOC_MAX_CHARS + 1)
+                if len(body) > _DOC_MAX_CHARS:
+                    body = body[:_DOC_MAX_CHARS]
             except OSError as exc:
                 logging.warning(f'[ai.retrieval.indexer.docs] {fname}: {exc}')
                 continue

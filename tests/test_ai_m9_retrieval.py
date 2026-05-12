@@ -245,23 +245,56 @@ class IndexerTests(unittest.TestCase):
         self.assertNotIn('task_name', captured.get('sql', ''))
 
     def test_audit1_p2_template_indexer_prunes_stale_entries(self):
-        """audit-fix-1-P2: 模板索引前应清掉旧 template 行。"""
+        """audit-fix-1-P2: 模板索引前应清掉旧 template 行；
+        audit-fix-2-P3: delete 必须发生在 upsert 之前。"""
         from instock.lib.ai.retrieval import indexer
 
-        deleted_types = []
+        calls = []
 
         class FakeStore:
             def delete_by_type(self, t):
-                deleted_types.append(t)
+                calls.append(('delete', t))
                 return 1
 
             def upsert(self, *a, **kw):
+                calls.append(('upsert', a[0] if a else None))
                 return True
 
         with mock.patch('instock.lib.ai.retrieval.indexer.KbStore',
                         return_value=FakeStore()):
             indexer.run_indexer(sources=['template'])
-        self.assertIn('template', deleted_types)
+        # 至少有 1 次 delete + ≥1 次 upsert，且 delete 必须先于所有 upsert
+        kinds = [c[0] for c in calls]
+        self.assertIn('delete', kinds)
+        self.assertIn('upsert', kinds)
+        self.assertEqual(kinds[0], 'delete')
+        self.assertTrue(all(k == 'upsert' for k in kinds[1:]))
+
+    def test_audit2_p2_empty_templates_skips_prune(self):
+        """audit-fix-2-P2: STRATEGY_TEMPLATES 为空时不能调 delete_by_type
+        （否则会抹平整张表）。"""
+        from instock.lib.ai.retrieval import indexer
+
+        calls = []
+
+        class FakeStore:
+            def delete_by_type(self, t):
+                calls.append(('delete', t))
+                return 1
+
+            def upsert(self, *a, **kw):
+                calls.append(('upsert', a[0] if a else None))
+                return True
+
+        with mock.patch.object(
+                __import__('instock.web.portfolioBacktestHandler',
+                            fromlist=['STRATEGY_TEMPLATES']),
+                'STRATEGY_TEMPLATES', []):
+            with mock.patch('instock.lib.ai.retrieval.indexer.KbStore',
+                            return_value=FakeStore()):
+                res = indexer.run_indexer(sources=['template'])
+        self.assertEqual(res.get('template'), 0)
+        self.assertEqual(calls, [])  # 既不 delete 也不 upsert
 
 
 if __name__ == '__main__':
