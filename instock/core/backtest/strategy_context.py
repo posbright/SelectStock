@@ -217,6 +217,22 @@ class DataProxy:
         clean = code.split('.')[0] if isinstance(code, str) and '.' in code else code
         return clean in self._current_bars
 
+    # 聚宽兼容：data 在策略中常被当作 dict 使用 (data.keys()/iter/len/get)。
+    def keys(self):
+        return list(self._current_bars.keys())
+
+    def __iter__(self):
+        return iter(self._current_bars.keys())
+
+    def __len__(self):
+        return len(self._current_bars)
+
+    def get(self, code, default=None):
+        clean = code.split('.')[0] if isinstance(code, str) and '.' in code else code
+        if clean in self._current_bars:
+            return StockData(clean, self)
+        return default
+
     def _set_current(self, code, bar_dict):
         """设置当日行情"""
         self._current_bars[code] = bar_dict

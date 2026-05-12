@@ -93,9 +93,24 @@
         <el-button type="primary" :loading="loading" @click="run" :disabled="!canRun">
           {{ loading ? (mode === 'chat' ? '发送中...' : '生成中...') : (mode === 'chat' ? '发送' : '运行') }}
         </el-button>
+        <el-button
+          v-if="mode === 'generate'"
+          type="success"
+          :loading="streaming"
+          @click="runStream"
+          :disabled="!canRun"
+        >
+          {{ streaming ? '流式生成中...' : '流式运行' }}
+        </el-button>
         <el-button v-if="lastCode && mode !== 'chat'" @click="apply">采用结果</el-button>
         <el-button v-if="lastCode && mode !== 'chat'" text @click="copyResult">复制</el-button>
       </div>
+
+      <!-- 流式输出预览 -->
+      <el-card v-if="streaming || (streamingText && !lastCode)" shadow="never" style="margin-top: 12px;">
+        <div class="section-label">流式输出（实时）：</div>
+        <pre class="stream-preview">{{ streamingText || '等待第一段输出...' }}</pre>
+      </el-card>
 
       <!-- 校验状态（非 chat） -->
       <template v-if="mode !== 'chat'">
@@ -156,7 +171,7 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  aiGenerateStrategy, aiRefineStrategy, aiRepairStrategy,
+  aiGenerateStrategy, aiRefineStrategy, aiRepairStrategy, aiGenerateStrategyStream,
   aiChat, aiListConversations, aiGetConversation, aiDeleteConversation,
   type StrategyAiResponse,
   type AiConversationSummary,
@@ -182,6 +197,7 @@ const props = defineProps<{
   currentCode?: string
   strategyId?: number | string
   defaultMode?: 'generate' | 'refine' | 'repair' | 'chat'
+  initialPrompt?: string
 }>()
 
 const emit = defineEmits<{
@@ -215,12 +231,17 @@ watch(() => props.modelValue, (v) => {
     if (props.defaultMode) {
       mode.value = props.defaultMode
     }
+    if (props.initialPrompt) {
+      prompt.value = props.initialPrompt
+    }
     // 抽屉打开时清空旧错误（保留 lastCode 便于再次"采用"）
     errorMsg.value = ''
   }
 })
 const prompt = ref('')
 const loading = ref(false)
+const streaming = ref(false)
+const streamingText = ref('')
 const lastCode = ref('')
 const validated = ref(false)
 const validationError = ref('')
@@ -301,6 +322,46 @@ async function run() {
     errorMsg.value = e?.message || String(e)
   } finally {
     loading.value = false
+  }
+}
+
+async function runStream() {
+  if (mode.value !== 'generate') return
+  _resetState()
+  streamingText.value = ''
+  streaming.value = true
+  try {
+    const ov = _overrides()
+    await aiGenerateStrategyStream(
+      { prompt: prompt.value, ...ov },
+      (ev) => {
+        if (ev.type === 'chunk') {
+          streamingText.value += ev.text
+        } else if (ev.type === 'repair') {
+          repairAttempts.value = ev.attempt
+          ElMessage.info(`沙箱校验未通过，正在第 ${ev.attempt} 轮修复...`)
+        } else if (ev.type === 'done') {
+          lastCode.value = ev.code || ''
+          validated.value = !!ev.validated
+          validationError.value = ev.validation_error || ''
+          lastModel.value = ev.model || ''
+          repairAttempts.value = ev.repair_attempts || repairAttempts.value
+          if (!validated.value) {
+            ElMessage.warning('AI 生成的代码未通过沙箱校验，请人工检查或重试')
+          } else if (repairAttempts.value > 0) {
+            ElMessage.success(`流式生成成功（自动修复 ${repairAttempts.value} 轮）`)
+          } else {
+            ElMessage.success('流式生成成功')
+          }
+        } else if (ev.type === 'error') {
+          errorMsg.value = ev.msg || `AI 调用失败 (code=${ev.code})`
+        }
+      },
+    )
+  } catch (e: any) {
+    errorMsg.value = e?.message || String(e)
+  } finally {
+    streaming.value = false
   }
 }
 
@@ -516,4 +577,10 @@ watch(() => props.modelValue, (v) => {
   white-space: pre-wrap; word-break: break-word;
 }
 .failure-block .meta { font-size: 11px; color: #909399; margin-top: 4px; }
+.stream-preview {
+  background: #f5f7fa; border: 1px solid #ebeef5; border-radius: 4px;
+  padding: 8px 10px; font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 12px; line-height: 1.5; max-height: 360px; overflow: auto;
+  white-space: pre-wrap; word-break: break-word; margin: 0;
+}
 </style>

@@ -118,6 +118,7 @@ class PortfolioBacktestEngine:
             return {'status': 'error', 'message': f'初始资金必须大于0，当前值: {initial_cash}'}
 
         # 1. 编译策略
+        self._raw_strategy_code = strategy_code or ''
         try:
             self._strategy_funcs = compile_strategy(strategy_code)
         except (ValueError, SyntaxError) as e:
@@ -140,6 +141,8 @@ class PortfolioBacktestEngine:
         if not trading_dates:
             return {'status': 'error', 'message': f'无交易日: {start_date} ~ {end_date}'}
         logging.info(f"[回测引擎] 交易日: {len(trading_dates)} 天")
+        self._log_messages.append(
+            f"[系统] 回测区间 {start_date} ~ {end_date}，共 {len(trading_dates)} 个交易日，初始资金 {initial_cash:,.0f}")
 
         # 4. 注入策略 API 到函数命名空间
         api_ns = self._create_strategy_api()
@@ -152,6 +155,8 @@ class PortfolioBacktestEngine:
 
         # 6. 预加载策略涉及的股票数据
         self._discover_and_load_stocks(pre_start, end_date)
+        self._log_messages.append(
+            f"[系统] 预加载完成：候选股票 {len(self._stock_data)} 只")
 
         # 7. 加载基准数据
         self._benchmark_data = load_benchmark_data(benchmark, start_date, end_date)
@@ -286,6 +291,15 @@ class PortfolioBacktestEngine:
             if pos_snap:
                 self._position_snapshots.append({'date': date, 'positions': pos_snap})
 
+            # 8i. 每 20 个交易日输出一条进度日志（让前端 SSE 有插脸）
+            if (i + 1) % 20 == 0 or i == len(trading_dates) - 1:
+                pos_count = len(pos_snap)
+                self._log_messages.append(
+                    f"[{date}] [PROGRESS] day {i+1}/{len(trading_dates)} "
+                    f"NAV={nav:.4f} (基准 {bm_nav:.4f}) "
+                    f"总资产={self.context.portfolio.total_value:,.0f} "
+                    f"持仓={pos_count}只 交易总计={len(self._trade_records)}笔")
+
             prev_nav = nav
             prev_bm_nav = bm_nav
 
@@ -299,6 +313,19 @@ class PortfolioBacktestEngine:
         logging.info(f"[回测引擎] 完成: 收益={metrics['total_return']:.2f}%, "
                      f"最大回撤={metrics['max_drawdown']:.2f}%, "
                      f"夏普={metrics['sharpe_ratio']:.2f}, 耗时={elapsed:.1f}s")
+        self._log_messages.append(
+            f"[系统] 回测完成 | 收益={metrics['total_return']:.2f}% 基准={metrics.get('benchmark_return', 0):.2f}% "
+            f"超额={metrics.get('excess_return', 0):.2f}% 最大回撤={metrics['max_drawdown']:.2f}% "
+            f"夏普={metrics['sharpe_ratio']:.2f} 交易次数={metrics.get('trade_count', 0)} 耗时={elapsed:.1f}s")
+        if metrics.get('trade_count', 0) == 0:
+            zero_trade_hints = self._diagnose_zero_trades()
+            self._log_messages.append(
+                "[系统] [WARN] 全程 0 笔交易。可能原因 / 建议改进："
+            )
+            for h in zero_trade_hints:
+                self._log_messages.append(f"[系统] [WARN]   • {h.get('title', '')} — {h.get('suggestion', '')}")
+        else:
+            zero_trade_hints = []
 
         return {
             'status': 'completed',
@@ -306,8 +333,9 @@ class PortfolioBacktestEngine:
             'nav': [r.to_dict() for r in self._nav_records],
             'trades': [t.to_dict() for t in self._trade_records],
             'positions': self._position_snapshots,
-            'logs': self._log_messages[-200:],  # 最后200条日志
+            'logs': self._log_messages[-2000:],  # 最近2000条日志（以前 200 不够）
             'errors': self._strategy_errors[-50:],  # 最近50条策略错误
+            'hints': zero_trade_hints,  # 0 笔交易时的诊断+改进建议
             'elapsed': round(elapsed, 1),
             'params': {
                 'start_date': start_date,
@@ -328,6 +356,110 @@ class PortfolioBacktestEngine:
         if isinstance(code, str) and '.' in code:
             return code.split('.')[0]
         return code
+
+    def _diagnose_zero_trades(self):
+        """当全程 0 笔交易时，结合策略源码与运行日志生成结构化诊断+改进建议。
+
+        返回 [{title, suggestion, severity, ref?}] 列表，供前端展示与 AI 修复 prompt 使用。
+        """
+        import re as _re
+        code = getattr(self, '_raw_strategy_code', '') or ''
+        logs = self._log_messages or []
+        errors = self._strategy_errors or []
+        hints = []
+
+        # 1. 触发陷阱：day == 1 / day==1
+        if _re.search(r"current_dt\s*\.\s*day\s*==\s*1\b", code) or \
+           _re.search(r"\.day\s*==\s*1\b", code):
+            hints.append({
+                'title': '使用了 day==1 触发陷阱',
+                'suggestion': '中国 A 股 1/1、5/1、10/1 都是节假日，handle_data 当天根本不会被调用。'
+                              '改用 g.last_select_month 游标：if m in (1,4,7,10) and m != g.last_select_month: ... g.last_select_month = m',
+                'severity': 'high',
+                'ref': 'strategy_coder.md#触发陷阱',
+            })
+
+        # 2. talib.STOCH 三元解包陷阱
+        if _re.search(r"=\s*talib\s*\.\s*STOCH\s*\(", code) and \
+           _re.search(r"[a-zA-Z_]\w*\s*,\s*[a-zA-Z_]\w*\s*,\s*[a-zA-Z_]\w*\s*=\s*talib\s*\.\s*STOCH", code):
+            hints.append({
+                'title': 'talib.STOCH 解包数量错误',
+                'suggestion': 'talib.STOCH 只返回 (slowk, slowd) 两个值，不是三个。'
+                              '原写法 k, d, j = talib.STOCH(...) 会抛 ValueError 被 except 吞掉，导致全程 0 笔交易。'
+                              '改成 slowk, slowd = talib.STOCH(...); j = 3*slowk - 2*slowd。',
+                'severity': 'high',
+                'ref': 'strategy_coder.md#talib',
+            })
+
+        # 3. 裸 except: continue 静默错误
+        if _re.search(r"except\s*:\s*\n\s*continue", code) or _re.search(r"except\s*:\s*\n\s*pass", code):
+            hints.append({
+                'title': '裸 except 静默吞掉异常',
+                'suggestion': '请把 except: continue 改为 except Exception as e: log.warn(f"指标异常: {e}"); continue，'
+                              '否则像 talib 解包错、history 取不到数据等问题会全程沉默。',
+                'severity': 'high',
+            })
+
+        # 4. 选股池为空
+        if any('选股' in L and ('0 只' in L or ' 0 只' in L) for L in logs):
+            hints.append({
+                'title': '基本面筛选结果为空',
+                'suggestion': '检查 query().filter(...) 的阈值是否过严（比如同时要求 PE<20 + ROE>15% + 营收增速>30% '
+                              '可能筛不出股票）。建议放宽某一维度，或用 get_index_stocks 作为兜底。',
+                'severity': 'medium',
+            })
+
+        # 5. 多 AND 条件估算（粗糙）：检测 buy 条件里 and 数量
+        for m in _re.finditer(r"buy_(?:cond|condition)[^=]*=\s*([^\n]+)", code):
+            expr = m.group(1)
+            and_count = expr.count(' and ')
+            if and_count >= 3:
+                hints.append({
+                    'title': f'买入条件包含 {and_count + 1} 个 AND 共振',
+                    'suggestion': '多 AND 条件共振本身没问题，但要保证每个条件都不是"刚跨越"硬边界。'
+                                  '可把"刚突破下轨"放宽为"在下轨 ±2% 范围内"，或把"K<20"放宽为"K<30"，'
+                                  '在保留逻辑方向的前提下增加触发概率。',
+                    'severity': 'medium',
+                })
+                break
+
+        # 6. 没有任何 order_*/buy 调用
+        if not _re.search(r"\border(?:_target|_value|_target_value|_target_percent)?\s*\(", code):
+            hints.append({
+                'title': '策略中找不到下单调用',
+                'suggestion': '请确认 buy/sell 分支中调用了 order / order_value / order_target_value 等下单 API，'
+                              '仅设置 context.holdings 集合不会真正成交。',
+                'severity': 'high',
+            })
+
+        # 7. 重复抛错被压制
+        if errors:
+            top_err = errors[0].get('error', '')
+            hints.append({
+                'title': f'策略运行期间抛出异常: {top_err[:80]}',
+                'suggestion': '请检查「错误」标签页查看完整 traceback。常见错误：'
+                              'NameError(变量未先赋值)、KeyError(data[code] 取不到行情)、'
+                              'ValueError(talib 解包)、IndexError(history 数据不足)。',
+                'severity': 'high',
+            })
+
+        # 8. 兏底通用建议
+        if not hints:
+            hints.append({
+                'title': '触发条件可能过于严苛',
+                'suggestion': '请检查买入/卖出条件的阈值。建议：(a) 把"price > MA_20"改为"price > MA_20 * 0.98"；'
+                              '(b) 把"K<20"放宽为"K<30"；(c) 把"刚突破"硬边界改为"在边界附近 ±2%"；'
+                              '(d) 减少 AND 条件个数。也可以打开「运行日志」逐日检查触发情况。',
+                'severity': 'medium',
+            })
+            hints.append({
+                'title': '股票池可能为空',
+                'suggestion': '若使用 get_fundamentals 选股，请确认 filter 条件能筛出股票；'
+                              '若使用硬编码池，请确认股票代码格式（6 位 + .XSHG/.XSHE 后缀）。',
+                'severity': 'medium',
+            })
+
+        return hints
 
     def _create_strategy_api(self):
         """创建策略可调用的 API 函数集（兼容聚宽风格）"""
@@ -385,8 +517,33 @@ class PortfolioBacktestEngine:
                                      order_api='order_target_percent',
                                      target_percent=float(percent), **kw)
 
-        def history(code, count, field='close'):
-            """获取最近 N 个交易日的数据"""
+        def history(code, count, *args, **kwargs):
+            """获取最近 N 个交易日的数据。
+
+            支持两种调用风格：
+              - 项目原签名：history(code, count, field='close')
+              - 聚宽风格：history(code, count, unit='1d', field='close')
+                          / history(code, count, '1d', 'close')
+            兼容性优先：当传入 4 个位置参数时，第 3 个视为 unit（仅 '1d' 受支持，
+            其它会回退到日线并不报错），第 4 个视为 field。
+            """
+            field = 'close'
+            if args:
+                # 形如 history(code, count, '1d', 'close') 或 history(code, count, 'close')
+                if len(args) == 1:
+                    field = args[0]
+                else:
+                    # args[0] 是 unit（忽略，统一按日线返回），args[1] 是 field
+                    field = args[1]
+            if 'field' in kwargs:
+                field = kwargs['field']
+            elif 'fields' in kwargs and not args:
+                # 兼容个别调用方写成 fields='close'
+                f = kwargs['fields']
+                if isinstance(f, str):
+                    field = f
+                elif isinstance(f, (list, tuple)) and f:
+                    field = f[0]
             clean = _nc(code)
             idx_df = engine._stock_data.get(clean)
             if idx_df is None:
@@ -560,8 +717,37 @@ class PortfolioBacktestEngine:
             return stocks
 
         def get_fundamentals(q, date=None):
-            """聚宽 get_fundamentals() — 查询基本面数据"""
-            return engine._fundamental_provider.get_fundamentals(q, date)
+            """聚宽 get_fundamentals() — 查询基本面数据。
+            为兼容策略中 ``code in data`` / ``data[code].close`` 的常见用法，
+            这里**主动延迟加载**返回结果中所有股票的 K 线，并立即设置当日 bar，
+            使后续 ``data.keys()`` 包含这些新选出的股票。"""
+            df = engine._fundamental_provider.get_fundamentals(q, date)
+            try:
+                if df is not None and 'code' in getattr(df, 'columns', []):
+                    cur_date = engine.context.current_dt
+                    if cur_date is not None:
+                        ts_date = pd.Timestamp(cur_date.date() if hasattr(cur_date, 'date') else cur_date)
+                        for code in df['code'].astype(str).tolist():
+                            clean = code.split('.')[0] if '.' in code else code
+                            if clean in engine._stock_data:
+                                idx_df = engine._stock_data[clean]
+                            else:
+                                engine._load_single_stock(clean)
+                                idx_df = engine._stock_data.get(clean)
+                            if idx_df is not None and ts_date in idx_df.index:
+                                row = idx_df.loc[ts_date]
+                                close = float(row['close'])
+                                engine.data_proxy._set_current(clean, {
+                                    'open': float(row.get('open', close)),
+                                    'high': float(row.get('high', close)),
+                                    'low': float(row.get('low', close)),
+                                    'close': close,
+                                    'volume': int(row.get('volume', 0)),
+                                    'pre_close': float(row.get('pre_close', close)),
+                                })
+            except Exception as _e:
+                logging.debug(f"get_fundamentals 自动加载失败: {_e}")
+            return df
 
         def get_current_data():
             """聚宽 get_current_data() — 获取当前股票数据（停牌等）"""
@@ -892,6 +1078,8 @@ class PortfolioBacktestEngine:
             self._trade_records.append(trade)
             # Phase 3: 1:1 平行记录策略订单输入。
             self._signal_inputs.append(order_info)
+            self._log_messages.append(
+                f"[{date}] [TRADE] BUY  {code} {stock_name} ×{amount} @ {exec_price:.2f} = {amount * exec_price:,.0f} 佣金 {commission:.2f}")
 
         # 卖出
         elif amount < 0:
@@ -952,6 +1140,8 @@ class PortfolioBacktestEngine:
             self._trade_records.append(trade)
             # Phase 3: 1:1 平行记录策略订单输入。
             self._signal_inputs.append(order_info)
+            self._log_messages.append(
+                f"[{date}] [TRADE] SELL {code} {stock_name} ×{sell_amount} @ {exec_price:.2f} 盈亏 {trade.close_profit:+,.0f} 起佣 {commission:.2f}")
 
     def _execute_pending_orders(self, date, prices):
         """执行当轮所有挂单（使用收盘价模拟成交）"""

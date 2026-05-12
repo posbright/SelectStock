@@ -37,14 +37,33 @@ _PROVIDER_REGISTRY = {
     'openai_compat': OpenAICompatProvider,
 }
 
+# 已知 OpenAI 兼容接口的 provider profile 名（来自 INSTOCK_AI_PROVIDER_<NAME>_*
+# 命名空间）。这些 profile 在 config.load_config 中已被解析为统一的
+# api_base/api_key/model，可直接用 OpenAICompatProvider 调用。
+_OPENAI_COMPAT_ALIASES = {
+    'default', 'openai', 'deepseek', 'qwen', 'dashscope',
+    'azure_openai', 'moonshot', 'zhipu', 'glm', 'local', 'ollama',
+    'siliconflow', 'kimi', 'baichuan', 'minimax', 'doubao',
+}
+
 
 def get_provider(config: Optional[AIConfig] = None) -> Provider:
-    """根据配置返回对应 Provider 实例。"""
+    """根据配置返回对应 Provider 实例。
+
+    provider 名解析顺序：
+      1) 命中 _PROVIDER_REGISTRY 显式注册项；
+      2) 命中 _OPENAI_COMPAT_ALIASES（已知 OpenAI 兼容方言别名），回退到
+         OpenAICompatProvider；
+      3) 全部不匹配抛 AIError。
+    """
     cfg = config or load_config()
-    cls = _PROVIDER_REGISTRY.get(cfg.provider)
-    if cls is None:
-        raise AIError(f"未注册的 provider: {cfg.provider}")
-    return cls(cfg)
+    name = (cfg.provider or '').strip().lower()
+    cls = _PROVIDER_REGISTRY.get(name)
+    if cls is not None:
+        return cls(cfg)
+    if name in _OPENAI_COMPAT_ALIASES:
+        return OpenAICompatProvider(cfg)
+    raise AIError(f"未注册的 provider: {cfg.provider}")
 
 
 def _build_messages(prompt: str, system: Optional[str],

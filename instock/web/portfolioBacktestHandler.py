@@ -2202,6 +2202,27 @@ class StartPortfolioBacktestHandler(webBase.BaseHandler, ABC):
                                         logging.debug(f"backtest_count 更新异常（不影响回测结果）: strategy_id={strategy_id} - {e}")
                             except Exception as e:
                                 logging.warning(f"回测持久化异常: {e}")
+                        # M0+: 即使 status=completed，只要策略代码在交易日产生过运行时错误
+                        # （_record_error 收集到 _strategy_errors[]），也额外写一条 failed
+                        # 记录，供 AI 修复闭环 fetch_last_failure 取用。
+                        try:
+                            errs = result.get('errors') or []
+                            if errs:
+                                # 取首条错误作为代表（含 traceback 字段）
+                                first = errs[0] if isinstance(errs[0], dict) else {'error': str(errs[0])}
+                                err_msg = (first.get('error') or first.get('message') or '策略运行错误')[:500]
+                                tb = first.get('traceback') or ''
+                                from instock.core.backtest.task_recorder import record_failed as _rf
+                                _rf(
+                                    strategy_id=strategy_id, strategy_name=strategy_name,
+                                    start_date=start_date, end_date=end_date,
+                                    initial_cash=initial_cash, benchmark=benchmark,
+                                    error_text=f'策略运行期共 {len(errs)} 处错误，首条: {err_msg}',
+                                    traceback_text=tb,
+                                    extra_result={'all_errors': errs[:50]},
+                                )
+                        except Exception as _e:
+                            logging.debug(f"runtime errors record_failed 失败: {_e}")
                 except Exception as e:
                     err_text = str(e)
                     tb_text = traceback.format_exc()

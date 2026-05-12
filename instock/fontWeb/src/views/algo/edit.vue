@@ -66,6 +66,25 @@
                     <div class="metric-lbl">{{ m.label }}</div>
                   </div>
                 </div>
+                <!-- 0 笔交易诊断与改进建议 -->
+                <div v-if="zeroTradeHints.length > 0" class="zero-trade-hints">
+                  <el-alert type="warning" :closable="false" show-icon
+                            title="本次回测全程 0 笔交易 — 系统给出以下诊断与改进建议">
+                    <template #default>
+                      <ul style="padding-left: 18px; margin: 6px 0;">
+                        <li v-for="(h, i) in zeroTradeHints" :key="i" style="margin-bottom: 6px;">
+                          <strong>{{ h.title }}</strong>
+                          <span style="color: #606266;"> — {{ h.suggestion }}</span>
+                        </li>
+                      </ul>
+                      <div style="text-align: right; margin-top: 8px;">
+                        <el-button size="small" type="primary" @click="repairWithHints">
+                          一键让 AI 根据建议修复策略
+                        </el-button>
+                      </div>
+                    </template>
+                  </el-alert>
+                </div>
                 <div ref="chartEl" class="nav-chart"></div>
                 <div v-if="btBacktestId" style="text-align: right; padding: 4px 8px;">
                   <el-button type="primary" link @click="$router.push('/algo/backtest-detail/' + btBacktestId)">
@@ -147,6 +166,8 @@
       v-model="aiDrawerVisible"
       :current-code="strategy.code"
       :strategy-id="strategy.id || undefined"
+      :initial-prompt="aiPrefillPrompt"
+      :default-mode="aiPrefillPrompt ? 'refine' : undefined"
       @apply="onAiApply"
     />
   </div>
@@ -363,7 +384,13 @@ async function doSave() {
     }) as any
     const { ok, data, msg } = unwrap(res)
     if (ok) {
-      if (!strategy.value.id && data?.id) strategy.value.id = data.id
+      if (!strategy.value.id && data?.id) {
+        strategy.value.id = data.id
+        // 新建策略保存成功后，将 URL 中的 /new 替换为真实 ID（不留历史项）
+        try {
+          router.replace({ path: `/algo/edit/${data.id}` })
+        } catch { /* ignore */ }
+      }
       dirty.value = false
       aiMeta.value = null  // 已落库，下次保存默认按手工
       aiAppliedSnapshot.value = ''
@@ -624,13 +651,37 @@ function onAiApply(newCode: string, meta: { source: 'ai'; ai_prompt: string; ai_
   aiAppliedSnapshot.value = newCode
   dirty.value = true
 }
-// F2：用户在 AI 应用基础上手工修改代码 → 立即作废 ai 元数据，避免 source='ai' 但代码已被人改的语义错乱
+// F2：用户在 AI 应用基础上手工修改代码 → 立即作废 ai 元数据
 watch(() => strategy.value.code, (newCode) => {
   if (aiMeta.value && newCode !== aiAppliedSnapshot.value) {
     aiMeta.value = null
     aiAppliedSnapshot.value = ''
   }
 })
+
+// ── 0 笔交易 → 显示诊断提示 + 一键 AI 修复 ────────────────────
+const zeroTradeHints = computed(() => {
+  const r = btResult.value
+  if (!r || r.status !== 'completed') return [] as Array<{ title: string; suggestion: string; severity?: string }>
+  const tc = r.metrics?.trade_count ?? 0
+  if (tc > 0) return []
+  const hints = (r.hints || []) as Array<any>
+  return hints
+})
+
+const aiPrefillPrompt = ref('')
+function repairWithHints() {
+  if (!zeroTradeHints.value.length) return
+  const lines = zeroTradeHints.value.map((h, i) => `${i + 1}. ${h.title} — ${h.suggestion}`).join('\n')
+  aiPrefillPrompt.value = `上次回测全程 0 笔交易，系统给出以下诊断与改进建议，请在 ` +
+    `保留原策略思路与方向性逻辑（不要把 AND 条件全删/改成 OR）的前提下，` +
+    `针对这些问题改写当前代码：\n\n${lines}\n\n` +
+    `改写要求：(1) 不要简化掉用户的多因子共振；(2) 优先把"刚突破"硬边界放宽为"在边界 ±2% 范围内"；` +
+    `(3) 把裸 except: continue 改成 except Exception as e: log.warn(...)；` +
+    `(4) talib.STOCH 必须用 (slowk, slowd) 两元解包。` +
+    `\n\n请输出修改后的完整 Python 源码。`
+  aiDrawerVisible.value = true
+}
 </script>
 
 <style scoped>

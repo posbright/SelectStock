@@ -137,7 +137,9 @@ def _load_namespaced_provider(name: str) -> Dict[str, Any]:
     env = os.environ
     upper = name.upper()
     out: Dict[str, Any] = {}
-    base = env.get(f'INSTOCK_AI_PROVIDER_{upper}_API_BASE')
+    # 兼容文档 §4.2 写的 BASE_URL 与代码原先使用的 API_BASE 两种命名
+    base = env.get(f'INSTOCK_AI_PROVIDER_{upper}_API_BASE') \
+        or env.get(f'INSTOCK_AI_PROVIDER_{upper}_BASE_URL')
     if base:
         out['api_base'] = base
     key = env.get(f'INSTOCK_AI_PROVIDER_{upper}_API_KEY')
@@ -193,7 +195,7 @@ def list_provider_profiles() -> Dict[str, Any]:
     prefix = 'INSTOCK_AI_PROVIDER_'
     # P0-1（六轮）：provider 名可含下划线（如 AZURE_OPENAI），不能用
     # split('_', 1) 从左切；改为后缀匹配，未识别的 attr 则跳过。
-    _SUFFIXES = ('API_BASE', 'API_KEY', 'MODELS', 'DEFAULT_MODEL')
+    _SUFFIXES = ('API_BASE', 'BASE_URL', 'API_KEY', 'MODELS', 'DEFAULT_MODEL')
     for k, _v in env.items():
         if not k.startswith(prefix):
             continue
@@ -208,7 +210,7 @@ def list_provider_profiles() -> Dict[str, Any]:
             continue
         name = name.lower()
         prof = profiles.setdefault(name, {'name': name})
-        if attr == 'API_BASE':
+        if attr in ('API_BASE', 'BASE_URL'):
             prof['api_base'] = env[k]
         elif attr == 'API_KEY':
             prof['has_key'] = bool(env[k])
