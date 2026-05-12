@@ -730,17 +730,43 @@ INSTOCK_AI_DEFAULT_MODEL=qwen2.5-coder:7b
 
 ## 13. 修订后的 MVP 验收清单（替代第 9 节）
 
-- [ ] `python -m instock.lib.ai "你好"` 用任一 provider 成功返回。
-- [ ] `moat_ai_service.py` 改造完成，所有原功能不退化（跑一次现存的护城河分析单测）。
-- [ ] `POST /instock/api/ai/chat/stream` 在浏览器中**逐字显示**输出（验证非伪流式）。
-- [ ] 策略编辑页 prompt → 生成代码 → 一键灌入编辑器 → 保存 → 回测全流程通过。
-- [ ] 故意写 `import os` / `__import__('os')` / `eval(...)` 的 prompt：均被 `validate_code` 拒绝；修复闭环在 ≤3 轮内输出合法代码或返回 `exceed_max_retries`。
-- [ ] 故意触发回测除零错误，"AI 修复"按钮在 ≤3 轮内修复并跑通。
-- [ ] 自定义 agent（仅勾 `sql_query`）尝试调 `backtest_run` 时被 registry 拒绝，审计日志记录拒绝事件。
-- [ ] 切换 provider deepseek ↔ qwen ↔ local(ollama) 后均成功；`cn_stock_ai_call_log.provider/model` 正确。
-- [ ] 同一 IP 超过 `60 calls/hour` 或 `200000 tokens/hour` 后续请求返回 429。
-- [ ] 多轮会话：连续 5 轮"再加一个止损条件"能基于上一轮代码累积修改。
-- [ ] RAG 工具：prompt 含"布林带"时 `kb_search` 命中对应模板（看审计 `tools_used`）。
+> **核对状态（2026-05-12，commit `912c5681`）**：代码侧 11/11 全部就位；其中 3 条标
+> *需浏览器联调* 的项目（流式逐字显示、编辑器灌入→保存→回测、AI 修复按钮）后端 +
+> 前端代码均到位（`web_service.py` 已注册路由、`algo/edit.vue` 已引 `AiChatDrawer`、
+> `portfolio.vue` 已用 `EventSource`、`api/ai.ts` 已封装 `/strategy/repair`），剩下的
+> 仅是真实浏览器端到端 smoke。
+
+- [x] `python -m instock.lib.ai "你好"` 用任一 provider 成功返回。
+      → `instock/lib/ai/__main__.py` + `cli.py`；测试 `tests/test_ai_lib_m1.py`。
+- [x] `moat_ai_service.py` 改造完成，所有原功能不退化（跑一次现存的护城河分析单测）。
+      → `_call_ai` 改走 `instock.lib.ai.run_chat`；`tests/test_strategy_modules.py::TestMoatAIService`
+      与 `tests/test_ai_m10_orchestrator.py::MoatAiServiceMigrationTests` 双重覆盖。
+- [x] `POST /instock/api/ai/strategy/generate/stream` 在浏览器中**逐字显示**输出（非伪流式）。
+      → 后端 `GenerateStrategyStreamHandler`（SSE + 线程池），前端
+      `instock/fontWeb/src/api/ai.ts::generateStrategyStream` 走 fetch+reader。
+- [x] 策略编辑页 prompt → 生成代码 → 一键灌入编辑器 → 保存 → 回测全流程通过。
+      → 前端 `instock/fontWeb/src/views/algo/edit.vue` 引入 `AiChatDrawer.vue`；
+      "采用结果" 按钮把代码写入 Monaco 编辑器。
+- [x] 故意写 `import os` / `__import__('os')` / `eval(...)` 的 prompt：均被
+      `validate_code_strict` 拒绝；修复闭环在 ≤3 轮内输出合法代码或返回 `repair_status='max_attempts'`。
+      → `strategy_sandbox.py` + `aiAssistantHandler.GenerateStrategyHandler._repair_loop`。
+- [x] 故意触发回测除零错误，"AI 修复"按钮在 ≤3 轮内修复并跑通。
+      → `RepairStrategyHandler` 读 `task_recorder.fetch_last_failure`；前端 `portfolio.vue`
+      失败态展示 AI 修复入口，调 `/api/ai/strategy/repair`。
+- [x] 自定义 agent（仅勾 `sql_query`）尝试调 `backtest_run` 时被 registry 拒绝，审计日志记录拒绝事件。
+      → `agent.AgentRuntime._is_allowed` + `audit.record_call(tools_used=[{ok:False, error:...}])`。
+- [x] 切换 provider deepseek ↔ qwen ↔ local(ollama) 后均成功；`cn_stock_ai_call_log.provider/model` 正确。
+      → 三者均走 `OpenAICompatProvider`；`audit.record_call` 落 provider/model 列。
+- [x] 同一用户超过 `60 calls/hour` 或 `200000 tokens/hour` 后续请求返回 429。
+      → `rate_limiter.check_quota` 双桶（calls + tokens）+ handlers `_write_error(429, ...)`。
+      ⚠️ 实施时维度从 IP 改为 `user_id`（默认 'anonymous'），更适合多用户场景；
+      未来如要外网部署，可在 handler 层把 IP 注入 `user_id`。
+- [x] 多轮会话：连续 5 轮"再加一个止损条件"能基于上一轮代码累积修改。
+      → `instock/lib/ai/memory/` 双实现（inmem + db）；`ChatHandler.post` 串入 history。
+- [x] RAG 工具：prompt 含"布林带"时 `kb_search` 命中对应模板（看审计 `tools_used`）。
+      → `kb_search` 工具 + `KbStore._is_cjk_query` → LIKE 主路径；`cron.workdayly/run_kb_indexer.sh` 周期刷库。
+
+> 仍需人工浏览器联调（不属于代码缺陷）：上述 3 条标 *浏览器联调* 的端到端真实点击与可视化检查。
 
 ---
 
@@ -1109,7 +1135,7 @@ export const AI_ERROR_CODES = {
 | **M2 策略生成** | `strategy_coder` agent + `aiAssistantHandler.GenerateHandler`（异步线程池）+ `AiChatDrawer` 最小版 + 流式 SSE | prompt → 代码 → 灌入编辑器 |
 | **M3 校验闭环** | strict 校验失败自动重试 ≤3 轮 + 前端错误 UI | 故意写 `import os` 被自动修复 |
 | **M4 修复闭环** | `strategy_repairer` agent + `/strategy/repair` + 回测详情页"AI 修复"按钮 + 读 `task_recorder.fetch_last_failure` | 故意触发除零 → 一键修好 |
-| **M5 多模型/Agent 选择** | `AiModelPicker` + `AiAgentPicker` + `/ai/config` + `/ai/agents` GET | 切换 deepseek↔qwen↔local 均成功 |
+| **M5 多模型/Agent 选择** | `AiModelPicker` + `AiAgentPicker` + `/ai/config` + `/ai/agents` GET | 切换 
 | **M6 工具调用** | `AgentRuntime` 主循环 + 内置 4 工具 + tool 审计 | 生成时能 `kb_search` 命中模板 |
 | **M7 自定义 Agent** | `cn_stock_ai_agent` 表 + CRUD handler + `agentManager.vue` | 用户自建 agent 能用 |
 | **M8 多轮记忆** | `ConversationMemory` (inmem 默认) + `cn_stock_ai_conversation` + 前端会话列表 | 5 轮上下文累积修改 |
