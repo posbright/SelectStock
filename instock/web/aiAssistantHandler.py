@@ -59,6 +59,58 @@ def _strip_code_fence(text: str) -> str:
     return text.strip()
 
 
+# ── M11: 自动记录"踩坑教训"，写入 prompt/strategy_lessons.md，供后续生成参考 ──
+_REPAIR_PATTERNS = [
+    # (在原始 error_text 中匹配的关键字, severity, title, fix)
+    ('not enough values to unpack', 'HIGH',
+     'talib 函数返回值数量不匹配',
+     '`talib.STOCH` 只返回 (slowk, slowd) 两个值；`MACD/BBANDS` 返回 3 个；'
+     '`RSI` 返回 1 个。请按官方文档对齐解包数量，禁止 `k, d, j = talib.STOCH(...)` 写法。'),
+    ('NameError', 'HIGH',
+     'NameError 中间变量未先赋值',
+     '所有 `*_prev` / `*_now` 中间变量必须先无条件赋值再使用，'
+     '缺数据时给安全默认值，例如 `boll_middle_prev = boll_middle.iloc[-2] if len(boll_middle) >= 2 else 0`。'),
+    ('KeyError', 'MED',
+     'KeyError data[code] 未做存在性检查',
+     '取 `data[code]` / `context.portfolio.positions[code]` 前先 `if code not in data: continue` 或 `.get(code)`。'),
+    ('IndexError', 'MED',
+     'IndexError history 数据不足',
+     '调用 `closes = history(stock, N+1, "close")` 后必须 `if len(closes) < N+1: continue`。'),
+    ('not in data', 'MED',
+     '股票未加载到 data 直接索引',
+     '若使用 `get_fundamentals` 选股后立刻 `data[code]`，请先 `if code in data:`。'),
+    ('division by zero', 'MED',
+     '除零错误',
+     '比率 / 涨跌幅计算前检查分母 >0，例如 `if pre_close > 0: change = ...`。'),
+    ('day == 1', 'HIGH',
+     'day==1 触发陷阱',
+     '改用 `g.last_select_month` 游标判断"当前月与上次不同"，避开节假日。'),
+]
+
+
+def _record_repair_lesson(error_text: str, original_code: str, fixed_code: str) -> None:
+    """根据 error_text 关键字匹配，把对应的踩坑教训写入 strategy_lessons.md（已去重）。"""
+    if not error_text:
+        return
+    try:
+        from instock.lib.ai import prompt_loader as _pl
+    except Exception:
+        return
+    error_text_low = error_text.lower()
+    for kw, sev, title, fix in _REPAIR_PATTERNS:
+        if kw.lower() in error_text_low:
+            try:
+                _pl.record_lesson(
+                    title=title,
+                    problem=f'修复历史: 错误特征 "{kw}" 在生成代码中出现',
+                    fix=fix,
+                    severity=sev,
+                    dedup=True,
+                )
+            except Exception:
+                pass
+
+
 def _client_ip(handler) -> str:
     return handler.request.remote_ip or ''
 
@@ -444,6 +496,12 @@ class RepairStrategyHandler(webBase.BaseHandler, ABC):
                 prev_signature = signature
             else:
                 repair_status = 'max_attempts'
+        # M11: 修复成功时把 (原始错误 → 修复成功) 自动记入踩坑知识库
+        if ok and error_text:
+            try:
+                _record_repair_lesson(error_text, original_code, code)
+            except Exception as _e:
+                logging.debug(f'record_repair_lesson 失败 (忽略): {_e}')
         self.set_header('Content-Type', 'application/json')
         self.write(json.dumps({
             'code': 0 if ok else -2,

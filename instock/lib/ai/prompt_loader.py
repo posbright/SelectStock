@@ -13,20 +13,84 @@ _PROMPT_DIR = os.path.join(os.path.dirname(__file__), 'prompt')
 _cache: Dict[str, str] = {}
 _lock = threading.Lock()
 
+# 哪些 agent 的系统提示词需要自动追加 strategy_lessons.md（策略相关 agent）
+_LESSONS_AGENTS = {'strategy_coder', 'strategy_repairer', 'strategy_analyst'}
+_LESSONS_FILE = 'strategy_lessons'
 
-def load(name: str, *, refresh: bool = False) -> str:
-    """加载 prompt/{name}.md。失败时返回空字符串。"""
-    if not refresh and name in _cache:
-        return _cache[name]
+
+def _read_md(name: str) -> str:
+    """直接读 prompt/{name}.md，无 cache，失败返回空。"""
     path = os.path.join(_PROMPT_DIR, f'{name}.md')
     try:
         with open(path, 'r', encoding='utf-8') as f:
-            text = f.read()
+            return f.read()
     except OSError:
-        text = ''
+        return ''
+
+
+def load(name: str, *, refresh: bool = False) -> str:
+    """加载 prompt/{name}.md。失败时返回空字符串。
+
+    对策略相关 agent (strategy_coder/strategy_repairer/strategy_analyst)，
+    自动追加 strategy_lessons.md 内容（历史踩坑知识库）作为额外上下文，
+    让 LLM 在生成 / 修复时能避开同类 bug。
+    """
+    if not refresh and name in _cache:
+        return _cache[name]
+    text = _read_md(name)
+    if name in _LESSONS_AGENTS:
+        lessons = _read_md(_LESSONS_FILE)
+        if lessons.strip():
+            text = (text.rstrip() +
+                    '\n\n---\n\n# 历史踩坑知识库（自动追加，请生成代码时严格规避）\n\n' +
+                    lessons)
     with _lock:
         _cache[name] = text
     return text
+
+
+def record_lesson(title: str, problem: str, fix: str, *,
+                  severity: str = 'MED', dedup: bool = True) -> bool:
+    """把一条新的踩坑教训追加到 strategy_lessons.md。
+
+    - title: 简短标题（同标题视为重复，默认去重）
+    - problem: 症状 / 触发场景
+    - fix: 修复办法 / 推荐写法（可含 markdown 代码块）
+    - severity: 'HIGH' / 'MED' / 'LOW'
+    - dedup: True 时若已存在同 title 条目则跳过
+    返回是否真正写入。
+    """
+    title = (title or '').strip()
+    problem = (problem or '').strip()
+    fix = (fix or '').strip()
+    if not title or not problem or not fix:
+        return False
+    severity = (severity or 'MED').upper()
+    if severity not in ('HIGH', 'MED', 'LOW'):
+        severity = 'MED'
+
+    path = os.path.join(_PROMPT_DIR, f'{_LESSONS_FILE}.md')
+    existing = _read_md(_LESSONS_FILE)
+    if dedup and existing and (f'### [{severity}] {title}' in existing
+                                or f' {title}\n' in existing):
+        return False
+
+    block = (
+        f'\n\n### [{severity}] {title}\n'
+        f'- **症状**：{problem}\n'
+        f'- **修复**：{fix}\n'
+    )
+    try:
+        with open(path, 'a', encoding='utf-8') as f:
+            f.write(block)
+    except OSError:
+        return False
+    # 失效缓存让下次 load 重新读取
+    with _lock:
+        for k in list(_cache.keys()):
+            if k in _LESSONS_AGENTS or k == _LESSONS_FILE:
+                _cache.pop(k, None)
+    return True
 
 
 def clear_cache() -> None:

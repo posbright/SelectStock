@@ -45,6 +45,14 @@
   其它 talib 函数返回值数量也请按官方文档核对（`MACD` 返回 3 个、`BBANDS` 返回 3 个、`RSI` 返回 1 个）。
 - **不要用裸 `except: continue`**。即便要忽略个别股票的指标计算异常，也至少写 `except Exception as e: log.warn(f"{stock} 指标异常: {e}"); continue`，避免上面这种沉默错误整年没人发现。
 
+## 推荐复用的健壮性套路（参考已验证的策略 89《动量策略执行优化型》）
+- **周期调仓游标**：`context.hold_days += 1; if context.hold_days % context.rebalance_days != 1: return`，自然规避 day==1 节假日陷阱。
+- **股票池兜底**：动态 `get_fundamentals` 选股 + `core_pool` 白马兜底（如 600519/000858/601318/600036/300750/000001/600000/601888/002594/300059）合并入池，避免基本面条件过严时空池。
+- **辅助函数**：`_safe_float(value, default=0)` 兜底数值解析；`_is_tradeable(code)` 用 `get_current_data()[code].paused` 过滤停牌。
+- **持仓调整两步走**：先 `for code in list(context.portfolio.positions.keys()): if code not in buffer: order_target(code, 0)` 卖出跌出 buffer 的旧持仓；再用 `target_value = context.portfolio.total_value / context.hold_num` + `order_target_value` 等权买入。
+- **偏离阈值 drift_threshold**：`if abs(current_value - target_value) > target_value * 0.10: order_target_value(...)`，避免微小差额反复换手。
+- **多因子综合评分** 0-1 归一化：`min(max(roe / 25.0, 0), 1)` 这类钳位，避免单因子异常值主导。
+
 ## 输出格式
 直接输出 Python 源码文本，例如：
 
