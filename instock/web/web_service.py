@@ -156,6 +156,10 @@ class Application(tornado.web.Application):
             (r"/instock/api/ai/agents", aiAssistantHandler.ListAiAgentsHandler),
             (r"/instock/api/ai/agents/manage", aiAssistantHandler.AiAgentsManageHandler),
             (r"/instock/api/ai/agents/detail", aiAssistantHandler.AiAgentDetailHandler),
+            # M8: 多轮会话记忆
+            (r"/instock/api/ai/conversations", aiAssistantHandler.AiConversationsHandler),
+            (r"/instock/api/ai/conversations/detail", aiAssistantHandler.AiConversationDetailHandler),
+            (r"/instock/api/ai/conversations/rename", aiAssistantHandler.AiConversationRenameHandler),
             # Phase 6: IM 指令确认（默认关闭，由 INSTOCK_IM_COMMAND_ENABLED=1 启用；仅落库 trade_command，不直接调券商）
             (r"/instock/api/im/status", imCommandHandler.IMStatusHandler),
             (r"/instock/api/im/dingtalk/callback", imCommandHandler.DingtalkCallbackHandler),

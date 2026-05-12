@@ -47,10 +47,19 @@ def get_provider(config: Optional[AIConfig] = None) -> Provider:
     return cls(cfg)
 
 
-def _build_messages(prompt: str, system: Optional[str]) -> List[ChatMessage]:
+def _build_messages(prompt: str, system: Optional[str],
+                    history: Optional[List[ChatMessage]] = None) -> List[ChatMessage]:
     msgs: List[ChatMessage] = []
     if system:
         msgs.append(ChatMessage(role='system', content=system))
+    if history:
+        for m in history:
+            # 跳过 system（避免与 system 参数重复）和空消息
+            if not m or not getattr(m, 'content', None):
+                continue
+            if m.role == 'system' and system:
+                continue
+            msgs.append(m)
     msgs.append(ChatMessage(role='user', content=prompt))
     return msgs
 
@@ -64,6 +73,7 @@ def run_chat(
     user_id: Optional[str] = None,
     overrides: Optional[Dict[str, Any]] = None,
     rate_limit_loop: bool = False,
+    history: Optional[List[ChatMessage]] = None,
     **kwargs: Any,
 ) -> str:
     """同步聊天。返回 assistant 文本内容；异常会被审计后重新抛出。
@@ -77,7 +87,7 @@ def run_chat(
     rate_limiter.check_quota(
         user_id=user_id, scene=scene, rate_limit_loop=rate_limit_loop)
     provider = get_provider(cfg)
-    messages = _build_messages(prompt, system)
+    messages = _build_messages(prompt, system, history)
     started = time.time()
     content = ''
     ok = False
@@ -124,6 +134,7 @@ def stream_chat(
     user_id: Optional[str] = None,
     overrides: Optional[Dict[str, Any]] = None,
     rate_limit_loop: bool = False,
+    history: Optional[List[ChatMessage]] = None,
     **kwargs: Any,
 ) -> Iterator[str]:
     """流式聊天，yield 文本片段；结束后写一条审计记录（response 为完整拼接）。"""
@@ -131,7 +142,7 @@ def stream_chat(
     rate_limiter.check_quota(
         user_id=user_id, scene=scene, rate_limit_loop=rate_limit_loop)
     provider = get_provider(cfg)
-    messages = _build_messages(prompt, system)
+    messages = _build_messages(prompt, system, history)
     started = time.time()
     pieces: List[str] = []
     ok = False

@@ -29,6 +29,18 @@ export interface ChatRequest extends AiOverrides {
   system?: string
   scene?: string
   agent?: string
+  conversation_id?: string
+}
+
+export interface ChatResponse {
+  code: number
+  msg?: string
+  data?: {
+    content: string
+    model?: string
+    conversation_id?: string
+    history_count?: number
+  }
 }
 
 export interface StrategyAiResponse {
@@ -63,7 +75,60 @@ export function aiRepairStrategy(data: RepairRequest) {
 }
 
 export function aiChat(data: ChatRequest) {
-  return request({ url: '/api/ai/chat', method: 'post', data })
+  return request({ url: '/api/ai/chat', method: 'post', data }) as Promise<ChatResponse>
+}
+
+// ── M8: 多轮对话历史 ────────────────────────────────────────────
+export interface AiConversationSummary {
+  conversation_id: string
+  scene: string
+  agent?: string | null
+  title?: string | null
+  user_id?: string | null
+  message_count: number
+  total_tokens: number
+  created_at: number
+  updated_at: number
+}
+
+export interface AiConversationDetail extends AiConversationSummary {
+  messages: Array<{ role: string; content: string; ts: number }>
+}
+
+export function aiListConversations(params: { scene?: string; mine?: boolean; limit?: number } = {}) {
+  return request({
+    url: '/api/ai/conversations',
+    method: 'get',
+    params: {
+      ...(params.scene ? { scene: params.scene } : {}),
+      ...(params.mine ? { mine: 1 } : {}),
+      ...(params.limit ? { limit: params.limit } : {}),
+    },
+  }) as Promise<{ code: number; msg?: string; data?: AiConversationSummary[] }>
+}
+
+export function aiGetConversation(conversation_id: string) {
+  return request({
+    url: '/api/ai/conversations/detail',
+    method: 'get',
+    params: { conversation_id },
+  }) as Promise<{ code: number; msg?: string; data?: AiConversationDetail }>
+}
+
+export function aiDeleteConversation(conversation_id: string) {
+  return request({
+    url: '/api/ai/conversations',
+    method: 'delete',
+    params: { conversation_id },
+  }) as Promise<{ code: number; msg?: string; data?: { deleted: boolean } }>
+}
+
+export function aiRenameConversation(conversation_id: string, title: string) {
+  return request({
+    url: '/api/ai/conversations/rename',
+    method: 'post',
+    data: { conversation_id, title },
+  }) as Promise<{ code: number; msg?: string; data?: { renamed: boolean } }>
 }
 
 // ── M5: provider/model/agent 元数据 ────────────────────────────

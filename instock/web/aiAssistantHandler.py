@@ -29,6 +29,8 @@ import instock.web.base as webBase
 from instock.core.backtest.strategy_sandbox import validate_code_strict
 from instock.lib.ai import RateLimitError, ProviderError, AIError, run_chat, stream_chat
 from instock.lib.ai import prompt_loader
+from instock.lib.ai.providers.base import ChatMessage
+from instock.lib.ai.memory import get_memory as _get_memory
 
 __author__ = 'InStock'
 __date__ = '2026/05/11'
@@ -78,7 +80,8 @@ def _write_error(handler, code: int, msg: str, **extra):
 
 def _call_ai_blocking(prompt: str, system: str, scene: str, agent: str, user_id: str,
                       overrides: Optional[dict] = None,
-                      rate_limit_loop: bool = False):
+                      rate_limit_loop: bool = False,
+                      history: Optional[list] = None):
     """在线程池中执行的同步 AI 调用。
 
     返回 (content, resolved_model) —— 让上层把实际使用的模型回传给前端，
@@ -87,6 +90,8 @@ def _call_ai_blocking(prompt: str, system: str, scene: str, agent: str, user_id:
     rate_limit_loop=True 仅供修复闭环内部重试使用（spec §4.4 / §16.5），
     使该次调用从用户 1 小时滑窗配额中扣除（不计入），避免 max_attempts=3
     把用户 60 calls/h 配额吃光。
+    history 可选：spec §11.3 多轮对话历史（已在 ChatHandler 处截断到
+    max_tokens 内），元素为 ChatMessage。
     """
     from instock.lib.ai.config import load_config as _load_cfg
     cfg = _load_cfg(overrides)
@@ -94,6 +99,7 @@ def _call_ai_blocking(prompt: str, system: str, scene: str, agent: str, user_id:
         prompt, scene=scene, system=system, agent=agent,
         user_id=user_id, overrides=overrides,
         rate_limit_loop=rate_limit_loop,
+        history=history,
     )
     return content, cfg.model
 
@@ -459,7 +465,14 @@ class RepairStrategyHandler(webBase.BaseHandler, ABC):
 # 4) 通用聊天 — 不做 strict 校验（用于"AI 解释"等场景）
 # ──────────────────────────────────────────────────────────────────────
 class ChatHandler(webBase.BaseHandler, ABC):
-    """通用聊天接口。请求体: {"prompt": "...", "system": "...(可选)", "scene": "...(默认 chat)"}。"""
+    """通用聊天接口。请求体: {"prompt": "...", "system": "...(可选)", "scene": "...(默认 chat)",
+                              "conversation_id": "...(可选 UUID，缺省自动生成)" }。
+
+    spec §11.3 / §M8：传入 conversation_id 时按 ConversationMemory 加载历史 →
+    截断到 INSTOCK_AI_MEMORY_MAX_TOKENS（默认 4000）→ 调用 LLM →
+    user/assistant 两条消息追加回会话；返回体含
+    `data.conversation_id` 与 `data.history_count`。
+    """
 
     @gen.coroutine
     def post(self):
@@ -478,12 +491,35 @@ class ChatHandler(webBase.BaseHandler, ABC):
         scene = body.get('scene') or 'chat'
         agent = body.get('agent') or None
         overrides = _build_overrides(body)
+        user_ip = _client_ip(self)
+
+        # ── M8：会话记忆 ──
+        import uuid as _uuid
+        conv_id_in = (body.get('conversation_id') or '').strip()
+        conv_id = conv_id_in or _uuid.uuid4().hex
+        try:
+            max_hist_tokens = max(256, int(os.environ.get(
+                'INSTOCK_AI_MEMORY_MAX_TOKENS', '4000')))
+        except (TypeError, ValueError):
+            max_hist_tokens = 4000
+
+        mem = _get_memory()
+        history_msgs: list = []
+        try:
+            mem.get_or_create(conv_id, scene=scene, user_id=user_ip, agent=agent)
+            raw_hist = mem.load(conv_id, max_tokens=max_hist_tokens)
+            history_msgs = [ChatMessage(role=m.role, content=m.content)
+                            for m in raw_hist]
+        except Exception as exc:
+            logging.warning(f'ChatHandler load history 失败（忽略）: {exc}')
+            history_msgs = []
+
         try:
             raw, resolved_model = yield IOLoop.current().run_in_executor(
                 _get_executor(),
                 _call_ai_blocking,
                 user_prompt, system, scene, agent,
-                _client_ip(self), overrides,
+                user_ip, overrides, False, history_msgs,
             )
         except RateLimitError as exc:
             _write_error(self, 429, f'触发限流: {exc}')
@@ -496,10 +532,25 @@ class ChatHandler(webBase.BaseHandler, ABC):
             _write_error(self, -1, f'内部错误: {exc}')
             return
 
+        # 追加 user / assistant 两条消息（失败不影响业务返回）
+        try:
+            mem.append(conv_id, 'user', user_prompt,
+                       scene=scene, user_id=user_ip, agent=agent)
+            mem.append(conv_id, 'assistant', raw,
+                       scene=scene, user_id=user_ip, agent=agent)
+        except Exception as exc:
+            logging.warning(f'ChatHandler append history 失败（忽略）: {exc}')
+
         self.set_header('Content-Type', 'application/json')
-        self.write(json.dumps({'code': 0,
-                               'data': {'content': raw, 'model': resolved_model}},
-                              ensure_ascii=False))
+        self.write(json.dumps({
+            'code': 0,
+            'data': {
+                'content': raw,
+                'model': resolved_model,
+                'conversation_id': conv_id,
+                'history_count': len(history_msgs),
+            },
+        }, ensure_ascii=False))
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -656,6 +707,93 @@ class AiAgentDetailHandler(webBase.BaseHandler, ABC):
         except Exception as exc:
             logging.exception('AiAgentDetailHandler 异常')
             _write_error(self, -1, f'读取失败: {exc}')
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 6) M8 多轮对话记忆：会话列表 / 详情 / 删除 / 重命名
+#    GET    /instock/api/ai/conversations            列表（最近 N 条）
+#    GET    /instock/api/ai/conversations/detail     单会话完整 messages
+#    POST   /instock/api/ai/conversations/rename     重命名
+#    DELETE /instock/api/ai/conversations            删除
+# ──────────────────────────────────────────────────────────────────────
+class AiConversationsHandler(webBase.BaseHandler, ABC):
+    """列表 + 删除入口。"""
+
+    def get(self):
+        try:
+            limit = max(1, min(200, int(self.get_argument('limit', '50'))))
+        except (TypeError, ValueError):
+            limit = 50
+        scene = (self.get_argument('scene', '') or '').strip() or None
+        only_mine = (self.get_argument('mine', '0') or '0') in ('1', 'true', 'yes')
+        user_id = _client_ip(self) if only_mine else None
+        try:
+            mem = _get_memory()
+            convs = mem.list(user_id=user_id, scene=scene, limit=limit)
+            data = [c.to_summary() for c in convs]
+            self.set_header('Content-Type', 'application/json')
+            self.write(json.dumps({'code': 0, 'data': data}, ensure_ascii=False))
+        except Exception as exc:
+            logging.exception('AiConversationsHandler.get 异常')
+            _write_error(self, -1, f'查询会话失败: {exc}')
+
+    def delete(self):
+        cid = (self.get_argument('conversation_id', '') or '').strip()
+        if not cid:
+            _write_error(self, -1, 'conversation_id 不能为空')
+            return
+        try:
+            mem = _get_memory()
+            ok = mem.delete(cid)
+            self.set_header('Content-Type', 'application/json')
+            self.write(json.dumps({'code': 0, 'data': {'deleted': bool(ok)}},
+                                  ensure_ascii=False))
+        except Exception as exc:
+            logging.exception('AiConversationsHandler.delete 异常')
+            _write_error(self, -1, f'删除会话失败: {exc}')
+
+
+class AiConversationDetailHandler(webBase.BaseHandler, ABC):
+    def get(self):
+        cid = (self.get_argument('conversation_id', '') or '').strip()
+        if not cid:
+            _write_error(self, -1, 'conversation_id 不能为空')
+            return
+        try:
+            mem = _get_memory()
+            conv = mem.get(cid)
+            if conv is None:
+                _write_error(self, -1, f'会话不存在: {cid}')
+                return
+            self.set_header('Content-Type', 'application/json')
+            self.write(json.dumps({'code': 0, 'data': conv.to_dict()},
+                                  ensure_ascii=False))
+        except Exception as exc:
+            logging.exception('AiConversationDetailHandler 异常')
+            _write_error(self, -1, f'读取会话失败: {exc}')
+
+
+class AiConversationRenameHandler(webBase.BaseHandler, ABC):
+    def post(self):
+        try:
+            body = json.loads(self.request.body or b'{}')
+        except Exception as exc:
+            _write_error(self, -1, f'请求体解析失败: {exc}')
+            return
+        cid = (body.get('conversation_id') or '').strip()
+        title = (body.get('title') or '').strip()
+        if not cid or not title:
+            _write_error(self, -1, 'conversation_id 与 title 都不能为空')
+            return
+        try:
+            mem = _get_memory()
+            ok = mem.rename(cid, title)
+            self.set_header('Content-Type', 'application/json')
+            self.write(json.dumps({'code': 0, 'data': {'renamed': bool(ok)}},
+                                  ensure_ascii=False))
+        except Exception as exc:
+            logging.exception('AiConversationRenameHandler 异常')
+            _write_error(self, -1, f'重命名会话失败: {exc}')
 
 
 # ──────────────────────────────────────────────────────────────────────
