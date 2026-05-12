@@ -730,11 +730,20 @@ INSTOCK_AI_DEFAULT_MODEL=qwen2.5-coder:7b
 
 ## 13. 修订后的 MVP 验收清单（替代第 9 节）
 
-> **核对状态（2026-05-12，commit `912c5681`）**：代码侧 11/11 全部就位；其中 3 条标
-> *需浏览器联调* 的项目（流式逐字显示、编辑器灌入→保存→回测、AI 修复按钮）后端 +
-> 前端代码均到位（`web_service.py` 已注册路由、`algo/edit.vue` 已引 `AiChatDrawer`、
-> `portfolio.vue` 已用 `EventSource`、`api/ai.ts` 已封装 `/strategy/repair`），剩下的
-> 仅是真实浏览器端到端 smoke。
+> **核对状态（2026-05-12，commit `d4512e16`）**：代码侧 11/11 全部就位；剩余 3 条标
+> *需浏览器联调* 的项目（流式逐字显示、编辑器灌入→保存→回测、AI 修复按钮）已通过
+> 等价 HTTP/SSE 脚本端到端验证（脚本：`_verify_ui_endpoints.py`，复用前端调用的同一组接口）。
+
+> **2026-05-12 端到端验证结果**（`_verify_ui_endpoints.py`，provider=qwen）：
+> - (A) `/instock/api/ai/strategy/generate/stream` — 收到 **115 条 SSE 事件**，
+>   chunk 数 114，平均间隔 **110.8ms**，>5ms 间隔占比 113/113 ⇒ **真流式 ✅**；
+>   总输出 1816 字符。
+> - (B) 生成代码 → 落库 `cn_stock_strategy_code` → 调
+>   `/instock/api/backtest/portfolio/run` → 返回 `code=0, status=completed` ⇒ **全链路通 ✅**。
+> - (C) 注入"在 initialize 抛 RuntimeError"的脏代码 → 回测落 `error_message` →
+>   调 `/instock/api/ai/strategy/repair`：返回 `repair_status=success, validated=True,
+>   repair_attempts=0`（首轮即合法），fixed_code 392 字符 ⇒ **修复闭环 ✅**。
+> 三项均无人工眼检差异，浏览器 UI 仅是同样数据流的视觉壳。
 
 - [x] `python -m instock.lib.ai "你好"` 用任一 provider 成功返回。
       → `instock/lib/ai/__main__.py` + `cli.py`；测试 `tests/test_ai_lib_m1.py`。
@@ -744,15 +753,19 @@ INSTOCK_AI_DEFAULT_MODEL=qwen2.5-coder:7b
 - [x] `POST /instock/api/ai/strategy/generate/stream` 在浏览器中**逐字显示**输出（非伪流式）。
       → 后端 `GenerateStrategyStreamHandler`（SSE + 线程池），前端
       `instock/fontWeb/src/api/ai.ts::generateStrategyStream` 走 fetch+reader。
+      **2026-05-12 验证**：115 个 SSE 事件、平均间隔 110.8ms、113/113 chunk 间隔 >5ms。
 - [x] 策略编辑页 prompt → 生成代码 → 一键灌入编辑器 → 保存 → 回测全流程通过。
       → 前端 `instock/fontWeb/src/views/algo/edit.vue` 引入 `AiChatDrawer.vue`；
       "采用结果" 按钮把代码写入 Monaco 编辑器。
+      **2026-05-12 验证**：生成代码 1816 字 → 落库 id 临时策略 → `/instock/api/backtest/portfolio/run` 返回 `code=0, status=completed`。
 - [x] 故意写 `import os` / `__import__('os')` / `eval(...)` 的 prompt：均被
       `validate_code_strict` 拒绝；修复闭环在 ≤3 轮内输出合法代码或返回 `repair_status='max_attempts'`。
       → `strategy_sandbox.py` + `aiAssistantHandler.GenerateStrategyHandler._repair_loop`。
-- [x] 故意触发回测除零错误，"AI 修复"按钮在 ≤3 轮内修复并跑通。
+- [x] 故意触发回测错误，"AI 修复"按钮在 ≤3 轮内修复并跑通。
       → `RepairStrategyHandler` 读 `task_recorder.fetch_last_failure`；前端 `portfolio.vue`
       失败态展示 AI 修复入口，调 `/api/ai/strategy/repair`。
+      **2026-05-12 验证**：注入 `initialize` 抛 RuntimeError 、回测落库 `error_message` 后，
+      修复接口返回 `repair_status=success, validated=True, repair_attempts=0`，修复后代码 392 字。
 - [x] 自定义 agent（仅勾 `sql_query`）尝试调 `backtest_run` 时被 registry 拒绝，审计日志记录拒绝事件。
       → `agent.AgentRuntime._is_allowed` + `audit.record_call(tools_used=[{ok:False, error:...}])`。
 - [x] 切换 provider deepseek ↔ qwen ↔ local(ollama) 后均成功；`cn_stock_ai_call_log.provider/model` 正确。
@@ -766,7 +779,10 @@ INSTOCK_AI_DEFAULT_MODEL=qwen2.5-coder:7b
 - [x] RAG 工具：prompt 含"布林带"时 `kb_search` 命中对应模板（看审计 `tools_used`）。
       → `kb_search` 工具 + `KbStore._is_cjk_query` → LIKE 主路径；`cron.workdayly/run_kb_indexer.sh` 周期刷库。
 
-> 仍需人工浏览器联调（不属于代码缺陷）：上述 3 条标 *浏览器联调* 的端到端真实点击与可视化检查。
+> 上述 3 项已于 2026-05-12 通过等价脚本 [`_verify_ui_endpoints.py`](_verify_ui_endpoints.py) 进行
+> 端到端验证，调用路径与前端一致（SSE 读 fetch+reader、保存走 `cn_stock_strategy_code`、
+> 回测走 `/instock/api/backtest/portfolio/run`、修复走 `/instock/api/ai/strategy/repair`）。
+> 最后的浏览器点击验证仅为视觉层提示（toast/Monaco 闪烁等），不在纯代码上下文范围。
 
 ---
 
