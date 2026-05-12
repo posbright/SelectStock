@@ -90,6 +90,7 @@ def _autoload(reg: ToolRegistry) -> None:
         ('instock.lib.ai.tools.code_validate', 'CodeValidateTool'),
         ('instock.lib.ai.tools.backtest_run', 'BacktestRunTool'),
         ('instock.lib.ai.tools.web_search', 'WebSearchTool'),
+        ('instock.lib.ai.tools.kb_search', 'KbSearchTool'),
     ]
     for mod_path, cls_name in pairs:
         try:
