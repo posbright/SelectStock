@@ -40,9 +40,13 @@ CREATE TABLE IF NOT EXISTS {_TABLE} (
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uk_source (source_type, source_id),
-    FULLTEXT KEY ftx_content (title, content)
+    FULLTEXT KEY ftx_content (title, content) WITH PARSER ngram
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 """.strip()
+
+# audit-fix-1-P2: 部分 MySQL 构建未启 ngram parser，则回退不带 parser 的 DDL，
+# Chinese 查询会走 LIKE 主路径（见 _is_cjk_query）。
+_DDL_NO_NGRAM = _DDL.replace(' WITH PARSER ngram', '')
 
 
 @dataclass
@@ -75,8 +79,26 @@ def _ensure_table() -> None:
             return
         with mdb.get_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(_DDL)
+                try:
+                    cur.execute(_DDL)
+                except Exception as exc:
+                    # ngram parser 不可用 → 回退不带 parser，Chinese 走 LIKE 主路径
+                    logging.info(f'[ai.retrieval] ngram parser 不可用，回退普通 FULLTEXT: {exc}')
+                    cur.execute(_DDL_NO_NGRAM)
         _table_ready = True
+
+
+def _is_cjk_query(s: str) -> bool:
+    """audit-fix-1-P2: 含 CJK 字符（中/日/韩）的查询，
+    跳过 FULLTEXT（默认 parser 不能切中文，ngram 可能未启），
+    直接走 LIKE 主路径，避免 FULLTEXT 返回不相关低分结果遮蔽 LIKE 。"""
+    for ch in s or '':
+        cp = ord(ch)
+        if (0x4E00 <= cp <= 0x9FFF or       # CJK Unified Ideographs
+                0x3040 <= cp <= 0x30FF or  # ひらがな + カタカナ
+                0xAC00 <= cp <= 0xD7AF):    # Hangul Syllables
+            return True
+    return False
 
 
 def _truncate(s: Optional[str], n: int) -> str:
@@ -177,11 +199,15 @@ class KbStore:
         if not terms:
             terms = [q]
 
+        # audit-fix-1-P2: 中文查询走 LIKE 主路径（FULLTEXT 默认 parser 无法切中文）
+        if _is_cjk_query(q):
+            return self._search_like(terms, top_k, source_types)
+
         # 路径 1: FULLTEXT (NATURAL LANGUAGE MODE)
         results = self._search_fulltext(q, terms, top_k, source_types)
         if results:
             return results
-        # 路径 2: LIKE 兜底（中文短查询、ngram parser 不可用时）
+        # 路径 2: LIKE 兑底
         return self._search_like(terms, top_k, source_types)
 
     def _build_type_filter(self, source_types: Optional[Sequence[str]]) -> tuple:

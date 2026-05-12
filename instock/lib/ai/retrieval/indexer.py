@@ -34,6 +34,12 @@ def _index_templates(store: KbStore) -> int:
     except Exception as exc:
         logging.warning(f'[ai.retrieval.indexer.templates] import 失败: {exc}')
         return 0
+    # audit-fix-1-P2: 模板源是闭集（代码里写死的 STRATEGY_TEMPLATES），
+    # 重建前清掉旧 template 行，避免删除 / 改名后旧条目残留。
+    try:
+        store.delete_by_type('template')
+    except Exception as exc:
+        logging.warning(f'[ai.retrieval.indexer.templates.prune] {exc}')
     n = 0
     for tpl in STRATEGY_TEMPLATES or []:
         if not isinstance(tpl, dict):
@@ -59,22 +65,29 @@ def _index_docs(store: KbStore) -> int:
         logging.info(f'[ai.retrieval.indexer.docs] 跳过：{_DOC_DIR} 不存在')
         return 0
     n = 0
-    for fname in sorted(os.listdir(_DOC_DIR)):
-        if not fname.lower().endswith('.md'):
-            continue
-        fpath = os.path.join(_DOC_DIR, fname)
-        try:
-            size = os.path.getsize(fpath)
-            if size > _DOC_MAX_BYTES:
+    # audit-fix-1-P3: 递归扫 document/ 下所有 .md（包括子目录）
+    for root, _dirs, files in os.walk(_DOC_DIR):
+        for fname in sorted(files):
+            if not fname.lower().endswith('.md'):
                 continue
-            with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-                body = f.read()
-        except OSError as exc:
-            logging.warning(f'[ai.retrieval.indexer.docs] {fname}: {exc}')
-            continue
-        title = fname[:-3]   # 去 .md
-        if store.upsert('doc', fname, title, body):
-            n += 1
+            fpath = os.path.join(root, fname)
+            try:
+                # audit-fix-1-P2: size + read 放同一 try 里，避免中间文件被改后读取异常裸露
+                if os.path.getsize(fpath) > _DOC_MAX_BYTES:
+                    continue
+                with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                    body = f.read(_DOC_MAX_BYTES + 1)
+                if len(body) > _DOC_MAX_BYTES:
+                    # 中间被写大了，截断
+                    body = body[:_DOC_MAX_BYTES]
+            except OSError as exc:
+                logging.warning(f'[ai.retrieval.indexer.docs] {fname}: {exc}')
+                continue
+            # source_id 用相对 _DOC_DIR 的 POSIX 路径，避免同名冲突
+            rel = os.path.relpath(fpath, _DOC_DIR).replace(os.sep, '/')
+            title = rel[:-3]   # 去 .md
+            if store.upsert('doc', rel, title, body):
+                n += 1
     return n
 
 
@@ -105,8 +118,9 @@ def _index_strategies(store: KbStore) -> int:
 def _index_failures(store: KbStore) -> int:
     try:
         import instock.lib.database as mdb
+        # audit-fix-1-P0: 表列名是 strategy_name，不是 task_name
         rows = mdb.executeSqlFetch(
-            'SELECT id, task_name, error_message FROM cn_stock_backtest_portfolio '
+            'SELECT id, strategy_name, error_message FROM cn_stock_backtest_portfolio '
             "WHERE status='failed' AND error_message IS NOT NULL "
             'ORDER BY id DESC LIMIT %s', (_FAILURE_LIMIT,))
     except Exception as exc:
@@ -117,7 +131,7 @@ def _index_failures(store: KbStore) -> int:
         if isinstance(r, (list, tuple)):
             rid, name, err = r[0], r[1], r[2]
         else:
-            rid = r.get('id'); name = r.get('task_name'); err = r.get('error_message')
+            rid = r.get('id'); name = r.get('strategy_name'); err = r.get('error_message')
         if not err:
             continue
         sid = f'f{rid}'

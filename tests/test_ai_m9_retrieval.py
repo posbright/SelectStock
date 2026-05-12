@@ -50,26 +50,49 @@ class KbStoreTests(unittest.TestCase):
                 s.upsert('', 'x', 't', 'c')
 
     def test_search_fulltext_hit(self):
+        """纯英文查询走 FULLTEXT 主路径。"""
         from instock.lib.ai.retrieval.db import KbStore
         rows = [
-            ('template', 'boll', '布林带下轨买入', '布林带 下轨 买入策略 ...',
+            ('template', 'boll', 'BOLL Lower Band', 'BOLL lower band buy strategy ...',
              '2026-05-12 10:00:00', 1.5),
-            ('template', 'dual_ma', '双均线', '5日 20日 金叉 ...',
+            ('template', 'dual_ma', 'Dual MA', '5-day 20-day golden cross ...',
              '2026-05-12 09:00:00', 0.7),
         ]
         with mock.patch('instock.lib.ai.retrieval.db.mdb.executeSqlFetch',
                         return_value=rows):
             s = KbStore()
-            docs = s.search('布林带 下轨', top_k=5)
+            docs = s.search('BOLL lower band', top_k=5)
         self.assertEqual(len(docs), 2)
         self.assertEqual(docs[0].source_id, 'boll')
         self.assertGreater(docs[0].score, docs[1].score)
-        self.assertIn('布林带', docs[0].snippet)
+        self.assertIn('BOLL', docs[0].snippet)
+
+    def test_search_cjk_uses_like_as_primary(self):
+        """audit-fix-1-P2: 中文查询直接走 LIKE，不发 FULLTEXT。"""
+        from instock.lib.ai.retrieval.db import KbStore
+        sql_seen = []
+
+        def fake_fetch(sql, params):
+            sql_seen.append(sql)
+            # LIKE 路径返回 5 列（无 score）
+            return [('template', 'boll', '布林带下轨', '布林带 布林带 下轨 ...',
+                     '2026-05-12 10:00:00')]
+
+        with mock.patch('instock.lib.ai.retrieval.db.mdb.executeSqlFetch',
+                        side_effect=fake_fetch):
+            s = KbStore()
+            docs = s.search('布林带 下轨', top_k=3)
+        self.assertEqual(len(docs), 1)
+        # 只调了一次 SQL，必须是 LIKE 而不是 MATCH AGAINST
+        self.assertEqual(len(sql_seen), 1)
+        self.assertIn('LIKE', sql_seen[0])
+        self.assertNotIn('MATCH', sql_seen[0])
 
     def test_search_falls_back_to_like_when_fulltext_empty(self):
+        """英文查询 FULLTEXT 返回空 → LIKE 兑底。"""
         from instock.lib.ai.retrieval.db import KbStore
         rows_like = [
-            ('template', 'boll', '布林带下轨', '布林带 布林带 下轨 ...',
+            ('template', 'boll', 'BOLL Lower', 'BOLL lower lower band ...',
              '2026-05-12 10:00:00'),
         ]
         # 第 1 次（FULLTEXT）返回空；第 2 次（LIKE）返回 rows_like
@@ -81,7 +104,7 @@ class KbStoreTests(unittest.TestCase):
         with mock.patch('instock.lib.ai.retrieval.db.mdb.executeSqlFetch',
                         side_effect=fake_fetch):
             s = KbStore()
-            docs = s.search('布林带', top_k=3)
+            docs = s.search('BOLL', top_k=3)
         self.assertEqual(len(docs), 1)
         # LIKE 模式下 score = 命中次数
         self.assertGreaterEqual(docs[0].score, 1.0)
@@ -132,10 +155,11 @@ class KbSearchToolTests(unittest.TestCase):
 
     def test_tool_run_returns_results(self):
         from instock.lib.ai.tools.kb_search import KbSearchTool
+        # CJK 查询走 LIKE 主路径，5 列无 score
         with mock.patch('instock.lib.ai.retrieval.db.mdb.executeSqlFetch',
                         return_value=[
                             ('template', 'boll', '布林带', '布林带下轨买入',
-                             '2026-05-12 10:00:00', 0.9),
+                             '2026-05-12 10:00:00'),
                         ]):
             out = KbSearchTool().run({'query': '布林带', 'top_k': 3})
         self.assertIn('results', out)
@@ -203,6 +227,41 @@ class IndexerTests(unittest.TestCase):
                     sources=['strategy', 'backtest_failure'])
         self.assertEqual(res.get('strategy', 0), 0)
         self.assertEqual(res.get('backtest_failure', 0), 0)
+
+    def test_audit1_p0_failures_query_uses_strategy_name_column(self):
+        """audit-fix-1-P0: 列名应为 strategy_name 而非 task_name。"""
+        from instock.lib.ai.retrieval import indexer
+        captured = {}
+
+        def fake_fetch(sql, params):
+            captured['sql'] = sql
+            return []
+
+        with mock.patch('instock.lib.ai.retrieval.indexer.KbStore'):
+            with mock.patch('instock.lib.database.executeSqlFetch',
+                            side_effect=fake_fetch):
+                indexer.run_indexer(sources=['backtest_failure'])
+        self.assertIn('strategy_name', captured.get('sql', ''))
+        self.assertNotIn('task_name', captured.get('sql', ''))
+
+    def test_audit1_p2_template_indexer_prunes_stale_entries(self):
+        """audit-fix-1-P2: 模板索引前应清掉旧 template 行。"""
+        from instock.lib.ai.retrieval import indexer
+
+        deleted_types = []
+
+        class FakeStore:
+            def delete_by_type(self, t):
+                deleted_types.append(t)
+                return 1
+
+            def upsert(self, *a, **kw):
+                return True
+
+        with mock.patch('instock.lib.ai.retrieval.indexer.KbStore',
+                        return_value=FakeStore()):
+            indexer.run_indexer(sources=['template'])
+        self.assertIn('template', deleted_types)
 
 
 if __name__ == '__main__':
