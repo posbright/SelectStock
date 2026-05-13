@@ -152,9 +152,28 @@
 
       <!-- 失败信息（repair 模式） -->
       <div v-if="failureInfo && mode === 'repair'" class="failure-block">
-        <div class="section-label">最近一次失败：</div>
+        <div class="section-label">
+          最近一次失败：
+          <el-tag v-if="failureInfo.traceback" size="small" type="danger" effect="plain" style="margin-left:8px;">含完整堆栈</el-tag>
+          <el-tag v-if="(failureInfo.history || []).length > 1" size="small" type="warning" effect="plain" style="margin-left:6px;">
+            历史失败 {{ (failureInfo.history || []).length }} 次
+          </el-tag>
+        </div>
         <pre>{{ failureInfo.error_message }}</pre>
         <div class="meta">回测 ID: {{ failureInfo.backtest_id }} · 时间: {{ failureInfo.started_at }}</div>
+        <el-collapse v-if="failureInfo.traceback" style="margin-top:6px;">
+          <el-collapse-item title="展开完整 Traceback" name="tb">
+            <pre class="tb-preview">{{ failureInfo.traceback }}</pre>
+          </el-collapse-item>
+        </el-collapse>
+        <el-collapse v-if="(failureInfo.history || []).length > 1" style="margin-top:6px;">
+          <el-collapse-item :title="`查看历史失败（共 ${(failureInfo.history || []).length} 次）`" name="hist">
+            <div v-for="h in (failureInfo.history || []).slice(1)" :key="h.id" class="hist-item">
+              <div class="meta">回测 ID: {{ h.id }} · {{ h.started_at }}</div>
+              <pre>{{ h.error_message }}</pre>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
       </div>
 
       <!-- 生成代码预览（非 chat） -->
@@ -179,10 +198,19 @@ import {
 import AiModelPicker from './AiModelPicker.vue'
 import AiAgentPicker from './AiAgentPicker.vue'
 
+type FailureHistoryItem = {
+  id: number
+  started_at: string
+  error_message: string
+}
+
 type FailureInfo = {
   error_message: string
   started_at: string
   backtest_id: number
+  traceback?: string
+  error?: string
+  history?: FailureHistoryItem[]
 }
 
 export type AiApplyMeta = {
@@ -570,13 +598,15 @@ watch(() => props.modelValue, (v) => {
 .section-label { font-size: 13px; color: #606266; margin: 12px 0 6px; font-weight: 500; }
 .ai-actions { margin-top: 12px; display: flex; gap: 8px; }
 .failure-block, .result-block { margin-top: 16px; }
-.failure-block pre, .code-preview {
+.failure-block pre, .code-preview, .tb-preview {
   background: #f5f7fa; border: 1px solid #ebeef5; border-radius: 4px;
   padding: 8px 10px; font-family: 'Consolas', 'Monaco', monospace;
   font-size: 12px; line-height: 1.5; max-height: 360px; overflow: auto;
   white-space: pre-wrap; word-break: break-word;
 }
 .failure-block .meta { font-size: 11px; color: #909399; margin-top: 4px; }
+.failure-block .hist-item { margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px dashed #ebeef5; }
+.failure-block .hist-item:last-child { border-bottom: none; }
 .stream-preview {
   background: #f5f7fa; border: 1px solid #ebeef5; border-radius: 4px;
   padding: 8px 10px; font-family: 'Consolas', 'Monaco', monospace;

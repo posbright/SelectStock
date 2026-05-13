@@ -125,16 +125,34 @@ def record_failed(
     )
 
 
+def _parse_result_json(raw: Any) -> Dict[str, Any]:
+    """安全解析 result_json 列；非法 JSON 时退化为空 dict。"""
+    if not raw:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    try:
+        return json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else {}
+    except Exception:
+        return {}
+
+
 def fetch_last_failure(strategy_id: int) -> Optional[Dict[str, Any]]:
-    """
-    返回该策略最近一次失败任务的 ``{id, error_message, started_at, completed_at}``，
-    供 AI 自动修复闭环喂回 LLM。
+    """返回该策略最近一次失败任务的完整失败信息，供 AI 自动修复闭环喂回 LLM。
+
+    返回字段：
+        ``id``               回测任务主键
+        ``started_at``       开始时间
+        ``completed_at``     结束时间
+        ``error_message``    error_message 列（首要错误摘要，最长 8KB）
+        ``traceback``        从 ``result_json.traceback`` 解析出的完整堆栈
+        ``error``            从 ``result_json.error`` 解析出的简短错误文本
     """
     if strategy_id is None:
         return None
     try:
         rows = mdb.executeSqlFetch(
-            f'SELECT id, started_at, completed_at, error_message '
+            f'SELECT id, started_at, completed_at, error_message, result_json '
             f'FROM {_TABLE} WHERE strategy_id=%s AND status=%s '
             f'ORDER BY id DESC LIMIT 1',
             (int(strategy_id), 'failed'),
@@ -145,9 +163,43 @@ def fetch_last_failure(strategy_id: int) -> Optional[Dict[str, Any]]:
     if not rows:
         return None
     r = rows[0]
+    payload = _parse_result_json(r[4] if len(r) > 4 else None)
     return {
         'id': r[0],
         'started_at': r[1],
         'completed_at': r[2],
         'error_message': r[3] or '',
+        'traceback': str(payload.get('traceback') or '')[:_MAX_ERROR_LEN],
+        'error': str(payload.get('error') or '')[:2000],
     }
+
+
+def fetch_recent_failures(strategy_id: int, limit: int = 5) -> list:
+    """返回该策略最近 N 次失败任务（按 id 倒序），供 AI 看历史避免重复同一类修复。
+
+    每个元素同 ``fetch_last_failure`` 的字段。
+    """
+    if strategy_id is None or limit <= 0:
+        return []
+    try:
+        rows = mdb.executeSqlFetch(
+            f'SELECT id, started_at, completed_at, error_message, result_json '
+            f'FROM {_TABLE} WHERE strategy_id=%s AND status=%s '
+            f'ORDER BY id DESC LIMIT %s',
+            (int(strategy_id), 'failed', int(limit)),
+        ) or []
+    except Exception as exc:
+        logging.warning(f"[task_recorder] fetch_recent_failures 异常: {exc}")
+        return []
+    out = []
+    for r in rows:
+        payload = _parse_result_json(r[4] if len(r) > 4 else None)
+        out.append({
+            'id': r[0],
+            'started_at': r[1],
+            'completed_at': r[2],
+            'error_message': r[3] or '',
+            'traceback': str(payload.get('traceback') or '')[:_MAX_ERROR_LEN],
+            'error': str(payload.get('error') or '')[:2000],
+        })
+    return out

@@ -134,6 +134,7 @@ export function aiRenameConversation(conversation_id: string, title: string) {
 // ── M5: provider/model/agent 元数据 ────────────────────────────
 export interface AiProviderProfile {
   name: string
+  label?: string
   api_base?: string
   has_key?: boolean
   models?: string[]

@@ -84,18 +84,25 @@
 
         <el-divider content-position="left">模型 / 接入</el-divider>
         <el-form-item label="Provider">
-          <el-select v-model="form.provider">
-            <el-option label="OpenAI Compatible" value="openai_compatible" />
-            <el-option label="OpenAI" value="openai" />
-            <el-option label="DeepSeek" value="deepseek" />
-            <el-option label="Qwen" value="qwen" />
+          <el-select v-model="form.provider" filterable allow-create
+                     :placeholder="providerLoading ? '加载中...' : '选择 provider（可手填）'"
+                     @change="onProviderChange">
+            <el-option v-for="p in providerOptions" :key="p.value"
+                       :label="p.label" :value="p.value" />
           </el-select>
+          <span class="hint">从 <code>INSTOCK_AI_PROVIDER_*_API_BASE</code> 等环境变量自动发现；新增不需改前端。</span>
         </el-form-item>
         <el-form-item label="Model">
-          <el-input v-model="form.model_name" placeholder="例如 gpt-4o-mini / deepseek-chat" />
+          <el-select v-model="form.model_name" filterable allow-create
+                     placeholder="例如 gpt-4o-mini / deepseek-chat（可手填）">
+            <el-option v-for="m in modelOptions" :key="m" :label="m" :value="m" />
+          </el-select>
+          <span v-if="selectedProfile && !selectedProfile.has_key" class="hint" style="color:#e6a23c">
+            该 provider 在服务器端未检测到 API Key（INSTOCK_AI_PROVIDER_*_API_KEY 未设置）
+          </span>
         </el-form-item>
         <el-form-item label="Base URL">
-          <el-input v-model="form.base_url" placeholder="例如 https://api.deepseek.com" />
+          <el-input v-model="form.base_url" :placeholder="selectedProfile?.api_base || '例如 https://api.deepseek.com'" />
         </el-form-item>
         <el-form-item label="api_key_ref">
           <el-input v-model="form.api_key_ref" placeholder="环境变量名，例如 INSTOCK_AI_API_KEY" />
@@ -140,15 +147,67 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   listAIConfigs, saveAIConfig, deleteAIConfig, AIDecisionConfig,
 } from '@/api/settings'
+import { aiGetConfig, type AiProviderProfile } from '@/api/ai'
 
 const rows = ref<AIDecisionConfig[]>([])
 const dialogVisible = ref(false)
 const saving = ref(false)
+
+// ---- 动态 provider / model 下拉（从 /api/ai/config 拉取 INSTOCK_AI_PROVIDER_*） ----
+const profiles = ref<AiProviderProfile[]>([])
+const providerLoading = ref(false)
+
+const providerOptions = computed(() => {
+  const opts = profiles.value.map(p => ({
+    value: p.name,
+    label: p.label || _titleCase(p.name),
+  }))
+  // 保留 openai_compatible 作为通用兑底选项
+  if (!opts.find(o => o.value === 'openai_compatible')) {
+    opts.unshift({ value: 'openai_compatible', label: 'OpenAI Compatible (通用)' })
+  }
+  return opts
+})
+
+const selectedProfile = computed<AiProviderProfile | undefined>(() =>
+  profiles.value.find(p => p.name === form.value.provider))
+
+const modelOptions = computed<string[]>(() => {
+  const p = selectedProfile.value
+  if (!p) return []
+  const list = [...(p.models || [])]
+  if (p.default_model && !list.includes(p.default_model)) list.unshift(p.default_model)
+  return list
+})
+
+function _titleCase(s: string): string {
+  return (s || '').split('_').map(w => w ? w[0].toUpperCase() + w.slice(1) : w).join(' ')
+}
+
+async function loadProviders() {
+  providerLoading.value = true
+  try {
+    const r = await aiGetConfig()
+    if (r.code === 0 && r.data) profiles.value = r.data.profiles || []
+  } catch (e: any) {
+    console.warn('加载 AI provider 列表失败:', e?.message || e)
+  } finally {
+    providerLoading.value = false
+  }
+}
+
+function onProviderChange(v: string) {
+  const p = profiles.value.find(x => x.name === v)
+  if (!p) return
+  // 补默认 base_url / model（仅在用户没填时）
+  if (!form.value.base_url && p.api_base) form.value.base_url = p.api_base
+  if (!form.value.model_name && p.default_model) form.value.model_name = p.default_model
+}
 
 const emptyForm = (): AIDecisionConfig => ({
   name: '', enabled: false, source_type: 'paper',
@@ -194,7 +253,9 @@ const onDelete = async (row: AIDecisionConfig) => {
   await loadList()
 }
 
-onMounted(loadList)
+onMounted(async () => {
+  await Promise.all([loadList(), loadProviders()])
+})
 </script>
 
 <style scoped>

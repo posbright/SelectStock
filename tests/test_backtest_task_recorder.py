@@ -97,14 +97,48 @@ def test_fetch_last_failure_returns_none_when_no_strategy_id():
 
 
 def test_fetch_last_failure_parses_row():
+    fake_rows = [(99, 'started', 'completed', 'NameError: g',
+                  '{"error": "NameError: g", "traceback": "Traceback (most recent call last):\\n  File ...\\nNameError: name g not defined"}')]
+    with patch('instock.core.backtest.task_recorder.mdb.executeSqlFetch',
+               return_value=fake_rows):
+        out = tr.fetch_last_failure(7)
+    assert out['id'] == 99
+    assert out['started_at'] == 'started'
+    assert out['completed_at'] == 'completed'
+    assert out['error_message'] == 'NameError: g'
+    assert 'NameError: name g not defined' in out['traceback']
+    assert out['error'] == 'NameError: g'
+
+
+def test_fetch_last_failure_legacy_4col_row():
+    """旧数据行（无 result_json 列）仍应可解析。"""
     fake_rows = [(99, 'started', 'completed', 'NameError: g')]
     with patch('instock.core.backtest.task_recorder.mdb.executeSqlFetch',
                return_value=fake_rows):
         out = tr.fetch_last_failure(7)
-    assert out == {
-        'id': 99, 'started_at': 'started', 'completed_at': 'completed',
-        'error_message': 'NameError: g',
-    }
+    assert out['id'] == 99
+    assert out['error_message'] == 'NameError: g'
+    assert out['traceback'] == ''
+    assert out['error'] == ''
+
+
+def test_fetch_recent_failures_returns_list():
+    fake_rows = [
+        (3, 'sa', 'ca', 'err3', '{"traceback": "tb3"}'),
+        (2, 'sb', 'cb', 'err2', '{"traceback": "tb2"}'),
+    ]
+    with patch('instock.core.backtest.task_recorder.mdb.executeSqlFetch',
+               return_value=fake_rows):
+        out = tr.fetch_recent_failures(7, limit=2)
+    assert len(out) == 2
+    assert [r['id'] for r in out] == [3, 2]
+    assert out[0]['traceback'] == 'tb3'
+    assert out[1]['error_message'] == 'err2'
+
+
+def test_fetch_recent_failures_invalid_args():
+    assert tr.fetch_recent_failures(None) == []
+    assert tr.fetch_recent_failures(7, limit=0) == []
 
 
 def test_fetch_last_failure_handles_empty():

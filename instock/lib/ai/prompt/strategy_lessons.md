@@ -198,3 +198,8 @@ def handle_data(context, data):
 ```
 
 
+
+
+### [HIGH] NameError 中间变量未先赋值
+- **症状**：修复历史: 错误特征 "NameError" 在生成代码中出现
+- **修复**：所有 `*_prev` / `*_now` 中间变量必须先无条件赋值再使用，缺数据时给安全默认值，例如 `boll_middle_prev = boll_middle.iloc[-2] if len(boll_middle) >= 2 else 0`。

@@ -404,10 +404,11 @@ class RepairStrategyHandler(webBase.BaseHandler, ABC):
             _write_error(self, -1, 'strategy_id 不能为空')
             return
 
-        # 获取失败信息
-        from instock.core.backtest.task_recorder import fetch_last_failure
+        # 获取失败信息（完整 traceback + 最近 N 次失败历史，避免重复同一类修复）
+        from instock.core.backtest.task_recorder import fetch_last_failure, fetch_recent_failures
         try:
             last = fetch_last_failure(int(strategy_id))
+            history = fetch_recent_failures(int(strategy_id), limit=5) or []
         except Exception as exc:
             _write_error(self, -1, f'读取失败信息异常: {exc}')
             return
@@ -430,12 +431,57 @@ class RepairStrategyHandler(webBase.BaseHandler, ABC):
             _write_error(self, -1, '无法获取策略代码（请在请求体中提供 code 字段）')
             return
 
-        error_text = (last.get('error_message') or '').strip()
-        composed = (
-            f"以下是当前策略代码：\n\n{original_code}\n\n"
-            f"该代码在最近一次回测中失败，错误信息：\n{error_text or '(无)'}\n\n"
-            f"请输出修复后的完整代码。"
-        )
+        # 优先使用完整 traceback；否则回落 error_message / error
+        full_tb = (last.get('traceback') or '').strip()
+        err_short = (last.get('error') or '').strip()
+        error_message = (last.get('error_message') or '').strip()
+        # error_text 用于后续 _record_repair_lesson 的关键字匹配
+        error_text = err_short or error_message or full_tb[:500]
+        primary_failure = full_tb or error_message or err_short or '(无错误信息)'
+
+        # 历史失败摘要（去掉本次最新一次，最多 4 条）
+        history_lines = []
+        for idx, h in enumerate(history[1:5], start=1):
+            tb = (h.get('traceback') or '').strip()
+            em = (h.get('error_message') or '').strip()
+            snippet = tb if tb else em
+            if not snippet:
+                continue
+            # 历史每条只保留 error 行 + traceback 末尾 ~600 字，避免 prompt 过长
+            tail = snippet[-600:] if len(snippet) > 600 else snippet
+            history_lines.append(
+                f"[历史失败 #{idx} | task_id={h.get('id')} | started={h.get('started_at')}]\n{tail}"
+            )
+        history_block = ('\n\n'.join(history_lines)).strip()
+
+        composed_parts = [
+            "以下是当前策略代码：",
+            "```python",
+            original_code,
+            "```",
+            "",
+            f"该代码在最近一次回测中失败（task_id={last.get('id')}, started_at={last.get('started_at')}）。",
+            "完整错误堆栈如下：",
+            "```",
+            primary_failure,
+            "```",
+        ]
+        if history_block:
+            composed_parts += [
+                "",
+                "另外，该策略此前还有以下失败历史（按时间倒序，仅保留堆栈尾部）。"
+                "请分析这些历史错误的共同根因，避免输出与历史相同或相似但同样会失败的修复：",
+                history_block,
+            ]
+        composed_parts += [
+            "",
+            "修复要求：",
+            "1. 必须输出**完整可运行**的策略代码（含 initialize 与 handle_data），禁止仅输出 diff 或片段；",
+            "2. 必须直接定位到堆栈中报错的那一行做最小改动，并解释根因（可写在代码顶部注释里）；",
+            "3. 若历史失败显示同一类错误反复出现，请彻底改换实现思路，不要再用此前已被证明会失败的写法；",
+            "4. 严禁引入新的未导入模块，禁止使用 eval/exec/open 等高危 API。",
+        ]
+        composed = "\n".join(composed_parts)
 
         overrides = _build_overrides(body)
         system = prompt_loader.load('strategy_repairer')
@@ -513,9 +559,19 @@ class RepairStrategyHandler(webBase.BaseHandler, ABC):
                 'repair_attempts': attempts,
                 'repair_status': repair_status,
                 'failure': {
-                    'error_message': error_text,
+                    'error_message': error_message,
+                    'traceback': full_tb,
+                    'error': err_short,
                     'started_at': str(last.get('started_at') or ''),
                     'backtest_id': last.get('id'),
+                    'history': [
+                        {
+                            'id': h.get('id'),
+                            'started_at': str(h.get('started_at') or ''),
+                            'error_message': (h.get('error_message') or '')[:500],
+                        }
+                        for h in (history or [])[:5]
+                    ],
                 },
             },
         }, ensure_ascii=False))

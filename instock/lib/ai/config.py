@@ -195,7 +195,7 @@ def list_provider_profiles() -> Dict[str, Any]:
     prefix = 'INSTOCK_AI_PROVIDER_'
     # P0-1（六轮）：provider 名可含下划线（如 AZURE_OPENAI），不能用
     # split('_', 1) 从左切；改为后缀匹配，未识别的 attr 则跳过。
-    _SUFFIXES = ('API_BASE', 'BASE_URL', 'API_KEY', 'MODELS', 'DEFAULT_MODEL')
+    _SUFFIXES = ('API_BASE', 'BASE_URL', 'API_KEY', 'MODELS', 'DEFAULT_MODEL', 'LABEL')
     for k, _v in env.items():
         if not k.startswith(prefix):
             continue
@@ -218,6 +218,8 @@ def list_provider_profiles() -> Dict[str, Any]:
             prof['models'] = [m.strip() for m in env[k].split(',') if m.strip()]
         elif attr == 'DEFAULT_MODEL':
             prof['default_model'] = env[k]
+        elif attr == 'LABEL':
+            prof['label'] = env[k]
 
     # 总是追加 default profile（来自 INSTOCK_AI_* 直配）
     cfg = load_config()
