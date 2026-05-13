@@ -1708,6 +1708,103 @@ def market_open(context):
             log.info("突破确认买入 " + code + " 价格:" + str(round(h['close'].iloc[-1], 2)))
 ''',
     },
+    {
+        'id': 'quarterly_top5_ma_cross',
+        'name': '季度基本面Top5+均线交叉',
+        'category': 'multi_factor',
+        'description': '每季度从全市场筛选基本面最优的5只股票作为股票池（ROE>8%、净利润正增长、PE 0-60、市值>30亿，按ROE降序取前5）；每日检查MA5与MA20，金叉买入、死叉卖出，等权配置。',
+        'code': '''# 季度基本面 Top5 + 均线交叉策略
+# 思路：
+#   1. 每 60 个交易日（约 1 季度）从全市场筛选基本面最优的 5 只股票作为目标股票池
+#      筛选条件：ROE>8、净利润同比正增长、PE 0-60、市值>30亿；按 ROE 降序取前 5
+#   2. 季度调仓时，清掉不在新池中的持仓
+#   3. 对股票池内的标的，每日检查 5/20 日均线穿越：
+#       - 金叉（昨日 MA5 <= MA20 且今日 MA5 > MA20）且未持仓 → 等权买入
+#       - 死叉（昨日 MA5 >= MA20 且今日 MA5 < MA20）且持仓中 → 全部卖出
+
+def initialize(context):
+    set_benchmark('000300.XSHG')
+    set_option('use_real_price', True)
+    set_order_cost(OrderCost(open_tax=0, close_tax=0.001,
+                             open_commission=0.0003, close_commission=0.0003,
+                             close_today_commission=0, min_commission=5), type='stock')
+    g.pool_size = 5
+    g.refresh_days = 60      # 约一个季度
+    g.short_n = 5
+    g.long_n = 20
+    g.pool = []
+    g.days = 0
+    run_daily(handle, 'every_bar')
+
+def select_fundamental_pool():
+    """基本面筛选：ROE>8、净利润同比正增长、PE 合理、市值>30亿；按 ROE 降序取前 N"""
+    q = query(
+        valuation.code,
+        valuation.market_cap,
+        valuation.pe_ratio,
+        indicator.roe,
+        indicator.inc_net_profit_year_on_year
+    ).filter(
+        indicator.roe > 8,
+        indicator.inc_net_profit_year_on_year > 0,
+        valuation.pe_ratio > 0,
+        valuation.pe_ratio < 60,
+        valuation.market_cap > 30
+    ).order_by(
+        indicator.roe.desc()
+    ).limit(g.pool_size)
+    df = get_fundamentals(q)
+    if df is None or len(df) == 0:
+        return []
+    return list(df['code'])
+
+def handle(context):
+    g.days += 1
+
+    # 季度选股：第 1 个交易日 + 此后每 refresh_days 切一次
+    if g.days == 1 or (g.days - 1) % g.refresh_days == 0:
+        new_pool = select_fundamental_pool()
+        if new_pool:
+            log.info("季度调仓 基本面 Top5: " + str(new_pool))
+            # 清仓不在新池中的持仓
+            for code in list(context.portfolio.positions.keys()):
+                if code not in new_pool:
+                    order_target(code, 0)
+                    log.info("调仓卖出 " + code)
+            g.pool = new_pool
+        else:
+            log.info("季度选股无结果，沿用旧池")
+
+    if not g.pool:
+        return
+
+    # 每日均线交叉
+    target_value = context.portfolio.total_value / g.pool_size
+    for code in g.pool:
+        h = attribute_history(code, g.long_n + 1, '1d', ['close'])
+        if h is None or len(h) < g.long_n + 1:
+            continue
+        closes = h['close']
+        ma5_today = closes.iloc[-g.short_n:].mean()
+        ma20_today = closes.iloc[-g.long_n:].mean()
+        ma5_yest = closes.iloc[-g.short_n - 1:-1].mean()
+        ma20_yest = closes.iloc[-g.long_n - 1:-1].mean()
+        in_pos = code in context.portfolio.positions
+
+        # 金叉买入
+        if ma5_yest <= ma20_yest and ma5_today > ma20_today and not in_pos:
+            order_target_value(code, target_value)
+            log.info("金叉买入 " + code +
+                     " MA5=" + str(round(ma5_today, 2)) +
+                     " MA20=" + str(round(ma20_today, 2)))
+        # 死叉卖出
+        elif ma5_yest >= ma20_yest and ma5_today < ma20_today and in_pos:
+            order_target(code, 0)
+            log.info("死叉卖出 " + code +
+                     " MA5=" + str(round(ma5_today, 2)) +
+                     " MA20=" + str(round(ma20_today, 2)))
+''',
+    },
 ]
 
 
