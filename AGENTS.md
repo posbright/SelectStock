@@ -72,6 +72,21 @@ Streaming analysis ([instock/job/streaming_analysis_job.py]) processes 4900+ sto
 | [instock/auth/](instock/auth), [instock/notification/](instock/notification), [instock/im/](instock/im) | Auth, notifications, DingTalk/IM |
 | [cron/](cron) | Cron entry scripts (hourly / workdayly / monthly) |
 
+## Commit & push workflow（必须遵循）
+
+完成一项用户请求（修复 bug / 新功能 / 重构）并通过自检（lint / 测试 / 构建）后：
+
+1. **必须主动询问**用户是否要 `git add -A && git commit && git push`，使用 `vscode_askQuestions` 工具，至少包含两个问题：
+   - 提交范围：`全部一起提交` / `只提交后端（不含 dist）` / `拆分多个语义化 commit` / `先不提交`
+   - 是否 push：`立即 push origin <当前分支>` / `仅本地 commit`
+2. 询问前先 `git status --short` + `git log --oneline -3` 让用户看到上下文。
+3. commit message 用中文，第一行 `<type>: <概要>`（type ∈ fix/feat/chore/docs/refactor/test/perf），后续段落分组列出前端/后端/测试/文档/构建变更，简明扼要。
+4. **绝不**使用 `--force` / `--no-verify` / `git reset --hard` / 删除分支等危险操作，除非用户在当前对话里明确要求。
+5. 仅本机改动（venv / cache / log / .env）不必提示提交；纯讨论 / 纯查询任务也不必提示。
+6. 若 `git status` 没有变化，跳过本流程。
+
+例外：用户明确说"先不要提交"或在本对话里已经回答过"先本地 commit"，本次回合不再追问。
+
 ## Pitfalls quick list
 
 - Don't add API calls to handlers / analysis jobs (rule 1).
@@ -81,4 +96,5 @@ Streaming analysis ([instock/job/streaming_analysis_job.py]) processes 4900+ sto
 - Don't omit `chunksize=500` in `to_sql`.
 - Don't forget to restart the web service after backend edits.
 - Don't forget to copy Vite `dist/` into `instock/web/static` for prod.
+- Don't forget to ask about commit & push when a user-facing change is finished (see Commit workflow).
 - Hard-rule expressions (composite): AST sandbox blocks `__import__`, dunders, lambda, file ops, exec/eval, attribute access on dicts. Don't try to "improve" the sandbox by relaxing these.
