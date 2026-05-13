@@ -72,6 +72,31 @@ Streaming analysis ([instock/job/streaming_analysis_job.py]) processes 4900+ sto
 | [instock/auth/](instock/auth), [instock/notification/](instock/notification), [instock/im/](instock/im) | Auth, notifications, DingTalk/IM |
 | [cron/](cron) | Cron entry scripts (hourly / workdayly / monthly) |
 
+## Destructive file ops（必须遵循）
+
+**严禁**未经用户确认就执行以下操作（无论用什么工具：terminal / execution_subagent / 文件系统调用 / git）：
+
+1. 删除任何**目录**（`Remove-Item -Recurse` / `rm -rf` / `rmdir /s` / `git rm -r` / `shutil.rmtree`）。
+2. **批量**删除多个文件（≥ 2 个文件，或使用 glob/通配 `*.xxx`、`-Recurse`、`find -delete`）。
+3. 清空 `cache/` / `instock/log/` / `instock/cache/` / `instock/web/static/` 等目录内容。
+4. `git clean -fd` / `git clean -fdx`。
+5. 截断或覆写非自己刚创建的二进制 / 数据文件（`.gzip.pickle`、`.parquet`、`.db`、`.sqlite`）。
+
+**正确流程**：
+
+1. 列出**完整待删文件清单**（路径 + 大小或最后修改时间），即使数量很多也要展示全部或前 20 项 + 总数。
+2. 用 `vscode_askQuestions` 询问，至少提供：`全部删除` / `保留<某子集>` / `不删除`，**禁止默认勾选删除**。
+3. 用户明确同意后才执行；执行后报告实际删除条数与剩余。
+4. 删除前先确认不在 git 未提交改动里（`git status` 一遍），有未提交内容就先提示用户。
+
+允许直接进行的安全例外（无需询问）：
+
+- 删除**当前任务内自己刚创建**且明显是失败产物 / 临时文件的**单个**文件（如 build 失败的半成品）。
+- 移动文件（`mv` / `Rename-Item`）——但跨目录或覆盖已存在文件仍需提示。
+- 工具本身的临时文件（如 `__pycache__/` 自动重生）不主动删除；用户明确说"清一下 __pycache__"再删。
+
+任何"我以为是安全的清理"都不是例外：宁可多问一次。
+
 ## Commit & push workflow（必须遵循）
 
 完成一项用户请求（修复 bug / 新功能 / 重构）并通过自检（lint / 测试 / 构建）后：
@@ -97,4 +122,5 @@ Streaming analysis ([instock/job/streaming_analysis_job.py]) processes 4900+ sto
 - Don't forget to restart the web service after backend edits.
 - Don't forget to copy Vite `dist/` into `instock/web/static` for prod.
 - Don't forget to ask about commit & push when a user-facing change is finished (see Commit workflow).
+- Don't delete directories or batch-delete files without listing them and getting user confirmation first (see Destructive file ops).
 - Hard-rule expressions (composite): AST sandbox blocks `__import__`, dunders, lambda, file ops, exec/eval, attribute access on dicts. Don't try to "improve" the sandbox by relaxing these.
