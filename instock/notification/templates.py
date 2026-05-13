@@ -313,6 +313,7 @@ def _build_link_block(event: Dict[str, Any]) -> str:
     """
     import os
     import socket
+    import logging as _logging
     base = (os.environ.get("INSTOCK_WEB_BASE_URL") or "").rstrip("/")
     if not base:
         try:
@@ -320,6 +321,16 @@ def _build_link_block(event: Dict[str, Any]) -> str:
         except Exception:
             host = "127.0.0.1"
         base = f"http://{host}:9988"
+    # Vue Router 默认 base='/'，SPA 路由形如 /algo/paper（不含 /instock 前缀）。
+    # 历史上有运维把 INSTOCK_WEB_BASE_URL 配成 http://host/instock（误以为
+    # 与后端 API 前缀一致），导致拼出的链接 http://host/instock/algo/paper
+    # 命中 SPA fallback 返回 index.html，但 Vue Router 不匹配 → 显示 404。
+    # 这里自动剥离末尾的 /instock 段，向后兼容历史环境变量。
+    if base.lower().endswith("/instock"):
+        _logging.warning(
+            "INSTOCK_WEB_BASE_URL 末尾包含 /instock，已自动剥离以匹配前端 SPA 路由 "
+            "（建议改为 %s）", base[:-len("/instock")] or "http://<host>")
+        base = base[:-len("/instock")].rstrip("/")
 
     paper_id = event.get("paper_id")
     signal_id = event.get("signal_id")

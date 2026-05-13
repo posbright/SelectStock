@@ -130,12 +130,25 @@ def test_trade_markdown_renders_link_block_when_base_url_set(monkeypatch):
         "price": 3.74, "amount": 100, "value": 374, "signal_id": 12345,
     })["markdown"]
     assert "## 查看详情" in md
-    # 同时具有 paper_id + signal_id 时合并为单个深链，前端会自动打开决策详情弹窗
-    assert "https://example.com/instock/algo/paper?id=4&signal_id=12345" in md
+    # base 末尾的 /instock 必须被剥离（Vue Router 默认 base='/'，SPA 路由不带
+    # /instock 前缀；保留会被前端识别为 NotFound → 显示 404）。
+    assert "https://example.com/algo/paper?id=4&signal_id=12345" in md
+    assert "/instock/algo/paper" not in md
     # 必须使用 Markdown [text](url) 语法
-    assert "](https://example.com/instock/algo/paper?id=4&signal_id=12345)" in md
+    assert "](https://example.com/algo/paper?id=4&signal_id=12345)" in md
     # 旧的 /trade/signal 路由前端不存在（NotFound），不应再出现
     assert "/trade/signal?" not in md
+
+
+def test_trade_markdown_keeps_link_when_base_url_has_no_instock_suffix(monkeypatch):
+    """正常配置（base 不含 /instock）时不应受影响。"""
+    monkeypatch.setenv("INSTOCK_WEB_BASE_URL", "https://example.com")
+    md = build_trade_markdown({
+        "paper_id": 7, "trade_date": "2026-04-30",
+        "code": "600016", "name": "民生银行", "direction": "sell",
+        "price": 3.92, "amount": 100, "value": 392, "signal_id": 999,
+    })["markdown"]
+    assert "https://example.com/algo/paper?id=7&signal_id=999" in md
 
 
 

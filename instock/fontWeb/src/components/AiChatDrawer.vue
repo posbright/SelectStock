@@ -300,6 +300,20 @@ function _resetState() {
   repairAttempts.value = 0
 }
 
+// 从 axios 错误中优先提取后端返回的 msg/error，避免 HTTP 4xx/5xx 时只显示
+// 通用的 "Request failed with status code XXX"，丢失上游限流等关键原因。
+function _extractErrMsg(e: any): string {
+  const data = e?.response?.data
+  if (data) {
+    if (typeof data === 'string' && data.trim()) return data
+    if (typeof data === 'object') {
+      const m = data.msg || data.error || data.message
+      if (m) return String(m)
+    }
+  }
+  return e?.message || String(e)
+}
+
 async function run() {
   if (mode.value === 'chat') {
     await runChat()
@@ -347,7 +361,7 @@ async function run() {
       errorMsg.value = resp.msg || 'AI 调用失败'
     }
   } catch (e: any) {
-    errorMsg.value = e?.message || String(e)
+    errorMsg.value = _extractErrMsg(e)
   } finally {
     loading.value = false
   }
@@ -387,7 +401,7 @@ async function runStream() {
       },
     )
   } catch (e: any) {
-    errorMsg.value = e?.message || String(e)
+    errorMsg.value = _extractErrMsg(e)
   } finally {
     streaming.value = false
   }
@@ -532,7 +546,7 @@ async function runChat() {
       errorMsg.value = resp.msg || 'AI 调用失败'
     }
   } catch (e: any) {
-    errorMsg.value = e?.message || String(e)
+    errorMsg.value = _extractErrMsg(e)
   } finally {
     loading.value = false
   }
