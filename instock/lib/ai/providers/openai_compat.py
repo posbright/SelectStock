@@ -35,6 +35,28 @@ def _scrub(text: str) -> str:
     return _SECRET_RE.sub('[REDACTED]', text)
 
 
+def _is_overloaded_429(body: str) -> bool:
+    """识别上游 429 是否属于"模型过载"语义而非"配额超限"。
+
+    Moonshot / Kimi: {"error":{"type":"engine_overloaded_error", ...}}
+    OpenAI:          status=503 居多，但偶有 429 + "overloaded"/"server is busy"。
+    DeepSeek:        message 含 "currently overloaded" / "server is busy"。
+
+    严格匹配：仅当 body 包含明确"过载"关键字时才视为 overloaded，
+    避免把真正的"用户配额超限"误判成可重试错误。
+    """
+    if not body:
+        return False
+    low = body.lower()
+    return (
+        'engine_overloaded' in low
+        or 'overloaded' in low
+        or 'server is busy' in low
+        or 'currently overloaded' in low
+        or 'try again later' in low and 'rate' not in low
+    )
+
+
 class OpenAICompatProvider(Provider):
     name = 'openai_compat'
 
@@ -69,21 +91,53 @@ class OpenAICompatProvider(Provider):
     def chat(self, messages: List[ChatMessage], **kwargs) -> ChatResult:
         url = f"{self.config.api_base.rstrip('/')}/chat/completions"
         payload = self._build_payload(messages, **kwargs)
-        try:
-            resp = requests.post(
-                url, headers=self._headers(), json=payload,
-                timeout=kwargs.get('timeout', self.config.timeout),
-            )
-        except requests.RequestException as exc:
-            raise ProviderError(f'网络错误: {exc}') from exc
+        # 上游过载 (engine_overloaded_error 等) 自动指数退避重试 —— 这种错误
+        # 是 provider 服务器繁忙、非用户配额超限，重试通常能恢复。
+        # 仅对"明确过载语义"的 429 / 5xx 重试，其余直接抛 RateLimitError(overloaded=False)。
+        import time as _time
+        max_retries = int(kwargs.get('overload_retries', 2))
+        backoffs = (1.0, 2.5)  # 秒；最多 2 次重试 ≈ 总等待 3.5s
+        last_429_body = ''
+        for attempt in range(max_retries + 1):
+            try:
+                resp = requests.post(
+                    url, headers=self._headers(), json=payload,
+                    timeout=kwargs.get('timeout', self.config.timeout),
+                )
+            except requests.RequestException as exc:
+                raise ProviderError(f'网络错误: {_scrub(str(exc))}') from exc
 
-        if resp.status_code == 429:
-            raise RateLimitError(f'上游 429: {resp.text[:200]}')
+            if resp.status_code == 429:
+                body = resp.text[:500]
+                overloaded = _is_overloaded_429(body)
+                last_429_body = body
+                if overloaded and attempt < max_retries:
+                    logging.warning(
+                        f'[ai] 上游过载 (429 engine_overloaded), '
+                        f'第 {attempt+1}/{max_retries} 次重试，'
+                        f'{backoffs[attempt]}s 后再试'
+                    )
+                    _time.sleep(backoffs[attempt])
+                    continue
+                raise RateLimitError(
+                    f'上游 429: {_scrub(body[:200])}',
+                    overloaded=overloaded,
+                )
+            if resp.status_code in (502, 503, 504) and attempt < max_retries:
+                logging.warning(
+                    f'[ai] 上游 {resp.status_code}（瞬时不可用），'
+                    f'第 {attempt+1}/{max_retries} 次重试，'
+                    f'{backoffs[attempt]}s 后再试'
+                )
+                _time.sleep(backoffs[attempt])
+                continue
+            break
+
         if resp.status_code >= 400:
             raise ProviderError(
                 f'HTTP {resp.status_code}',
                 status_code=resp.status_code,
-                body=resp.text[:500],
+                body=_scrub(resp.text[:500]),
             )
 
         try:
@@ -142,7 +196,11 @@ class OpenAICompatProvider(Provider):
 
         try:
             if resp.status_code == 429:
-                raise RateLimitError(f'上游 429: {_scrub(resp.text[:200])}')
+                body = resp.text[:500]
+                raise RateLimitError(
+                    f'上游 429: {_scrub(body[:200])}',
+                    overloaded=_is_overloaded_429(body),
+                )
             if resp.status_code >= 400:
                 raise ProviderError(
                     f'HTTP {resp.status_code}',

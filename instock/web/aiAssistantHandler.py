@@ -286,6 +286,22 @@ def _write_error(handler, code: int, msg: str, **extra):
     handler.write(json.dumps(body, ensure_ascii=False))
 
 
+def _write_rate_limit_error(handler, exc: 'RateLimitError'):
+    """对上游 429 错误统一文案：区分"模型过载"与"配额超限"两种语义。
+
+    - overloaded=True：Moonshot 的 engine_overloaded_error 等，上游服务器忙；
+      文案告诉用户"模型当前繁忙，请稍后重试或切换模型"。
+    - overloaded=False：真实配额超限；保留原文案"触发限流"。
+    extra 字段 `overloaded` 让前端可以做差异化展示（如换色、加重试按钮）。
+    """
+    overloaded = bool(getattr(exc, 'overloaded', False))
+    if overloaded:
+        msg = f'上游模型当前繁忙（服务过载），已自动重试仍未恢复。请稍后再试或切换其它模型。原始错误：{exc}'
+    else:
+        msg = f'触发限流: {exc}'
+    _write_error(handler, 429, msg, overloaded=overloaded)
+
+
 def _call_ai_blocking(prompt: str, system: str, scene: str, agent: str, user_id: str,
                       overrides: Optional[dict] = None,
                       rate_limit_loop: bool = False,
@@ -414,7 +430,7 @@ class GenerateStrategyHandler(webBase.BaseHandler, ABC):
                 _client_ip(self), overrides,
             )
         except RateLimitError as exc:
-            _write_error(self, 429, f'触发限流: {exc}')
+            _write_rate_limit_error(self, exc)
             return
         except (ProviderError, AIError) as exc:
             _write_error(self, -1, f'AI 调用失败: {exc}')
@@ -524,7 +540,7 @@ class RefineStrategyHandler(webBase.BaseHandler, ABC):
                 _client_ip(self), overrides,
             )
         except RateLimitError as exc:
-            _write_error(self, 429, f'触发限流: {exc}')
+            _write_rate_limit_error(self, exc)
             return
         except (ProviderError, AIError) as exc:
             _write_error(self, -1, f'AI 调用失败: {exc}')
@@ -914,7 +930,7 @@ class RepairStrategyHandler(webBase.BaseHandler, ABC):
                 _client_ip(self), overrides,
             )
         except RateLimitError as exc:
-            _write_error(self, 429, f'触发限流: {exc}')
+            _write_rate_limit_error(self, exc)
             return
         except (ProviderError, AIError) as exc:
             _write_error(self, -1, f'AI 调用失败: {exc}')
@@ -1086,7 +1102,7 @@ class ChatHandler(webBase.BaseHandler, ABC):
                 user_ip, overrides, False, history_msgs,
             )
         except RateLimitError as exc:
-            _write_error(self, 429, f'触发限流: {exc}')
+            _write_rate_limit_error(self, exc)
             return
         except (ProviderError, AIError) as exc:
             _write_error(self, -1, f'AI 调用失败: {exc}')
