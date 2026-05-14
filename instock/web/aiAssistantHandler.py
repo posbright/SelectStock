@@ -111,6 +111,30 @@ def _record_repair_lesson(error_text: str, original_code: str, fixed_code: str) 
                 pass
 
 
+def _maybe_strict_user_prompt(user_prompt: str) -> str:
+    """检测用户原话里的约束限定词（保持/仅/只/不引入等），命中则追加'严格保持模式'提示。
+
+    放在 user prompt 末尾而非 system，以便模型把它当作当前任务的强约束。
+    """
+    if not user_prompt:
+        return user_prompt
+    keys = ('保持', '仅', '只 ', '只依赖', '只用', '不引入',
+            '不要加', '不变', '维持', '不要改', '严格', 'only', 'keep')
+    if not any(k in user_prompt for k in keys):
+        return user_prompt
+    return user_prompt + (
+        "\n\n[严格保持模式 — 检测到用户使用了限定词]\n"
+        "用户原话里出现了 '保持 / 仅 / 只 / 不引入 / 不要加 / 不变 / 维持' 等限定词。\n"
+        "请严格遵守：\n"
+        "  1. 用户说'仅依赖 X' / '只用 X' 时，生成的代码里**只能**出现 X 一种触发逻辑；\n"
+        "     绝对不允许擅自加入 RSI/BOLL/MACD/量能/止盈止损 等清单外的指标和条件；\n"
+        "  2. 用户说'保持原有 X' / 'X 不变' 时，X 部分（如基本面筛选条件、调仓频率）\n"
+        "     必须与用户描述/参考代码完全一致，不要改阈值、不要改顺序、不要'优化';\n"
+        "  3. 风控（止损/止盈/仓位上限/回撤过滤）默认不加，除非用户明确要求；\n"
+        "  4. 写完前自检：每一行代码能否对应到用户原话里的一条具体要求？不能 → 删掉。"
+    )
+
+
 def _client_ip(handler) -> str:
     return handler.request.remote_ip or ''
 
@@ -208,11 +232,28 @@ class GenerateStrategyHandler(webBase.BaseHandler, ABC):
 
         overrides = _build_overrides(body)
         system = prompt_loader.load('strategy_coder')
+        # 触发"严格保持"模式：用户明示约束时显式强化
+        _STRICT_KEYS = ('保持', '仅', '只 ', '只依赖', '只用', '不引入',
+                        '不要加', '不变', '维持', '不要改', '严格', 'only', 'keep')
+        if any(k in user_prompt for k in _STRICT_KEYS):
+            user_prompt_final = user_prompt + (
+                "\n\n[严格保持模式 — 检测到用户使用了限定词]\n"
+                "用户原话里出现了 '保持 / 仅 / 只 / 不引入 / 不要加 / 不变 / 维持' 等限定词。\n"
+                "请严格遵守：\n"
+                "  1. 用户说'仅依赖 X' / '只用 X' 时，生成的代码里**只能**出现 X 一种触发逻辑；\n"
+                "     绝对不允许擅自加入 RSI/BOLL/MACD/量能/止盈止损 等清单外的指标和条件；\n"
+                "  2. 用户说'保持原有 X' / 'X 不变' 时，X 部分（如基本面筛选条件、调仓频率）\n"
+                "     必须与用户描述/参考代码完全一致，不要改阈值、不要改顺序、不要'优化';\n"
+                "  3. 风控（止损/止盈/仓位上限/回撤过滤）默认不加，除非用户明确要求；\n"
+                "  4. 写完前自检：每一行代码能否对应到用户原话里的一条具体要求？不能 → 删掉。"
+            )
+        else:
+            user_prompt_final = user_prompt
         try:
             raw, resolved_model = yield IOLoop.current().run_in_executor(
                 _get_executor(),
                 _call_ai_blocking,
-                user_prompt, system, 'strategy_gen', 'strategy_coder',
+                user_prompt_final, system, 'strategy_gen', 'strategy_coder',
                 _client_ip(self), overrides,
             )
         except RateLimitError as exc:
@@ -309,10 +350,14 @@ class RefineStrategyHandler(webBase.BaseHandler, ABC):
 
         overrides = _build_overrides(body)
         system = prompt_loader.load('strategy_coder')
+        # 命中限定词时，把 strict hint 拼到组合 prompt 末尾
+        _hinted = _maybe_strict_user_prompt(user_prompt)
+        strict_hint = _hinted[len(user_prompt):] if _hinted != user_prompt else ''
         composed = (
             f"以下是用户当前的策略代码（保持整体结构，按需求局部修改）：\n\n"
             f"{original_code}\n\n"
             f"用户的修改需求：{user_prompt}"
+            f"{strict_hint}"
         )
         try:
             raw, resolved_model = yield IOLoop.current().run_in_executor(
@@ -985,6 +1030,7 @@ class GenerateStrategyStreamHandler(webBase.BaseHandler, ABC):
 
         overrides = _build_overrides(body)
         system = prompt_loader.load('strategy_coder')
+        user_prompt = _maybe_strict_user_prompt(user_prompt)
         user_id = _client_ip(self)
         # 提前解析模型名（与 stream_chat 内部使用同一份合并配置）以回传前端
         from instock.lib.ai.config import load_config as _load_cfg
