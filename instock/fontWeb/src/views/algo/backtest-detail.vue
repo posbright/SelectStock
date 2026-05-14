@@ -564,11 +564,7 @@ function decisionRowsForTrade(trade: any, snapshot: any) {
   const isBuy = trade.direction === 'buy'
   const close = finiteNumber(snapshot?.close)
   const price = finiteNumber(trade.price)
-  const ma5 = finiteNumber(snapshot?.ma5)
-  const ma20 = finiteNumber(snapshot?.ma20)
   const ma60 = finiteNumber(snapshot?.ma60)
-  const prevMa5 = finiteNumber(snapshot?.prevMa5)
-  const prevMa20 = finiteNumber(snapshot?.prevMa20)
   const bollUpper = finiteNumber(snapshot?.bollUpper)
   const bollMiddle = finiteNumber(snapshot?.bollMiddle)
   const bollLower = finiteNumber(snapshot?.bollLower)
@@ -576,119 +572,121 @@ function decisionRowsForTrade(trade: any, snapshot: any) {
   const macdDif = finiteNumber(snapshot?.macdDif)
   const macdDea = finiteNumber(snapshot?.macdDea)
   const macdHist = finiteNumber(snapshot?.macdHist)
-  const prevMacdHist = finiteNumber(snapshot?.prevMacdHist)
   const volume = finiteNumber(snapshot?.volume)
   const volMa5 = finiteNumber(snapshot?.volMa5)
   const tradeValue = finiteNumber(trade.value || (trade.price * trade.amount))
   const returnRate = finiteNumber(trade.return_rate)
   const closeProfit = finiteNumber(trade.close_profit)
+  const reasonText = String(tradeReason(trade) || '')
+  const reasonSrc = String(trade?.reason_source || '')
+
+  // 决策来源（让用户清楚 reason 是谁给的）
+  let sourceLabel = '系统兜底文案'
+  if (reasonSrc === 'strategy') sourceLabel = '策略显式说明（reason=）'
+  else if (reasonSrc === 'derived') sourceLabel = '从策略当日 log.info 派生'
 
   rows.push(buildDecisionRow(
-    '原始交易信号',
-    isBuy ? '策略发出买入/建仓指令' : '策略发出卖出/调仓/风控指令',
-    tradeReason(trade),
+    '策略决策',
+    isBuy ? '本笔买入/建仓的策略说明' : '本笔卖出/调仓/风控的策略说明',
+    reasonText || '--',
     null,
-    '来自回测交易记录或匹配到的运行日志',
+    sourceLabel,
   ))
+
   rows.push(buildDecisionRow(
     '成交撮合',
-    '按当日K线收盘价附近撮合',
+    '按当日 K 线收盘价附近撮合',
     `成交 ${fmtMaybe(price)} / 收盘 ${fmtMaybe(close)}${fmtIndicatorDiff(price, close)}`,
     price != null && close != null ? Math.abs(price - close) <= Math.max(0.01, Math.abs(close) * 0.03) : null,
     `金额 ${tradeValue == null ? '--' : tradeValue.toLocaleString('zh-CN', { maximumFractionDigits: 0 })} 元，佣金 ${fmtMaybe(trade.commission || 0)}，滑点 ${fmtMaybe(trade.slippage_cost || 0)}`,
   ))
 
-  if (isBuy) {
-    rows.push(buildDecisionRow(
-      '短中期趋势',
-      'MA5 >= MA20；前值下穿到当前上穿时为金叉',
-      maCrossText(snapshot),
-      ma5 != null && ma20 != null ? ma5 >= ma20 : null,
-      prevMa5 != null && prevMa20 != null && ma5 != null && ma20 != null && prevMa5 <= prevMa20 && ma5 >= ma20
-        ? '出现MA5上穿MA20，买入动能增强'
-        : '用于判断短线是否强于中线',
-    ))
-    rows.push(buildDecisionRow(
-      '价格强弱',
-      '收盘价 >= MA20，且优先不跌破MA60',
-      `收盘 ${fmtMaybe(close)} / MA20 ${fmtMaybe(ma20)} / MA60 ${fmtMaybe(ma60)}`,
-      close != null && ma20 != null ? close >= ma20 : null,
-      ma60 != null ? `相对MA60 ${fmtIndicatorDiff(close, ma60) || '--'}` : 'MA60缺失时仅参考MA20',
-    ))
-    rows.push(buildDecisionRow(
-      'BOLL位置',
-      '收盘价 >= BOLL下轨，接近中轨或重新站上中轨更强',
-      `收盘 ${fmtMaybe(close)} / 下轨 ${fmtMaybe(bollLower)} / 中轨 ${fmtMaybe(bollMiddle)} / 上轨 ${fmtMaybe(bollUpper)}`,
-      close != null && bollLower != null ? close >= bollLower : null,
-      bollMiddle != null ? `相对中轨 ${fmtIndicatorDiff(close, bollMiddle) || '--'}` : 'BOLL数据缺失',
-    ))
-    rows.push(buildDecisionRow(
-      'RSI动量',
-      '30 <= RSI14 <= 70，避免极端超卖/超买追入',
-      `RSI14 ${fmtMaybe(rsi)}`,
-      rsi != null ? rsi >= 30 && rsi <= 70 : null,
-      rsi != null && rsi > 50 ? '偏强动量' : '中性或偏弱动量',
-    ))
-    rows.push(buildDecisionRow(
-      'MACD确认',
-      'DIF >= DEA 或 MACD柱 >= 0',
-      `DIF ${fmtMaybe(macdDif)} / DEA ${fmtMaybe(macdDea)} / 柱 ${fmtMaybe(macdHist)} / 前柱 ${fmtMaybe(prevMacdHist)}`,
-      macdDif != null && macdDea != null ? macdDif >= macdDea : macdHist != null ? macdHist >= 0 : null,
-      macdHist != null && prevMacdHist != null && macdHist > prevMacdHist ? '柱体改善' : '观察动能延续',
-    ))
-    rows.push(buildDecisionRow(
-      '量能配合',
-      '成交量 >= 5周期均量',
-      `成交量 ${fmtVolume(volume)} / 量MA5 ${fmtVolume(volMa5)}`,
-      volume != null && volMa5 != null ? volume >= volMa5 : null,
-      `相对均量 ${fmtIndicatorDiff(volume, volMa5) || '--'}`,
-    ))
-  } else {
+  // 仅当卖出且具备数据时记录盈亏（事实，不做规则判定）
+  if (!isBuy && (returnRate != null || closeProfit != null)) {
     rows.push(buildDecisionRow(
       '平仓结果',
-      '记录本次卖出对应盈亏与收益率',
+      '本次卖出实际兑现情况',
       `盈亏 ${closeProfit == null ? '--' : `${closeProfit >= 0 ? '+' : ''}${fmtMaybe(closeProfit)}`} / 收益率 ${returnRate == null ? '--' : `${returnRate >= 0 ? '+' : ''}${fmtMaybe(returnRate)}%`}`,
       null,
-      returnRate == null ? '历史结果缺失' : returnRate >= 0 ? '获利卖出/调仓兑现' : '亏损卖出/风控退出',
-    ))
-    rows.push(buildDecisionRow(
-      '趋势转弱',
-      'MA5 <= MA20 或收盘价 <= MA20',
-      `${maCrossText(snapshot)}；收盘 ${fmtMaybe(close)}`,
-      ma5 != null && ma20 != null && close != null ? (ma5 <= ma20 || close <= ma20) : null,
-      prevMa5 != null && prevMa20 != null && ma5 != null && ma20 != null && prevMa5 >= prevMa20 && ma5 <= ma20
-        ? '出现MA5下穿MA20，卖出信号增强'
-        : '用于识别短线走弱或调仓退出',
-    ))
-    rows.push(buildDecisionRow(
-      '价格防线',
-      '收盘价跌破MA60或BOLL中轨时提高风控权重',
-      `收盘 ${fmtMaybe(close)} / MA60 ${fmtMaybe(ma60)} / BOLL中轨 ${fmtMaybe(bollMiddle)} / 下轨 ${fmtMaybe(bollLower)}`,
-      close != null && (ma60 != null || bollMiddle != null) ? ((ma60 != null && close <= ma60) || (bollMiddle != null && close <= bollMiddle)) : null,
-      `相对MA60 ${fmtIndicatorDiff(close, ma60) || '--'}，相对中轨 ${fmtIndicatorDiff(close, bollMiddle) || '--'}`,
-    ))
-    rows.push(buildDecisionRow(
-      'RSI风险',
-      'RSI14 >= 70 视为超买兑现，RSI14 <= 45 视为动能走弱',
-      `RSI14 ${fmtMaybe(rsi)}`,
-      rsi != null ? (rsi >= 70 || rsi <= 45) : null,
-      rsi == null ? 'RSI缺失' : rsi >= 70 ? '超买区域，适合止盈/减仓' : rsi <= 45 ? '弱势区域，适合风控' : '中性区域，需结合趋势和策略调仓',
-    ))
-    rows.push(buildDecisionRow(
-      'MACD风险',
-      'DIF <= DEA 或 MACD柱 < 0',
-      `DIF ${fmtMaybe(macdDif)} / DEA ${fmtMaybe(macdDea)} / 柱 ${fmtMaybe(macdHist)} / 前柱 ${fmtMaybe(prevMacdHist)}`,
-      macdDif != null && macdDea != null ? macdDif <= macdDea : macdHist != null ? macdHist < 0 : null,
-      macdHist != null && prevMacdHist != null && macdHist < prevMacdHist ? '柱体走弱' : '观察动能变化',
-    ))
-    rows.push(buildDecisionRow(
-      '量能变化',
-      '成交量 >= 5周期均量时卖出信号可信度更高',
-      `成交量 ${fmtVolume(volume)} / 量MA5 ${fmtVolume(volMa5)}`,
-      volume != null && volMa5 != null ? volume >= volMa5 : null,
-      `相对均量 ${fmtIndicatorDiff(volume, volMa5) || '--'}`,
+      returnRate == null ? '历史结果缺失' : returnRate >= 0 ? '获利兑现' : '亏损退出',
     ))
   }
+
+  // ── 仅追加与本笔 reason 文本相关的指标行 ──
+  const hasMA = /MA\d|均线|金叉|死叉|上穿|下穿/i.test(reasonText)
+  const hasBOLL = /BOLL|布林|上轨|下轨|中轨/i.test(reasonText)
+  const hasRSI = /RSI/i.test(reasonText)
+  const hasMACD = /MACD|DIF|DEA|柱/i.test(reasonText)
+  const hasVol = /成交量|量能|放量|缩量|换手/i.test(reasonText)
+  const hasRisk = /止损|止盈|风控|超时|最大持有|max[_ ]?hold/i.test(reasonText)
+
+  if (hasMA) {
+    rows.push(buildDecisionRow(
+      '均线快照',
+      '策略提及均线 / 金叉死叉，列出当前实际值',
+      maCrossText(snapshot) + (ma60 != null ? ` / MA60 ${fmtMaybe(ma60)}` : ''),
+      null,
+      '事实数据，仅供核对，未做通用阈值判定',
+    ))
+  }
+  if (hasBOLL) {
+    rows.push(buildDecisionRow(
+      'BOLL 快照',
+      '策略提及布林通道，列出当前实际值',
+      `收盘 ${fmtMaybe(close)} / 下轨 ${fmtMaybe(bollLower)} / 中轨 ${fmtMaybe(bollMiddle)} / 上轨 ${fmtMaybe(bollUpper)}`,
+      null,
+      '事实数据，仅供核对',
+    ))
+  }
+  if (hasRSI) {
+    rows.push(buildDecisionRow(
+      'RSI 快照',
+      '策略提及 RSI，列出当前实际值',
+      `RSI14 ${fmtMaybe(rsi)}`,
+      null,
+      '事实数据，仅供核对',
+    ))
+  }
+  if (hasMACD) {
+    rows.push(buildDecisionRow(
+      'MACD 快照',
+      '策略提及 MACD，列出当前实际值',
+      `DIF ${fmtMaybe(macdDif)} / DEA ${fmtMaybe(macdDea)} / 柱 ${fmtMaybe(macdHist)}`,
+      null,
+      '事实数据，仅供核对',
+    ))
+  }
+  if (hasVol) {
+    rows.push(buildDecisionRow(
+      '量能快照',
+      '策略提及量能，列出当前实际值',
+      `成交量 ${fmtVolume(volume)} / 量MA5 ${fmtVolume(volMa5)}${fmtIndicatorDiff(volume, volMa5)}`,
+      null,
+      '事实数据，仅供核对',
+    ))
+  }
+  if (hasRisk) {
+    rows.push(buildDecisionRow(
+      '风控触发',
+      '策略提及止盈 / 止损 / 风控 / 超时',
+      reasonText,
+      null,
+      '由风控或最大持有期等规则触发，详见左列说明',
+    ))
+  }
+
+  // 没有任何指标关键词命中时（典型自定义策略），不再硬塞 MA/BOLL/RSI/MACD/量能
+  // —— 完整指标快照可在下方"指标快照"面板查看
+  if (!hasMA && !hasBOLL && !hasRSI && !hasMACD && !hasVol && !hasRisk) {
+    rows.push(buildDecisionRow(
+      '指标参考',
+      '本策略 reason 未点名具体指标',
+      '请查看下方"指标快照"面板获取完整 K 线 / 技术指标数据',
+      null,
+      '避免给出与本策略无关的通用规则判定',
+    ))
+  }
+
   return rows
 }
 

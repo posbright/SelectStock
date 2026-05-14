@@ -1070,7 +1070,9 @@ class PortfolioBacktestEngine:
             trade.slippage_cost = round(exec_price * self.context.slippage_rate * amount, 2)
             try:
                 from instock.core.backtest import trade_decision as _td
-                _r = _td.resolve_reason('buy', order_info.get('reason'))
+                _derived = self._derive_reason_from_logs(date, code, 'buy')
+                _r = _td.resolve_reason('buy', order_info.get('reason'),
+                                        derived_reason=_derived)
                 trade.reason = _r.get('reason', '')
                 trade.reason_source = _r.get('reason_source', '')
             except Exception:
@@ -1132,7 +1134,9 @@ class PortfolioBacktestEngine:
                 trade.return_rate = round((exec_price - avg_cost_before_sell) / avg_cost_before_sell * 100, 2)
             try:
                 from instock.core.backtest import trade_decision as _td
-                _r = _td.resolve_reason('sell', order_info.get('reason'))
+                _derived = self._derive_reason_from_logs(date, code, 'sell')
+                _r = _td.resolve_reason('sell', order_info.get('reason'),
+                                        derived_reason=_derived)
                 trade.reason = _r.get('reason', '')
                 trade.reason_source = _r.get('reason_source', '')
             except Exception:
@@ -1142,6 +1146,44 @@ class PortfolioBacktestEngine:
             self._signal_inputs.append(order_info)
             self._log_messages.append(
                 f"[{date}] [TRADE] SELL {code} {stock_name} ×{sell_amount} @ {exec_price:.2f} 盈亏 {trade.close_profit:+,.0f} 起佣 {commission:.2f}")
+
+    def _derive_reason_from_logs(self, date, code: str, direction: str):
+        """从当日策略 log.info 中反推该笔交易的真实原因。
+
+        策略作者通常不会给 ``order_target``等 API 传 ``reason=``，但在下
+        单前会用 ``log.info("金叉买入 " + code + ...)`` 输出判况说明。
+        扫描同一 bar 近期的 INFO 日志，取含 code + 方向关键词的最近一条作为派生
+        reason，避免出现 "策略触发买入信号…" 这种毫无信息量的兑底文案。
+        """
+        if not self._log_messages or not code:
+            return None
+        date_str = str(date)
+        if direction == 'buy':
+            dir_words = ('买入', '加仓', '回补', '建仓', '金叉')
+        else:
+            dir_words = ('卖出', '减仓', '清仓', '止损', '止盈',
+                         '退出', '调仓', '超时', '死叉', '轮出')
+        # 只扫近期日志避免 O(n) 扫全部
+        for line in reversed(self._log_messages[-300:]):
+            s = str(line)
+            if '[TRADE]' in s:
+                # 跳过引擎自己写入的成交日志
+                continue
+            if date_str not in s:
+                continue
+            if code not in s:
+                continue
+            if not any(w in s for w in dir_words):
+                continue
+            # 去掉 "[date] [LEVEL] " 前缀，仅保留正文
+            idx = s.find('] [')
+            if idx >= 0:
+                tail = s[idx + 3:]
+                idx2 = tail.find('] ')
+                if idx2 >= 0:
+                    return tail[idx2 + 2:].strip()
+            return s.strip()
+        return None
 
     def _execute_pending_orders(self, date, prices):
         """执行当轮所有挂单（使用收盘价模拟成交）"""
@@ -1240,7 +1282,9 @@ class PortfolioBacktestEngine:
                 trade.slippage_cost = round(exec_price * self.context.slippage_rate * amount, 2)
                 try:
                     from instock.core.backtest import trade_decision as _td
-                    _r = _td.resolve_reason('buy', order_info.get('reason'))
+                    _derived = self._derive_reason_from_logs(date, code, 'buy')
+                    _r = _td.resolve_reason('buy', order_info.get('reason'),
+                                            derived_reason=_derived)
                     trade.reason = _r.get('reason', '')
                     trade.reason_source = _r.get('reason_source', '')
                 except Exception:
@@ -1284,7 +1328,9 @@ class PortfolioBacktestEngine:
                     trade.return_rate = round((exec_price - avg_cost_before_sell) / avg_cost_before_sell * 100, 2)
                 try:
                     from instock.core.backtest import trade_decision as _td
-                    _r = _td.resolve_reason('sell', order_info.get('reason'))
+                    _derived = self._derive_reason_from_logs(date, code, 'sell')
+                    _r = _td.resolve_reason('sell', order_info.get('reason'),
+                                            derived_reason=_derived)
                     trade.reason = _r.get('reason', '')
                     trade.reason_source = _r.get('reason_source', '')
                 except Exception:
