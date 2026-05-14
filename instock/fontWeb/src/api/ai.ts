@@ -22,6 +22,13 @@ export interface RefineRequest extends AiOverrides {
 export interface RepairRequest extends AiOverrides {
   strategy_id: number | string
   code?: string
+  // 预演回测参数（仅当 DB 无失败记录时由后端使用 — 见 RepairStrategyHandler）
+  auto_backtest?: boolean
+  start_date?: string
+  end_date?: string
+  initial_cash?: number
+  benchmark?: string
+  strategy_name?: string
 }
 
 export interface ChatRequest extends AiOverrides {

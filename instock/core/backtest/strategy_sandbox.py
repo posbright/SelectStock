@@ -115,6 +115,46 @@ _AST_FORBIDDEN_ATTRS = {
 }
 
 
+# ── 中文编码完整性检测（防 mojibake） ──────────────────────────
+# 历史故障：OpenAI-compatible 供应商的 SSE 流响应若不声明 charset，
+# requests 默认按 ISO-8859-1 解码，中文 UTF-8 字节被当 latin-1 字符串切片，
+# 再次以 UTF-8 入库时会形成"å\x9fºæ\x9c¬"这种双重编码 mojibake。
+# 即便流式解码层修好了，存量代码 / 其它来源的 mojibake 仍需在落库前拦截。
+def _detect_mojibake(text):
+    """检测疑似 UTF-8 → latin-1 双重编码 mojibake。
+
+    Returns:
+        str: 空字符串表示未检出；非空表示问题摘要。
+    """
+    if not text:
+        return ''
+    # 启发式 1：含有大量 latin-1 扩展区字符（U+0080-U+00FF）且无正常中文。
+    bad = 0
+    cjk = 0
+    for ch in text:
+        cp = ord(ch)
+        if 0x80 <= cp <= 0xFF:
+            bad += 1
+        elif 0x4E00 <= cp <= 0x9FFF:
+            cjk += 1
+    if bad < 10:
+        return ''
+    # 启发式 2：尝试 latin-1 -> utf-8 反解，看能否还原出大量中文字符；
+    # 能还原 → 几乎可确定是双重编码 mojibake。
+    try:
+        recovered = text.encode('latin-1', errors='strict').decode('utf-8', errors='strict')
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return ''
+    recovered_cjk = sum(1 for ch in recovered if 0x4E00 <= ord(ch) <= 0x9FFF)
+    if recovered_cjk >= 5 and recovered_cjk > cjk:
+        sample = recovered[:60].replace('\n', ' ')
+        return (f'检测到 UTF-8/latin-1 双重编码乱码（约 {bad} 个异常字符，'
+                f'还原后含 {recovered_cjk} 个中文字符）。还原片段示例: "{sample}…"。'
+                '请检查上游响应是否未声明 charset=utf-8。')
+    return ''
+
+
+
 def validate_code_strict(code_str):
     """
     AST 级强校验 — 适用于 AI 通道、外部用户输入等不可信来源。
@@ -130,6 +170,12 @@ def validate_code_strict(code_str):
     ok, err = validate_code(code_str)
     if not ok:
         return ok, err
+
+    # 中文 mojibake 拦截（注释 / docstring 双重编码会让用户读不懂、
+    # 也可能让回测里的 log.info 输出错乱）。
+    mojibake = _detect_mojibake(code_str)
+    if mojibake:
+        return False, mojibake
 
     try:
         tree = ast.parse(code_str)

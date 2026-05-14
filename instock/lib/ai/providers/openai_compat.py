@@ -150,6 +150,13 @@ class OpenAICompatProvider(Provider):
                     body=_scrub(resp.text[:500]),
                 )
 
+            # 关键：OpenAI 兼容供应商（Moonshot/DeepSeek/...）的 SSE 响应往往不
+            # 声明 charset，requests 默认按 ISO-8859-1 解码 text/event-stream，
+            # 中文会变成 latin-1 字节再被前端/DB 当 UTF-8 存入，导致双重编码
+            # mojibake（如 "基本面" → "å\x9fºæ\x9c¬é\x9d¢"）。
+            # 这里强制 utf-8 解码，与非流式 chat() 路径的 resp.json() 行为一致。
+            resp.encoding = 'utf-8'
+
             for raw_line in resp.iter_lines(decode_unicode=True):
                 if not raw_line:
                     continue

@@ -433,8 +433,158 @@ class RefineStrategyHandler(webBase.BaseHandler, ABC):
 class RepairStrategyHandler(webBase.BaseHandler, ABC):
     """根据上一次失败的 backtest 结果（task_recorder.fetch_last_failure）修复代码。
 
-    请求体: {"strategy_id": 123, "code": "...当前代码（可选，为空则从 DB 取）..."}
+    请求体: {"strategy_id": 123, "code": "...当前代码（可选，为空则从 DB 取）...",
+            "auto_backtest": True, "start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD",
+            "initial_cash": 1000000, "benchmark": "000300"}
+
+    新增（PR）：未找到失败记录时不再直接 404，而是按以下顺序自动回填：
+      1. 静态沙箱校验（validate_code_strict）失败 → 当作失败喂给修复 agent；
+      2. auto_backtest=True（默认）→ 同步预演回测（默认 60 自然日）失败 → 落库
+         record_failed 并作为修复输入；
+      3. 均通过 → 返回 "无失败可修复"。
     """
+
+    # 预演回测的默认窗口（自然日），仅用于无失败记录时的兜底
+    _PREFLIGHT_DAYS = 60
+    _PREFLIGHT_TIMEOUT_S = 60  # 预演最长等待 60 秒，避免阻塞 IOLoop
+
+    def _run_preflight_backtest_sync(
+        self, strategy_id, strategy_name, code,
+        start_date=None, end_date=None, initial_cash=None, benchmark='000300',
+    ):
+        """无失败记录时的兜底预演（同步版本，需在线程池中调用）。
+
+        返回 (ok, fail_dict)：
+          ok=True  代码顺利跑完 → fail_dict=None
+          ok=False 跑挂了       → fail_dict 形态与 fetch_last_failure 返回一致，
+                                   并已通过 record_failed 落库（下次直接命中）。
+        """
+        import datetime as _dt
+        import traceback as _tb
+        # ── 1. 日期窗口：优先使用前端传入；否则取近 _PREFLIGHT_DAYS 天 ──
+        try:
+            if not end_date:
+                end_date = _dt.date.today().strftime('%Y-%m-%d')
+            if not start_date:
+                end_dt = _dt.datetime.strptime(end_date, '%Y-%m-%d').date()
+                start_date = (end_dt - _dt.timedelta(days=self._PREFLIGHT_DAYS)).strftime('%Y-%m-%d')
+        except Exception as exc:
+            logging.warning(f'[repair preflight] 日期解析失败: {exc}')
+            return True, None  # 日期无效就放弃预演，按"无失败"处理
+
+        try:
+            cash = float(initial_cash) if initial_cash else 1_000_000.0
+        except Exception:
+            cash = 1_000_000.0
+
+        try:
+            return self._do_preflight(strategy_id, strategy_name, code,
+                                      start_date, end_date, cash, benchmark or '000300')
+        finally:
+            # 线程池长生存：释放线程局部 DB 连接，避免连接累积。
+            try:
+                import instock.lib.database as _mdb
+                _mdb.close_thread_connection()
+            except Exception:
+                pass
+
+    def _do_preflight(self, strategy_id, strategy_name, code,
+                      start_date, end_date, cash, benchmark):
+        import datetime as _dt
+        import traceback as _tb
+        # ── 2. 同步跑一次 PortfolioBacktestEngine ──
+        try:
+            from instock.core.backtest.portfolio_engine import PortfolioBacktestEngine
+            engine = PortfolioBacktestEngine()
+            started = _dt.datetime.now()
+            result = engine.run(
+                code, start_date, end_date,
+                initial_cash=cash, benchmark=benchmark,
+            )
+        except Exception as exc:
+            err_text = str(exc)[:500]
+            tb_text = _tb.format_exc()
+            # 落库失败记录（下次直接命中 fetch_last_failure）
+            try:
+                from instock.core.backtest.task_recorder import record_failed as _rf
+                rec_id = _rf(
+                    strategy_id=strategy_id, strategy_name=strategy_name,
+                    start_date=start_date, end_date=end_date,
+                    initial_cash=cash, benchmark=benchmark,
+                    error_text=err_text, traceback_text=tb_text,
+                )
+            except Exception as rec_exc:
+                logging.warning(f'[repair preflight] record_failed 异常: {rec_exc}')
+                rec_id = 0
+            return False, {
+                'id': rec_id or 0,
+                'started_at': started.strftime('%Y-%m-%d %H:%M:%S'),
+                'completed_at': _dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'error_message': err_text,
+                'traceback': tb_text,
+                'error': err_text,
+            }
+
+        # 引擎正常返回但 status != completed，同样视为失败
+        status = (result or {}).get('status')
+        if status and status != 'completed':
+            err_text = str(result.get('message') or result.get('error') or 'unknown')[:500]
+            tb_text = str(result.get('traceback') or '')
+            errs = result.get('errors') or []
+            if errs and not tb_text:
+                first = errs[0] if isinstance(errs[0], dict) else {'error': str(errs[0])}
+                tb_text = first.get('traceback') or ''
+                err_text = err_text or first.get('error') or '策略运行错误'
+            try:
+                from instock.core.backtest.task_recorder import record_failed as _rf
+                rec_id = _rf(
+                    strategy_id=strategy_id, strategy_name=strategy_name,
+                    start_date=start_date, end_date=end_date,
+                    initial_cash=cash, benchmark=benchmark,
+                    error_text=err_text, traceback_text=tb_text,
+                    extra_result={'preflight': True, 'engine_result': result},
+                )
+            except Exception as rec_exc:
+                logging.warning(f'[repair preflight] record_failed 异常: {rec_exc}')
+                rec_id = 0
+            return False, {
+                'id': rec_id or 0,
+                'started_at': str(result.get('start_date') or start_date),
+                'completed_at': _dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'error_message': err_text,
+                'traceback': tb_text,
+                'error': err_text,
+            }
+
+        # status=completed 但有运行期 errors（per-bar 异常）也算失败
+        errs = (result or {}).get('errors') or []
+        if errs:
+            first = errs[0] if isinstance(errs[0], dict) else {'error': str(errs[0])}
+            err_text = (first.get('error') or '策略运行错误')[:500]
+            tb_text = first.get('traceback') or ''
+            try:
+                from instock.core.backtest.task_recorder import record_failed as _rf
+                rec_id = _rf(
+                    strategy_id=strategy_id, strategy_name=strategy_name,
+                    start_date=start_date, end_date=end_date,
+                    initial_cash=cash, benchmark=benchmark,
+                    error_text=f'策略运行期共 {len(errs)} 处错误，首条: {err_text}',
+                    traceback_text=tb_text,
+                    extra_result={'preflight': True, 'all_errors': errs[:50]},
+                )
+            except Exception as rec_exc:
+                logging.warning(f'[repair preflight] record_failed 异常: {rec_exc}')
+                rec_id = 0
+            return False, {
+                'id': rec_id or 0,
+                'started_at': start_date,
+                'completed_at': _dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'error_message': f'策略运行期共 {len(errs)} 处错误，首条: {err_text}',
+                'traceback': tb_text,
+                'error': err_text,
+            }
+
+        return True, None
 
     @gen.coroutine
     def post(self):
@@ -450,30 +600,87 @@ class RepairStrategyHandler(webBase.BaseHandler, ABC):
             return
 
         # 获取失败信息（完整 traceback + 最近 N 次失败历史，避免重复同一类修复）
-        from instock.core.backtest.task_recorder import fetch_last_failure, fetch_recent_failures
+        from instock.core.backtest.task_recorder import (
+            fetch_last_failure, fetch_recent_failures, record_failed,
+        )
         try:
             last = fetch_last_failure(int(strategy_id))
             history = fetch_recent_failures(int(strategy_id), limit=5) or []
         except Exception as exc:
             _write_error(self, -1, f'读取失败信息异常: {exc}')
             return
-        if not last:
-            _write_error(self, -1, '未找到该策略的失败回测记录')
-            return
 
         # 取代码（请求体优先；否则从 DB 当前 cn_stock_strategy_code 取）
         original_code = (body.get('code') or '').strip()
+        strategy_name = (body.get('strategy_name') or '').strip()
         if not original_code:
             try:
                 import instock.lib.database as mdb
                 rows = mdb.executeSqlFetch(
-                    'SELECT code FROM cn_stock_strategy_code WHERE id=%s', (int(strategy_id),))
+                    'SELECT name, code FROM cn_stock_strategy_code WHERE id=%s', (int(strategy_id),))
                 if rows and rows[0]:
-                    original_code = rows[0][0] if isinstance(rows[0], (list, tuple)) else rows[0].get('code', '')
+                    row0 = rows[0]
+                    if isinstance(row0, (list, tuple)):
+                        strategy_name = strategy_name or (row0[0] or '')
+                        original_code = row0[1] or ''
+                    elif isinstance(row0, dict):
+                        strategy_name = strategy_name or row0.get('name', '')
+                        original_code = row0.get('code', '')
             except Exception as exc:
                 logging.warning(f'读取策略代码失败: {exc}')
         if not original_code:
             _write_error(self, -1, '无法获取策略代码（请在请求体中提供 code 字段）')
+            return
+
+        # ── 自动回填失败记录（新生成策略尚未跑过回测时，避免直接拒绝）──
+        # 优先级：1) DB 中已有失败记录直接用；
+        #        2) 当前代码静态校验失败 → 把校验错误当作"失败"喂给修复 agent；
+        #        3) 前端传入 auto_backtest=True（或默认开启）→ 同步跑一次轻量回测，
+        #           失败即落 record_failed 并作为修复输入；
+        #        4) 三步都过 → 明确告知用户"无失败可修复"。
+        preflight_kind = None  # 'static' / 'backtest' / None
+        if not last:
+            # Step 2: 静态校验
+            ok_pre, err_pre = _validate_or_msg(original_code)
+            if not ok_pre:
+                preflight_kind = 'static'
+                last = {
+                    'id': 0,
+                    'started_at': '(preflight)',
+                    'completed_at': '(preflight)',
+                    'error_message': f'静态校验失败: {err_pre}',
+                    'traceback': f'静态校验失败: {err_pre}',
+                    'error': err_pre,
+                }
+            else:
+                # Step 3: 是否同步跑一次预演回测
+                auto_bt = body.get('auto_backtest')
+                if auto_bt is None:
+                    auto_bt = True  # 默认开启；前端可显式传 False 跳过
+                if auto_bt:
+                    try:
+                        pre_ok, pre_fail = yield IOLoop.current().run_in_executor(
+                            _get_executor(),
+                            self._run_preflight_backtest_sync,
+                            int(strategy_id), strategy_name, original_code,
+                            body.get('start_date'), body.get('end_date'),
+                            body.get('initial_cash'),
+                            body.get('benchmark') or '000300',
+                        )
+                    except Exception as exc:
+                        logging.warning(f'[repair preflight] 调度异常: {exc}')
+                        pre_ok, pre_fail = True, None
+                    if not pre_ok and pre_fail:
+                        preflight_kind = 'backtest'
+                        last = pre_fail
+                        # 同时把这次失败补充进 history 头部，让 LLM 看到上下文
+                        history = [pre_fail] + (history or [])
+        if not last:
+            _write_error(
+                self, -1,
+                '未找到该策略的失败回测记录；静态校验和预演回测均已通过，'
+                '当前代码看起来可以正常运行。如确认存在问题，请在编辑器点"运行"复现失败后再使用该功能。',
+            )
             return
 
         # 优先使用完整 traceback；否则回落 error_message / error
@@ -609,6 +816,9 @@ class RepairStrategyHandler(webBase.BaseHandler, ABC):
                     'error': err_short,
                     'started_at': str(last.get('started_at') or ''),
                     'backtest_id': last.get('id'),
+                    # PR：标记失败来源 — 'db' / 'static' / 'backtest'，前端可在
+                    # AI 抽屉里展示"该次失败来自实时静态校验/预演回测"。
+                    'source': preflight_kind or 'db',
                     'history': [
                         {
                             'id': h.get('id'),

@@ -124,13 +124,75 @@ class RepairHandlerTests(AsyncHTTPTestCase):
         self.assertEqual(json.loads(resp.body)['code'], -1)
 
     def test_repair_no_failure_record(self):
+        # 无 DB 失败记录 + 静态校验通过 + 显式关闭 auto_backtest → 走"无失败可修复"分支
         with mock.patch('instock.core.backtest.task_recorder.fetch_last_failure',
-                        return_value=None):
+                        return_value=None), \
+             mock.patch('instock.core.backtest.task_recorder.fetch_recent_failures',
+                        return_value=[]):
             resp = self.fetch('/instock/api/ai/strategy/repair', method='POST',
-                              body=json.dumps({'strategy_id': 999, 'code': _VALID_CODE}))
+                              body=json.dumps({
+                                  'strategy_id': 999,
+                                  'code': _VALID_CODE,
+                                  'auto_backtest': False,
+                              }))
         body = json.loads(resp.body)
         self.assertEqual(body['code'], -1)
         self.assertIn('未找到', body['msg'])
+        # 提示文案应明确告诉用户"静态校验已通过"避免误以为 bug
+        self.assertIn('静态校验', body['msg'])
+
+    def test_repair_preflight_static_check_picks_up_syntax_error(self):
+        """无失败记录但代码沙箱校验失败 → 把校验错误当作失败喂给 AI 修复。"""
+        bad_code = 'def initialize(context):\n    import os\n    pass\n'
+        with mock.patch('instock.core.backtest.task_recorder.fetch_last_failure',
+                        return_value=None), \
+             mock.patch('instock.core.backtest.task_recorder.fetch_recent_failures',
+                        return_value=[]), \
+             mock.patch('instock.web.aiAssistantHandler._call_ai_blocking',
+                        return_value=(_VALID_CODE, 'm1')) as m:
+            resp = self.fetch('/instock/api/ai/strategy/repair', method='POST',
+                              body=json.dumps({
+                                  'strategy_id': 999,
+                                  'code': bad_code,
+                                  'auto_backtest': False,
+                              }))
+        body = json.loads(resp.body)
+        self.assertEqual(body['code'], 0, body)
+        # 修复 prompt 中必须带上静态校验失败信息
+        composed = m.call_args.args[0]
+        self.assertIn('静态校验失败', composed)
+        # 响应 failure.source 标记为 static
+        self.assertEqual(body['data']['failure'].get('source'), 'static')
+
+    def test_repair_preflight_backtest_records_runtime_failure(self):
+        """auto_backtest=True 时预演回测抛错 → 记录并喂给 AI 修复。"""
+        with mock.patch('instock.core.backtest.task_recorder.fetch_last_failure',
+                        return_value=None), \
+             mock.patch('instock.core.backtest.task_recorder.fetch_recent_failures',
+                        return_value=[]), \
+             mock.patch('instock.core.backtest.task_recorder.record_failed',
+                        return_value=42), \
+             mock.patch('instock.core.backtest.portfolio_engine.PortfolioBacktestEngine'
+                        ) as _MockEng, \
+             mock.patch('instock.web.aiAssistantHandler._call_ai_blocking',
+                        return_value=(_VALID_CODE, 'm1')) as m:
+            # 预演回测抛 RuntimeError
+            inst = _MockEng.return_value
+            inst.run.side_effect = RuntimeError('preflight boom: ZeroDivisionError')
+            resp = self.fetch('/instock/api/ai/strategy/repair', method='POST',
+                              body=json.dumps({
+                                  'strategy_id': 999,
+                                  'code': _VALID_CODE,
+                                  'auto_backtest': True,
+                                  'start_date': '2026-03-01',
+                                  'end_date': '2026-05-01',
+                                  'initial_cash': 1000000,
+                              }))
+        body = json.loads(resp.body)
+        self.assertEqual(body['code'], 0, body)
+        composed = m.call_args.args[0]
+        self.assertIn('preflight boom', composed)
+        self.assertEqual(body['data']['failure'].get('source'), 'backtest')
 
     def test_repair_success(self):
         last = {'id': 7, 'started_at': '2026-05-11', 'completed_at': '2026-05-11',

@@ -226,6 +226,12 @@ const props = defineProps<{
   strategyId?: number | string
   defaultMode?: 'generate' | 'refine' | 'repair' | 'chat'
   initialPrompt?: string
+  // PR：repair 模式预演回测参数；后端在 DB 无失败记录时自动跑预演
+  strategyName?: string
+  backtestStartDate?: string
+  backtestEndDate?: string
+  backtestInitialCash?: number
+  backtestBenchmark?: string
 }>()
 
 const emit = defineEmits<{
@@ -336,6 +342,13 @@ async function run() {
       resp = await aiRepairStrategy({
         strategy_id: props.strategyId!,
         code: props.currentCode || undefined,
+        // 把编辑页当前的回测配置一起带过去，后端兜底预演时复用同样的窗口
+        strategy_name: props.strategyName || undefined,
+        start_date: props.backtestStartDate || undefined,
+        end_date: props.backtestEndDate || undefined,
+        initial_cash: props.backtestInitialCash || undefined,
+        benchmark: props.backtestBenchmark || undefined,
+        auto_backtest: true,
         ...ov,
       }) as any
     }
