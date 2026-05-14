@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import sys
 import queue
 import threading
 from abc import ABC
@@ -144,6 +145,135 @@ def _validate_or_msg(code: str) -> Tuple[bool, str]:
     return ok, err if not ok else ''
 
 
+# ──────────────────────────────────────────────────────────────────────
+# 运行期预演（refine / repair 自动闭环的关键升级）
+# 静态沙箱校验只能挡住"无法编译 / 危险 import"，但拦不住 NameError /
+# AttributeError / 除零等运行期错误。下面这一层在静态校验通过后，再用
+# PortfolioBacktestEngine 在一段短窗口里实际跑一次，把"代码能跑起来"
+# 作为闭环验收标准，否则把错误反馈给 LLM 继续修。
+# ──────────────────────────────────────────────────────────────────────
+_PREFLIGHT_DEFAULT_DAYS = 30
+_PREFLIGHT_DEFAULT_CASH = 1_000_000.0
+_PREFLIGHT_DEFAULT_BENCHMARK = '000300'
+
+
+def _should_run_preflight() -> bool:
+    """是否在 refine/repair 自动修复闭环中跑一次轻量回测确认运行无误。
+
+    由 INSTOCK_AI_REPAIR_RUN_PREFLIGHT 控制；未设置时：
+      - 生产默认 ON；
+      - pytest 环境默认 OFF（避免依赖真实数据源；新测试请显式置 '1' 开启）。
+    """
+    val = os.environ.get('INSTOCK_AI_REPAIR_RUN_PREFLIGHT')
+    if val is not None:
+        return str(val).lower() not in ('0', 'false', 'no', '')
+    if 'PYTEST_CURRENT_TEST' in os.environ or 'pytest' in sys.modules:
+        return False
+    return True
+
+
+def _run_runtime_preflight(
+    code: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    initial_cash: Optional[float] = None,
+    benchmark: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """轻量预演回测：判断"能否跑完且无运行期异常"，不落 DB。
+
+    返回 (ok, err_text)。
+    - ok=True：策略可在窗口内顺利执行，没有引擎错误、没有 per-bar 异常、
+      日志里也没有 [ERROR] 行（即未被策略自己的 try/except 吞掉的 NameError 等）。
+    - ok=False：err_text 含简短错误描述（含异常类型 / 末行 traceback / 日志样例），
+      可直接拼到 LLM 的修复 prompt 里。
+    """
+    import datetime as _dt
+    try:
+        if not end_date:
+            end_date = _dt.date.today().strftime('%Y-%m-%d')
+        if not start_date:
+            end_dt = _dt.datetime.strptime(end_date, '%Y-%m-%d').date()
+            start_date = (end_dt - _dt.timedelta(days=_PREFLIGHT_DEFAULT_DAYS)).strftime('%Y-%m-%d')
+    except Exception as exc:
+        logging.debug(f'[preflight] 日期解析失败: {exc}')
+        return True, ''  # 日期无效 → 跳过预演，避免阻塞 refine
+    try:
+        cash = float(initial_cash) if initial_cash else _PREFLIGHT_DEFAULT_CASH
+    except (TypeError, ValueError):
+        cash = _PREFLIGHT_DEFAULT_CASH
+    bm = benchmark or _PREFLIGHT_DEFAULT_BENCHMARK
+
+    try:
+        from instock.core.backtest.portfolio_engine import PortfolioBacktestEngine
+        engine = PortfolioBacktestEngine()
+        result = engine.run(code, start_date, end_date, initial_cash=cash, benchmark=bm)
+    except Exception as exc:
+        import traceback as _tb
+        tb_tail = _tb.format_exc()[-1500:]
+        return False, f'回测引擎抛出 {type(exc).__name__}: {exc}\n{tb_tail}'
+    finally:
+        try:
+            import instock.lib.database as _mdb
+            _mdb.close_thread_connection()
+        except Exception:
+            pass
+
+    status = (result or {}).get('status')
+    if status and status != 'completed':
+        msg = str(result.get('message') or result.get('error') or 'unknown')[:500]
+        return False, f'回测引擎返回 status={status}: {msg}'
+
+    errs = (result or {}).get('errors') or []
+    if errs:
+        first = errs[0] if isinstance(errs[0], dict) else {'error': str(errs[0])}
+        et = first.get('type') or 'Exception'
+        em = (first.get('error') or '策略运行错误')[:300]
+        tb = (first.get('traceback') or '')[-1000:]
+        return False, (
+            f'策略运行期共 {len(errs)} 处异常，首条 {et}: {em}\n{tb}'
+        )
+
+    # 日志反解：策略 try/except 吞掉的 NameError / AttributeError 等
+    logs = (result or {}).get('logs') or []
+    error_logs = [L for L in logs if '[ERROR]' in L]
+    if error_logs:
+        sample = '\n'.join(error_logs[:5])[:1200]
+        return False, (
+            f'策略日志含 {len(error_logs)} 条 [ERROR]（被策略 try/except 吞掉的异常）:\n{sample}'
+        )
+
+    return True, ''
+
+
+def _verify_strategy_code(code: str, body: Optional[dict] = None) -> Tuple[bool, str, str]:
+    """静态沙箱校验 + 运行期预演的组合验收。
+
+    返回 (ok, kind, err)：
+      - ok=True 时 kind='' err=''；
+      - 静态校验失败 kind='static'；
+      - 运行期预演失败 kind='runtime'。
+
+    body 可携带 start_date / end_date / initial_cash / benchmark，
+    refine 场景 body 没有这些字段时自动用近 30 自然日窗口。
+    """
+    ok, err = validate_code_strict(code)
+    if not ok:
+        return False, 'static', err or '(无错误信息)'
+    if not _should_run_preflight():
+        return True, '', ''
+    body = body or {}
+    ok2, err2 = _run_runtime_preflight(
+        code,
+        start_date=body.get('start_date'),
+        end_date=body.get('end_date'),
+        initial_cash=body.get('initial_cash'),
+        benchmark=body.get('benchmark'),
+    )
+    if not ok2:
+        return False, 'runtime', err2 or '回测预演失败'
+    return True, '', ''
+
+
 def _write_error(handler, code: int, msg: str, **extra):
     body = {'code': code, 'msg': msg}
     body.update(extra)
@@ -203,6 +333,33 @@ def _build_repair_prompt(prev_code: str, err: str, original_intent: str) -> str:
         f"沙箱校验错误：\n{err}\n\n"
         f"请输出修复后的完整 Python 代码（不要解释、不要 Markdown 围栏），"
         f"要求保留原意图、移除所有 import os/sys/subprocess 等违禁项。"
+    )
+
+
+def _build_runtime_repair_prompt(prev_code: str, runtime_err: str, original_intent: str) -> str:
+    """生成"运行期修复 prompt"：上一轮代码通过了静态校验但回测真实跑挂。
+
+    与 _build_repair_prompt 的差异：明确告知错误来自实际回测运行，
+    并提示策略沙箱不会自动注入 numpy/pandas/talib 等模块、try/except
+    可能吞掉根因等常见坑。
+    """
+    return (
+        f"你上一轮生成的策略代码通过了静态沙箱安全校验，"
+        f"但在实际回测中运行失败。\n\n"
+        f"用户原始需求：\n{original_intent}\n\n"
+        f"上一轮代码：\n{prev_code}\n\n"
+        f"回测运行期间的错误（含 traceback 末尾 / [ERROR] 日志样例）：\n"
+        f"{runtime_err}\n\n"
+        f"请输出修复后的**完整可运行** Python 代码（不要解释、不要 Markdown 围栏）。"
+        f"修复要求：\n"
+        f"1. 直接定位到上述错误对应的代码行做最小改动；\n"
+        f"2. 策略沙箱不会自动注入 numpy / pandas / talib —— "
+        f"若需要这些库请在代码顶部用 `import numpy as np` / `import pandas as pd` / "
+        f"`import talib`（不要写 `import talib as ta` 之外的简写来用 ta.xxx 又不导入）；\n"
+        f"3. 若错误来自 try/except 吞掉的 NameError / AttributeError，"
+        f"必须修复根因（补 import / 改正确的 API 名称），而不是继续把异常吞掉；\n"
+        f"4. 严禁引入新的未导入模块，禁止使用 eval / exec / open / 文件 IO / 网络 IO；\n"
+        f"5. 不要重复使用上一轮已经被验证失败的写法。"
     )
 
 
@@ -378,7 +535,8 @@ class RefineStrategyHandler(webBase.BaseHandler, ABC):
             return
 
         code = _strip_code_fence(raw)
-        ok, err = _validate_or_msg(code)
+        # 闭环验收：静态沙箱 + 运行期预演（preflight），由 _verify_strategy_code 统一执行。
+        ok, err_kind, err = _verify_strategy_code(code, body)
         attempts = 0
         repair_status = 'success' if ok else 'unrepaired'
         max_attempts = _get_max_repair_attempts()
@@ -387,7 +545,12 @@ class RefineStrategyHandler(webBase.BaseHandler, ABC):
             prev_signature = (code, err)
             for _ in range(max_attempts):
                 attempts += 1
-                fix_prompt = _build_repair_prompt(code, err, user_prompt)
+                # 根据错误类型选择不同 prompt：runtime 错误必须告知 AI 是真实
+                # 回测跑挂、提示沙箱不会自动注入 numpy/pandas/talib 等坑。
+                if err_kind == 'runtime':
+                    fix_prompt = _build_runtime_repair_prompt(code, err, user_prompt)
+                else:
+                    fix_prompt = _build_repair_prompt(code, err, user_prompt)
                 try:
                     raw, resolved_model = yield IOLoop.current().run_in_executor(
                         _get_executor(),
@@ -405,7 +568,7 @@ class RefineStrategyHandler(webBase.BaseHandler, ABC):
                     repair_status = 'provider_error'
                     break
                 code = _strip_code_fence(raw)
-                ok, err = _validate_or_msg(code)
+                ok, err_kind, err = _verify_strategy_code(code, body)
                 if ok:
                     repair_status = 'success'
                     break
@@ -419,9 +582,15 @@ class RefineStrategyHandler(webBase.BaseHandler, ABC):
         self.set_header('Content-Type', 'application/json')
         self.write(json.dumps({
             'code': 0 if ok else -2,
-            'msg': '' if ok else f'代码沙箱校验失败: {err}',
+            'msg': '' if ok else (
+                f'代码沙箱校验失败: {err}' if err_kind == 'static'
+                else f'代码回测预演失败: {err}' if err_kind == 'runtime'
+                else f'代码校验失败: {err}'
+            ),
             'data': {'code': code, 'raw': raw, 'validated': ok,
-                     'validation_error': err, 'model': resolved_model,
+                     'validation_error': err,
+                     'validation_kind': err_kind,  # '' / 'static' / 'runtime'
+                     'model': resolved_model,
                      'repair_attempts': attempts,
                      'repair_status': repair_status},
         }, ensure_ascii=False))
@@ -756,7 +925,8 @@ class RepairStrategyHandler(webBase.BaseHandler, ABC):
             return
 
         code = _strip_code_fence(raw)
-        ok, err = _validate_or_msg(code)
+        # 闭环验收：静态沙箱 + 运行期预演（preflight）。
+        ok, err_kind, err = _verify_strategy_code(code, body)
         attempts = 0
         repair_status = 'success' if ok else 'unrepaired'
         max_attempts = _get_max_repair_attempts()
@@ -765,7 +935,12 @@ class RepairStrategyHandler(webBase.BaseHandler, ABC):
             prev_signature = (code, err)
             for _ in range(max_attempts):
                 attempts += 1
-                fix_prompt = _build_repair_prompt(code, err, error_text or '原始代码有安全问题')
+                if err_kind == 'runtime':
+                    fix_prompt = _build_runtime_repair_prompt(
+                        code, err, error_text or '上一轮代码回测期间抛错')
+                else:
+                    fix_prompt = _build_repair_prompt(
+                        code, err, error_text or '原始代码有安全问题')
                 try:
                     raw, resolved_model = yield IOLoop.current().run_in_executor(
                         _get_executor(),
@@ -783,7 +958,7 @@ class RepairStrategyHandler(webBase.BaseHandler, ABC):
                     repair_status = 'provider_error'
                     break
                 code = _strip_code_fence(raw)
-                ok, err = _validate_or_msg(code)
+                ok, err_kind, err = _verify_strategy_code(code, body)
                 if ok:
                     repair_status = 'success'
                     break
@@ -803,10 +978,15 @@ class RepairStrategyHandler(webBase.BaseHandler, ABC):
         self.set_header('Content-Type', 'application/json')
         self.write(json.dumps({
             'code': 0 if ok else -2,
-            'msg': '' if ok else f'代码沙箱校验失败: {err}',
+            'msg': '' if ok else (
+                f'代码沙箱校验失败: {err}' if err_kind == 'static'
+                else f'代码回测预演失败: {err}' if err_kind == 'runtime'
+                else f'代码校验失败: {err}'
+            ),
             'data': {
                 'code': code, 'raw': raw,
                 'validated': ok, 'validation_error': err,
+                'validation_kind': err_kind,  # '' / 'static' / 'runtime'
                 'model': resolved_model,
                 'repair_attempts': attempts,
                 'repair_status': repair_status,
