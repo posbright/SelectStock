@@ -152,7 +152,7 @@ def _validate_or_msg(code: str) -> Tuple[bool, str]:
 # PortfolioBacktestEngine 在一段短窗口里实际跑一次，把"代码能跑起来"
 # 作为闭环验收标准，否则把错误反馈给 LLM 继续修。
 # ──────────────────────────────────────────────────────────────────────
-_PREFLIGHT_DEFAULT_DAYS = 30
+_PREFLIGHT_DEFAULT_DAYS = 7  # 闭环验收只需"能跑通"，7 天窗口足够触发 NameError / AttributeError 等运行期错误；30 天窗口太慢会让前端 60s axios 超时（即使前端已放宽到 5min，也应保持单轮 < 30s）。
 _PREFLIGHT_DEFAULT_CASH = 1_000_000.0
 _PREFLIGHT_DEFAULT_BENCHMARK = '000300'
 

@@ -69,20 +69,28 @@ export interface StrategyAiResponse {
   }
 }
 
+// AI 策略接口的超时单独拉长到 5 分钟——闭环验收最多包含 3 轮 AI 调用
+// (单次 Kimi 可达 60s) + 3 次运行期预演回测，全局 60s 超时不够用。
+const AI_LONG_TIMEOUT = 5 * 60 * 1000
+
 export function aiGenerateStrategy(data: GenerateRequest) {
-  return request({ url: '/api/ai/strategy/generate', method: 'post', data })
+  return request({ url: '/api/ai/strategy/generate', method: 'post', data,
+    timeout: AI_LONG_TIMEOUT })
 }
 
 export function aiRefineStrategy(data: RefineRequest) {
-  return request({ url: '/api/ai/strategy/refine', method: 'post', data })
+  return request({ url: '/api/ai/strategy/refine', method: 'post', data,
+    timeout: AI_LONG_TIMEOUT })
 }
 
 export function aiRepairStrategy(data: RepairRequest) {
-  return request({ url: '/api/ai/strategy/repair', method: 'post', data })
+  return request({ url: '/api/ai/strategy/repair', method: 'post', data,
+    timeout: AI_LONG_TIMEOUT })
 }
 
 export function aiChat(data: ChatRequest) {
-  return request({ url: '/api/ai/chat', method: 'post', data }) as Promise<ChatResponse>
+  return request({ url: '/api/ai/chat', method: 'post', data,
+    timeout: AI_LONG_TIMEOUT }) as Promise<ChatResponse>
 }
 
 // ── M8: 多轮对话历史 ────────────────────────────────────────────
