@@ -58,6 +58,25 @@
             <el-tab-pane label="概览" name="overview">
               <div v-if="btResult?.status === 'error'" style="padding: 12px;">
                 <el-alert :title="btResult.message" type="error" show-icon :closable="false" />
+                <!-- error 路径下也展示诊断 hints -->
+                <div v-if="zeroTradeHints.length > 0" class="zero-trade-hints" style="margin-top: 8px;">
+                  <el-alert type="error" :closable="false" show-icon
+                            title="系统针对此次失败给出以下诊断与改进建议">
+                    <template #default>
+                      <ul style="padding-left: 18px; margin: 6px 0;">
+                        <li v-for="(h, i) in zeroTradeHints" :key="i" style="margin-bottom: 6px;">
+                          <strong>{{ h.title }}</strong>
+                          <span style="color: #606266;"> — {{ h.suggestion }}</span>
+                        </li>
+                      </ul>
+                      <div style="text-align: right; margin-top: 8px;">
+                        <el-button size="small" type="primary" @click="repairWithHints">
+                          一键让 AI 根据建议修复策略
+                        </el-button>
+                      </div>
+                    </template>
+                  </el-alert>
+                </div>
               </div>
               <div v-if="btResult?.metrics" class="result-overview">
                 <div class="metrics-row">
@@ -663,27 +682,48 @@ watch(() => strategy.value.code, (newCode) => {
   }
 })
 
-// ── 0 笔交易 → 显示诊断提示 + 一键 AI 修复 ────────────────────
+// ── 0 笔交易 / 失败 → 显示诊断提示 + 一键 AI 修复 ────────────────────
+// 引擎对 status='completed'/'error' 两种情形都会在 result.hints 上挂诊断
+// 列表（错误时来自 _diagnose_engine_error，0 笔交易来自 _diagnose_zero_trades）。
 const zeroTradeHints = computed(() => {
   const r = btResult.value
-  if (!r || r.status !== 'completed') return [] as Array<{ title: string; suggestion: string; severity?: string }>
-  const tc = r.metrics?.trade_count ?? 0
-  if (tc > 0) return []
+  if (!r) return [] as Array<{ title: string; suggestion: string; severity?: string }>
   const hints = (r.hints || []) as Array<any>
-  return hints
+  return Array.isArray(hints) ? hints : []
 })
 
 const aiPrefillPrompt = ref('')
 function repairWithHints() {
   if (!zeroTradeHints.value.length) return
   const lines = zeroTradeHints.value.map((h, i) => `${i + 1}. ${h.title} — ${h.suggestion}`).join('\n')
-  aiPrefillPrompt.value = `上次回测全程 0 笔交易，系统给出以下诊断与改进建议，请在 ` +
-    `保留原策略思路与方向性逻辑（不要把 AND 条件全删/改成 OR）的前提下，` +
-    `针对这些问题改写当前代码：\n\n${lines}\n\n` +
-    `改写要求：(1) 不要简化掉用户的多因子共振；(2) 优先把"刚突破"硬边界放宽为"在边界 ±2% 范围内"；` +
-    `(3) 把裸 except: continue 改成 except Exception as e: log.warn(...)；` +
-    `(4) talib.STOCH 必须用 (slowk, slowd) 两元解包。` +
-    `\n\n请输出修改后的完整 Python 源码。`
+  // 上下文：本次回测的实际现象（trade_count / status / errors / order_stats）
+  const r = btResult.value || ({} as any)
+  const tc = r.metrics?.trade_count ?? 0
+  const stats = r.order_stats || {}
+  const statsLine = Object.keys(stats).length
+    ? Object.entries(stats).filter(([, v]) => Number(v) > 0)
+        .map(([k, v]) => `${k}=${v}`).join(', ')
+    : ''
+  const contextLines: string[] = []
+  contextLines.push(`回测状态: ${r.status || 'unknown'}, 交易笔数: ${tc}`)
+  if (r.status === 'error' && r.message) {
+    contextLines.push(`引擎错误信息: ${r.message}`)
+  }
+  if (statsLine) {
+    contextLines.push(`订单执行统计: ${statsLine}`)
+  }
+  if (Array.isArray(r.errors) && r.errors.length) {
+    contextLines.push(`策略异常: 共 ${r.errors.length} 次，首条: ${(r.errors[0]?.error || '').slice(0, 200)}`)
+  }
+  aiPrefillPrompt.value =
+    `上次回测出现问题，系统针对本次具体运行情况给出以下诊断与改进建议，请基于实际现象（而非通用建议）改写当前代码：\n\n` +
+    `## 本次回测实际现象\n${contextLines.join('\n')}\n\n` +
+    `## 系统诊断（基于实际遥测，非通用模板）\n${lines}\n\n` +
+    `## 改写要求\n` +
+    `1) 保留原策略的方向性逻辑（不要把多 AND 条件全删/改成 OR）；\n` +
+    `2) 必须针对上述"本次实际现象"作出修改，不要做与本次现象无关的改动；\n` +
+    `3) 输出完整可运行的 Python 源码（含 initialize 与 handle_data），不要只给 diff；\n` +
+    `4) 严禁引入新的未导入模块，禁止 eval/exec/open 等高危 API。`
   aiDrawerVisible.value = true
 }
 </script>
