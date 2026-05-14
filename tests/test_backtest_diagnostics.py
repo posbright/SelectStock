@@ -265,5 +265,137 @@ def handle_data(context, data):
         self.assertEqual(second['rejected_no_position'], 0)
 
 
+class TestLogBasedExceptionDetection(unittest.TestCase):
+    """关键：策略自己 try/except 把异常吞掉只 log.error 时，诊断器必须从日志反解出真实原因。
+
+    用户实际反馈：策略里 `for code in pool: try: ta.RSI(...) except Exception as e: log.error(...)`，
+    运行日志全是 `name 'ta' is not defined`，但旧版诊断只给出"源码里找不到 order 调用"
+    这种与实际错误无关的文案。
+    """
+
+    @patch('instock.core.backtest.portfolio_engine.load_stock_data')
+    @patch('instock.core.backtest.portfolio_engine.get_trading_dates')
+    @patch('instock.core.backtest.portfolio_engine.load_multiple_stocks')
+    @patch('instock.core.backtest.portfolio_engine.load_benchmark_data')
+    def test_swallowed_nameerror_ta_surfaces_in_hints(
+            self, mock_bm, mock_multi, mock_dates, mock_single):
+        """策略 try/except 吞掉 NameError 'ta' is not defined，诊断必须明确指出。"""
+        df = _make_df(periods=6)
+        mock_dates.return_value = [d.date() for d in df['date']]
+        mock_multi.return_value = {'000001': df, '000002': df}
+        mock_single.return_value = df
+        mock_bm.return_value = df.copy()
+
+        # 模拟用户策略 101：循环里调用 ta.XXX 但没有 import talib as ta，
+        # try/except 把 NameError 吞掉只调用 log.error。
+        strategy = """
+def initialize(context):
+    g.pool = ['000001', '000002']
+
+def handle_data(context, data):
+    for code in g.pool:
+        try:
+            x = ta.RSI([1,2,3], 2)
+            order_value(code, 1000)
+        except Exception as e:
+            log.error(f"处理 {code} 时发生错误: {e}")
+"""
+        result = PortfolioBacktestEngine().run(
+            strategy_code=strategy,
+            start_date='2025-01-02', end_date='2025-01-15',
+            initial_cash=1_000_000,
+        )
+        self.assertEqual(result['metrics']['trade_count'], 0)
+        hints = result.get('hints') or []
+        self.assertTrue(hints, "0 笔交易必须给出 hints")
+        # 必须有"日志反解 NameError ta"那条 hint
+        ne_hints = [h for h in hints if 'NameError' in h['title'] and 'ta' in h['title']]
+        self.assertTrue(ne_hints, f"未识别 NameError 'ta'，实际 hints: {[h['title'] for h in hints]}")
+        # 建议必须明确告诉用户怎么修（import talib as ta）
+        joined = ' '.join(h['suggestion'] for h in ne_hints)
+        self.assertIn('import talib', joined)
+        # 不能再误导性地说"源码里找不到 order 调用"（这里源码明确有 order_value）
+        misleading = [h for h in hints
+                      if '源码里找不到任何 order' in h.get('title', '')]
+        self.assertFalse(misleading,
+                         f"已检测到 NameError 时不应再给出误导性的'无 order 调用'提示: {misleading}")
+
+    @patch('instock.core.backtest.portfolio_engine.load_stock_data')
+    @patch('instock.core.backtest.portfolio_engine.get_trading_dates')
+    @patch('instock.core.backtest.portfolio_engine.load_multiple_stocks')
+    @patch('instock.core.backtest.portfolio_engine.load_benchmark_data')
+    def test_swallowed_attribute_error_surfaces(
+            self, mock_bm, mock_multi, mock_dates, mock_single):
+        """策略 try/except 吞掉 AttributeError，诊断应解析出 obj.attr。"""
+        df = _make_df(periods=6)
+        mock_dates.return_value = [d.date() for d in df['date']]
+        mock_multi.return_value = {'000001': df}
+        mock_single.return_value = df
+        mock_bm.return_value = df.copy()
+        strategy = """
+def initialize(context):
+    pass
+
+def handle_data(context, data):
+    try:
+        # context.portfolio 没有 holdings 属性（正确名为 positions）
+        _ = context.portfolio.holdings
+        order_value('000001', 1000)
+    except Exception as e:
+        log.error(f"出错: {e}")
+"""
+        result = PortfolioBacktestEngine().run(
+            strategy_code=strategy,
+            start_date='2025-01-02', end_date='2025-01-15',
+            initial_cash=1_000_000,
+        )
+        hints = result.get('hints') or []
+        attr_hints = [h for h in hints if 'AttributeError' in h.get('title', '')]
+        self.assertTrue(attr_hints, f"未识别 AttributeError，实际 hints: {[h['title'] for h in hints]}")
+        # title 应包含 holdings
+        self.assertIn('holdings', ' '.join(h['title'] for h in attr_hints))
+
+    @patch('instock.core.backtest.portfolio_engine.load_stock_data')
+    @patch('instock.core.backtest.portfolio_engine.get_trading_dates')
+    @patch('instock.core.backtest.portfolio_engine.load_multiple_stocks')
+    @patch('instock.core.backtest.portfolio_engine.load_benchmark_data')
+    def test_log_pattern_counts_top_three(
+            self, mock_bm, mock_multi, mock_dates, mock_single):
+        """多种异常并存时，按出现次数取 top 3。"""
+        df = _make_df(periods=4)
+        mock_dates.return_value = [d.date() for d in df['date']]
+        mock_multi.return_value = {'000001': df}
+        mock_single.return_value = df
+        mock_bm.return_value = df.copy()
+        strategy = """
+def initialize(context):
+    pass
+
+def handle_data(context, data):
+    try:
+        x = unknown_var_1
+    except Exception as e:
+        log.error(str(e))
+    try:
+        y = unknown_var_2
+    except Exception as e:
+        log.error(str(e))
+"""
+        result = PortfolioBacktestEngine().run(
+            strategy_code=strategy,
+            start_date='2025-01-02', end_date='2025-01-15',
+            initial_cash=1_000_000,
+        )
+        hints = result.get('hints') or []
+        ne_hints = [h for h in hints if 'NameError' in h.get('title', '')]
+        # 两个不同的未定义变量都应被识别（至少包含 unknown_var_1 或 unknown_var_2 一种）
+        joined = ' '.join(h['title'] for h in ne_hints)
+        self.assertTrue('unknown_var_1' in joined or 'unknown_var_2' in joined,
+                        f"NameError 变量名未出现在 hint title 中: {joined}")
+        # 每个 hint 的 evidence.count 必须 >= 1
+        for h in ne_hints:
+            self.assertGreaterEqual(h['evidence']['count'], 1)
+
+
 if __name__ == '__main__':
     unittest.main()

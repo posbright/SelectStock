@@ -346,12 +346,13 @@ class PortfolioBacktestEngine:
             )
             for h in zero_trade_hints:
                 self._log_messages.append(f"[系统] [WARN]   • {h.get('title', '')} — {h.get('suggestion', '')}")
-        elif self._strategy_errors:
-            # 有交易但伴随异常：只给"运行期异常"那一段诊断，避免把"0 笔交易"
-            # 路径下的拒单分析也塞给用户造成误导。
+        elif self._strategy_errors or any('[ERROR]' in L for L in self._log_messages[-2000:]):
+            # 有交易但伴随异常或日志里有 [ERROR]：保留"运行期异常"+"日志反解" 两段诊断，
+            # 避免把 "0 笔交易" 路径下的拒单分析也塞给用户造成误导。
             err_hints = self._diagnose_zero_trades()
             zero_trade_hints = [h for h in err_hints
-                                if '策略抛出异常' in str(h.get('title', ''))]
+                                if ('策略抛出异常' in str(h.get('title', '')))
+                                or ('日志反解' in str(h.get('title', '')))]
 
         return {
             'status': 'completed',
@@ -389,6 +390,8 @@ class PortfolioBacktestEngine:
 
         证据优先级（高→低）：
         1) 运行期 traceback（_strategy_errors）：直接定位到具体行/异常类型；
+        1b) 日志 [ERROR] 行解析：策略自己 try/except 把异常吞掉只 log.error 时，
+            从日志里反解出 NameError / AttributeError / TypeError 等关键错误；
         2) 订单执行计数器（_order_stats）：精确告知是 涨停/现金不足/无持仓/订单量0
            等哪一类拒绝主导，含次数；
         3) 日志模式扫描：选股池为空、无行情等；
@@ -464,6 +467,134 @@ class PortfolioBacktestEngine:
                 },
             })
 
+        # ── 1b. 日志 [ERROR] 行解析（策略自己 try/except 把异常吞掉只 log.error 时的关键证据）──
+        # 用户报告："运行日志里明明全是 name 'ta' is not defined，诊断却完全没体现"，
+        # 根因是策略写了 try: ... except Exception as e: log.error(f"处理 {code} 时发生错误: {e}")，
+        # 引擎的 _record_error 永远拿不到这些异常，必须从日志反解。
+        log_patterns = {}  # exception kind -> {count, sample, kind, ...}
+
+        def _bump(key, sample, **extra):
+            ent = log_patterns.setdefault(key, {'count': 0, 'sample': sample, **extra})
+            ent['count'] += 1
+
+        for L in logs[-2000:]:
+            if '[ERROR]' not in L:
+                continue
+            seg = L.split('[ERROR]', 1)[-1].strip()
+            m = _re.search(r"name ['\"]([\w\.]+)['\"] is not defined", seg)
+            if m:
+                _bump(f"NameError:{m.group(1)}", L, kind='NameError', var=m.group(1))
+                continue
+            m = _re.search(r"['\"](\w+)['\"] object has no attribute ['\"](\w+)['\"]", seg)
+            if m:
+                _bump(f"AttributeError:{m.group(1)}.{m.group(2)}", L,
+                      kind='AttributeError', obj=m.group(1), attr=m.group(2))
+                continue
+            m = _re.search(r"unsupported operand type\(s\) for [^:]+: ['\"]([^'\"]+)['\"] and ['\"]([^'\"]+)['\"]", seg)
+            if m:
+                _bump(f"TypeError:{m.group(1)}-{m.group(2)}", L,
+                      kind='TypeError', left=m.group(1), right=m.group(2))
+                continue
+            if 'division by zero' in seg or 'float division by zero' in seg:
+                _bump('ZeroDivisionError', L, kind='ZeroDivisionError')
+                continue
+            if 'list index out of range' in seg or 'index out of range' in seg:
+                _bump('IndexError', L, kind='IndexError')
+                continue
+            m = _re.search(r"KeyError:?\s*['\"]?([^'\"\s,]+)", seg)
+            if m:
+                _bump(f"KeyError:{m.group(1)[:30]}", L, kind='KeyError', k=m.group(1))
+                continue
+            # 兜底：识别任何 XxxError / XxxException 关键字
+            m = _re.search(r"(\w+(?:Error|Exception))", seg)
+            if m:
+                _bump(f"{m.group(1)}:other", L, kind=m.group(1), msg=seg[:200])
+
+        # 已知简写映射 → 沙箱不会自动注入这些名字，给出明确 import 提示
+        _SHIM_HINT = {
+            'ta': '沙箱不会自动注入 `ta`。请在策略最顶部加 `import talib as ta`，或把 `ta.XXX(...)` 改为 `talib.XXX(...)`。',
+            'np': '沙箱不会自动注入 `np`。请在策略最顶部加 `import numpy as np`。',
+            'pd': '沙箱不会自动注入 `pd`。请在策略最顶部加 `import pandas as pd`。',
+            'talib': '请在策略最顶部加 `import talib`（沙箱允许，但需显式导入）。',
+            'numpy': '请在策略最顶部加 `import numpy`。',
+            'pandas': '请在策略最顶部加 `import pandas`。',
+            'math': '请在策略最顶部加 `import math`。',
+        }
+        if log_patterns:
+            ranked = sorted(log_patterns.items(), key=lambda kv: -kv[1]['count'])[:3]
+            for _key, info in ranked:
+                kind = info['kind']
+                count = info['count']
+                sample = (info['sample'] or '')[:200]
+                if kind == 'NameError':
+                    var = info.get('var', '?')
+                    sug = _SHIM_HINT.get(
+                        var,
+                        f"变量 `{var}` 未定义。请检查拼写、确认在使用前已赋值（含 except 分支），"
+                        f"或在策略顶部 import 对应模块。沙箱默认仅注入 order/order_target/log/g/"
+                        f"context/data/history/attribute_history/get_index_stocks 等聚宽 API，"
+                        f"numpy/pandas/talib 等需显式 import。")
+                    hints.append({
+                        'title': f"日志反解：策略 try/except 吞掉了 NameError `{var}` 共 {count} 次",
+                        'suggestion': f"{sug} 示例日志: {sample}",
+                        'severity': 'high',
+                        'evidence': {'kind': 'NameError', 'var': var, 'count': count, 'sample': sample},
+                    })
+                elif kind == 'AttributeError':
+                    obj = info.get('obj', '?')
+                    attr = info.get('attr', '?')
+                    hints.append({
+                        'title': f"日志反解：AttributeError `{obj}.{attr}` 不存在，共 {count} 次",
+                        'suggestion': f"对象 `{obj}` 没有属性 `{attr}`。请确认 API 名称拼写"
+                                      f"（如 context.portfolio.positions 而非 .holdings），"
+                                      f"或对象在 except 分支里未被赋值仍为 None。 示例日志: {sample}",
+                        'severity': 'high',
+                        'evidence': {'kind': 'AttributeError', 'obj': obj, 'attr': attr,
+                                     'count': count, 'sample': sample},
+                    })
+                elif kind == 'TypeError':
+                    hints.append({
+                        'title': f"日志反解：TypeError 操作数类型不兼容（{info.get('left','?')} 与 {info.get('right','?')}），共 {count} 次",
+                        'suggestion': '请检查 + - * / 两侧的类型：常见是 None / NaN 与数字相加，'
+                                      '或字符串与数字混算。请加 if x is None: continue 守卫，或 float() 转换。'
+                                      f' 示例日志: {sample}',
+                        'severity': 'high',
+                        'evidence': {'kind': 'TypeError', 'count': count, 'sample': sample},
+                    })
+                elif kind == 'ZeroDivisionError':
+                    hints.append({
+                        'title': f'日志反解：ZeroDivisionError 共 {count} 次',
+                        'suggestion': '除数为 0。常见原因：停牌日 / 新股首日 close 或 volume 为 0。'
+                                      f'请加 if divisor: 守卫，或用 numpy.where(denom!=0, ...)。 示例日志: {sample}',
+                        'severity': 'high',
+                        'evidence': {'kind': 'ZeroDivisionError', 'count': count, 'sample': sample},
+                    })
+                elif kind == 'IndexError':
+                    hints.append({
+                        'title': f'日志反解：IndexError 序列越界共 {count} 次',
+                        'suggestion': '下标越界。通常是 history(N) 在回测起点处取不够 N 根；'
+                                      f'请先判断 len(arr) >= N 再访问 arr[-1]。 示例日志: {sample}',
+                        'severity': 'high',
+                        'evidence': {'kind': 'IndexError', 'count': count, 'sample': sample},
+                    })
+                elif kind == 'KeyError':
+                    k = info.get('k', '?')
+                    hints.append({
+                        'title': f"日志反解：KeyError `{k}` 共 {count} 次",
+                        'suggestion': f"dict 取不到 key `{k}`。常见：data[code] 在停牌日不存在；"
+                                      f"context.portfolio.positions[code] 未持仓即访问。请用 .get() 兜底。 示例日志: {sample}",
+                        'severity': 'high',
+                        'evidence': {'kind': 'KeyError', 'key': k, 'count': count, 'sample': sample},
+                    })
+                else:
+                    hints.append({
+                        'title': f'日志反解：{kind} 共 {count} 次（被策略 try/except 吞掉）',
+                        'suggestion': '策略内部用 try/except 捕获了异常并仅 log.error，主诊断器拿不到 traceback。'
+                                      f' 示例日志: {sample}',
+                        'severity': 'high',
+                        'evidence': {'kind': kind, 'count': count, 'sample': sample},
+                    })
+
         # ── 2. 订单执行计数器：精确报告"提交了但被拒"的根因分布 ──
         submitted = int(stats.get('submitted', 0))
         executed = int(stats.get('executed_buy', 0)) + int(stats.get('executed_sell', 0))
@@ -503,8 +634,9 @@ class PortfolioBacktestEngine:
                     'severity': 'high' if n >= submitted * 0.5 else 'medium',
                     'evidence': {'counter': k, 'count': n, 'submitted': submitted},
                 })
-        elif submitted == 0:
+        elif submitted == 0 and not errors and not log_patterns:
             # 一笔都没下：要么 handle_data 没跑到 order，要么策略里压根没有 order_* 调用
+            # 若已检测到 _strategy_errors 或日志反解出的异常，就跳过这一段以免误导。
             if not _re.search(r"order(?:_target|_value|_target_value|_target_percent|_percent)?\s*\(", code):
                 hints.append({
                     'title': '策略源码里找不到任何 order/order_target/order_value 调用',
